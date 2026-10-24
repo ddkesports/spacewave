@@ -790,7 +790,7 @@
     },
     {
       "name": "github.com/aperturerobotics/bbolt",
-      "version": "v0.0.0-20261006081945-09141165d72c",
+      "version": "v0.0.0-20261024221644-3def6903e63a",
       "spdx": "MIT",
       "source": "go",
       "repo": "https://github.com/etcd-io/bbolt",
@@ -1578,7 +1578,7 @@
     },
     {
       "name": "github.com/s4wave/goscript",
-      "version": "v0.5.4",
+      "version": "v0.5.5",
       "spdx": "MIT",
       "source": "go",
       "repo": "https://github.com/s4wave/goscript",
