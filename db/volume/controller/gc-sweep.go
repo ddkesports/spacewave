@@ -120,6 +120,7 @@ func (c *Controller) runGCSweep(ctx context.Context) error {
 				le = le.
 					WithField("roots", stats.MarkRoots).
 					WithField("owners", block_gc.FormatOwners(stats.MarkOwners)).
+					WithField("rescued", stats.RescuedNodes).
 					WithField("sweep-longest-tx", stats.SweepLongestTx.String()).
 					WithField("sweep-longest-rescue", stats.SweepLongestRescue.String())
 			}
