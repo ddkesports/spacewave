@@ -569,35 +569,35 @@
     },
     {
       "name": "@videojs/core",
-      "version": "10.1.0",
+      "version": "10.2.0",
       "spdx": "Apache-2.0",
       "source": "js",
       "fullText": "Copyright 2025-present Video.js contributors\n\n   Licensed under the Apache License, Version 2.0 (the \"License\");\n   you may not use this file except in compliance with the License.\n   You may obtain a copy of the License at\n\n     http://www.apache.org/licenses/LICENSE-2.0\n\n   Unless required by applicable law or agreed to in writing, software\n   distributed under the License is distributed on an \"AS IS\" BASIS,\n   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n   See the License for the specific language governing permissions and\n   limitations under the License.\n\n------------------------------------------------------------------\n\nTrademark Notice:\n“Video.js” is a registered trademark of Brightcove Inc.\nThe project is maintained independently by the open-source community,\ngoverned by the Video.js Technical Steering Committee."
     },
     {
       "name": "@videojs/media",
-      "version": "10.1.0",
+      "version": "10.2.0",
       "spdx": "Apache-2.0",
       "source": "js",
       "fullText": "Copyright 2025-present Video.js contributors\n\n   Licensed under the Apache License, Version 2.0 (the \"License\");\n   you may not use this file except in compliance with the License.\n   You may obtain a copy of the License at\n\n     http://www.apache.org/licenses/LICENSE-2.0\n\n   Unless required by applicable law or agreed to in writing, software\n   distributed under the License is distributed on an \"AS IS\" BASIS,\n   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n   See the License for the specific language governing permissions and\n   limitations under the License.\n\n------------------------------------------------------------------\n\nTrademark Notice:\n“Video.js” is a registered trademark of Brightcove Inc.\nThe project is maintained independently by the open-source community,\ngoverned by the Video.js Technical Steering Committee."
     },
     {
       "name": "@videojs/react",
-      "version": "10.1.0",
+      "version": "10.2.0",
       "spdx": "Apache-2.0",
       "source": "js",
       "fullText": "Copyright 2025-present Video.js contributors\n\n   Licensed under the Apache License, Version 2.0 (the \"License\");\n   you may not use this file except in compliance with the License.\n   You may obtain a copy of the License at\n\n     http://www.apache.org/licenses/LICENSE-2.0\n\n   Unless required by applicable law or agreed to in writing, software\n   distributed under the License is distributed on an \"AS IS\" BASIS,\n   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n   See the License for the specific language governing permissions and\n   limitations under the License.\n\n------------------------------------------------------------------\n\nTrademark Notice:\n“Video.js” is a registered trademark of Brightcove Inc.\nThe project is maintained independently by the open-source community,\ngoverned by the Video.js Technical Steering Committee."
     },
     {
       "name": "@videojs/store",
-      "version": "10.1.0",
+      "version": "10.2.0",
       "spdx": "Apache-2.0",
       "source": "js",
       "fullText": "Copyright 2025-present Video.js contributors\n\n   Licensed under the Apache License, Version 2.0 (the \"License\");\n   you may not use this file except in compliance with the License.\n   You may obtain a copy of the License at\n\n     http://www.apache.org/licenses/LICENSE-2.0\n\n   Unless required by applicable law or agreed to in writing, software\n   distributed under the License is distributed on an \"AS IS\" BASIS,\n   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n   See the License for the specific language governing permissions and\n   limitations under the License.\n\n------------------------------------------------------------------\n\nTrademark Notice:\n“Video.js” is a registered trademark of Brightcove Inc.\nThe project is maintained independently by the open-source community,\ngoverned by the Video.js Technical Steering Committee."
     },
     {
       "name": "@videojs/utils",
-      "version": "10.1.0",
+      "version": "10.2.0",
       "spdx": "Apache-2.0",
       "source": "js",
       "fullText": "Copyright 2025-present Video.js contributors\n\n   Licensed under the Apache License, Version 2.0 (the \"License\");\n   you may not use this file except in compliance with the License.\n   You may obtain a copy of the License at\n\n     http://www.apache.org/licenses/LICENSE-2.0\n\n   Unless required by applicable law or agreed to in writing, software\n   distributed under the License is distributed on an \"AS IS\" BASIS,\n   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n   See the License for the specific language governing permissions and\n   limitations under the License.\n\n------------------------------------------------------------------\n\nTrademark Notice:\n“Video.js” is a registered trademark of Brightcove Inc.\nThe project is maintained independently by the open-source community,\ngoverned by the Video.js Technical Steering Committee."
@@ -822,7 +822,7 @@
     },
     {
       "name": "github.com/aperturerobotics/common",
-      "version": "v0.36.4",
+      "version": "v0.36.5",
       "spdx": "MIT",
       "source": "go",
       "repo": "https://github.com/aperturerobotics/common",
@@ -846,7 +846,7 @@
     },
     {
       "name": "github.com/aperturerobotics/fastjson",
-      "version": "v0.1.2-0.20260705010846-94f343f5bb34",
+      "version": "v0.1.2-0.20261024220211-b654d1d5b5aa",
       "spdx": "MIT",
       "source": "go",
       "repo": "https://github.com/aperturerobotics/fastjson",
@@ -894,14 +894,14 @@
     },
     {
       "name": "github.com/aperturerobotics/go-prometheus-client-lite",
-      "version": "v1.23.3-0.20261024024324-52bb15d6f314",
+      "version": "v1.23.3-0.20261024041454-92147463582b",
       "spdx": "Apache-2.0",
       "source": "go",
       "repo": "https://github.com/aperturerobotics/go-prometheus-client-lite"
     },
     {
       "name": "github.com/aperturerobotics/go-quickjs-wasi-reactor",
-      "version": "v0.15.2-0.20261015001702-f8b5196211d2",
+      "version": "v0.15.2-0.20261024222814-5b9806d17e81",
       "spdx": "MIT",
       "source": "go",
       "repo": "https://github.com/aperturerobotics/go-quickjs-wasi-reactor",
@@ -909,7 +909,7 @@
     },
     {
       "name": "github.com/aperturerobotics/go-quickjs-wasi-reactor/wazero-quickjs",
-      "version": "v0.0.0-20261015001702-f8b5196211d2",
+      "version": "v0.0.0-20261024222814-5b9806d17e81",
       "spdx": "MIT",
       "source": "go",
       "repo": "https://github.com/aperturerobotics/go-quickjs-wasi-reactor",
@@ -917,7 +917,7 @@
     },
     {
       "name": "github.com/aperturerobotics/go-websocket",
-      "version": "v1.8.15-0.20260910142736-349504d079da",
+      "version": "v1.8.15-0.20261024221652-c1205734f50c",
       "spdx": "ISC",
       "source": "go",
       "repo": "https://github.com/nhooyr/websocket",
@@ -925,7 +925,7 @@
     },
     {
       "name": "github.com/aperturerobotics/go-winjob",
-      "version": "v0.0.0-20260705010911-656e088d1b05",
+      "version": "v0.0.0-20261024222822-b7a5589690d2",
       "spdx": "MIT",
       "source": "go",
       "repo": "https://github.com/aperturerobotics/go-winjob",
@@ -1534,14 +1534,14 @@
     },
     {
       "name": "github.com/prometheus/client_model",
-      "version": "v0.6.2",
+      "version": "v0.6.3",
       "spdx": "Apache-2.0",
       "source": "go",
       "repo": "https://github.com/prometheus/client_model"
     },
     {
       "name": "github.com/prometheus/common",
-      "version": "v0.70.1",
+      "version": "v0.72.1",
       "spdx": "Apache-2.0",
       "source": "go",
       "repo": "https://github.com/prometheus/common"
