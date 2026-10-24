@@ -33,7 +33,7 @@ require (
 	github.com/aperturerobotics/esbuild v0.24.1-0.20260219011422-6d4b923e2023 // https://github.com/evanw/esbuild/pull/3413 [rejected]
 	github.com/aperturerobotics/fastjson v0.1.2-0.20260705010846-94f343f5bb34
 	github.com/aperturerobotics/fsnotify v1.9.1-0.20261007093243-45a75ed654f0 // master
-	github.com/aperturerobotics/go-brotli-decoder v1.2.2
+	github.com/aperturerobotics/go-brotli-decoder v1.3.0
 	github.com/aperturerobotics/go-kvfile v0.10.1-0.20260705010911-5c5ed949ddfe // master
 	github.com/aperturerobotics/go-multiaddr v0.17.1-0.20260514224402-c193991c3ce5
 	github.com/aperturerobotics/go-prometheus-client-lite v1.23.3-0.20261024024324-52bb15d6f314
