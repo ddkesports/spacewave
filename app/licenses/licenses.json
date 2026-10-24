@@ -862,7 +862,7 @@
     },
     {
       "name": "github.com/aperturerobotics/go-brotli-decoder",
-      "version": "v1.2.2",
+      "version": "v1.3.0",
       "spdx": "MIT",
       "source": "go",
       "repo": "https://github.com/aperturerobotics/go-brotli-decoder",
