@@ -243,12 +243,12 @@ func testMarkBlocksMatchesReachability(t *testing.T, rnd *rand.Rand) {
 		wantOwners[kind] = c
 	}
 
-	// The walk, the scan in transactions of a few records, and the budgeted
-	// scan all agree with the direct walk.
+	// The walk, the scan in transactions of a few records with a small tail,
+	// and the budgeted scan all agree with the direct walk.
 	marks := map[string]func() (*BlockMark, error){
 		"walk": func() (*BlockMark, error) { return rg.MarkBlocks(ctx) },
 		"scan": func() (*BlockMark, error) {
-			return rg.markScan(ctx, markLimit{records: 1 + rnd.IntN(3)}, nil)
+			return rg.markScan(ctx, markLimit{records: 1 + rnd.IntN(3), tail: rnd.IntN(4)}, nil)
 		},
 		"budgeted scan": func() (*BlockMark, error) { return rg.MarkBlocksScan(ctx) },
 	}

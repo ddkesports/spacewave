@@ -59,8 +59,10 @@ func markReadsBlock(i int) string {
 // TestMarkReadsBuild writes a format 4 graph: objects under one bucket, each
 // owning a tree of SPACEWAVE_GC_MARK_PER_OBJECT blocks with fanout
 // SPACEWAVE_GC_MARK_FANOUT, SPACEWAVE_GC_MARK_CROSS extra child edges per
-// thousand blocks to random live blocks, and SPACEWAVE_GC_MARK_GARBAGE
-// unowned blocks per thousand. Every block has a child list, empty for a leaf.
+// thousand blocks to random live blocks, SPACEWAVE_GC_MARK_GARBAGE unowned
+// blocks per thousand, and one object owning a chain of
+// SPACEWAVE_GC_MARK_CHAIN blocks, each listing the next, like an append-only
+// log. Every block has a child list, empty for a leaf.
 func TestMarkReadsBuild(t *testing.T) {
 	// Read the shape.
 	path := markReadsPath(t)
@@ -69,11 +71,12 @@ func TestMarkReadsBuild(t *testing.T) {
 	fanout := markReadsEnv(t, "SPACEWAVE_GC_MARK_FANOUT", 6)
 	cross := markReadsEnv(t, "SPACEWAVE_GC_MARK_CROSS", 30)
 	garbage := blocks * markReadsEnv(t, "SPACEWAVE_GC_MARK_GARBAGE", 20) / 1000
+	chain := markReadsEnv(t, "SPACEWAVE_GC_MARK_CHAIN", 0)
 
 	// Prepare the records and the owner edges' writer.
 	rng := rand.New(rand.NewPCG(1, 2)) //nolint:gosec // a reproducible shape.
 	total := blocks + garbage
-	children := make([][]int32, total)
+	children := make([][]int32, total+chain)
 	type record struct{ key, value []byte }
 	var records []record
 	addEdge := func(subject, object string) {
@@ -100,6 +103,17 @@ func TestMarkReadsBuild(t *testing.T) {
 		}
 	}
 
+	// Link the chain after the garbage.
+	if chain != 0 {
+		object := ObjectIRI("object/chain")
+		addEdge(bucket, object)
+		addEdge(object, markReadsBlock(total))
+		for k := total; k < total+chain-1; k++ {
+			children[k] = append(children[k], int32(k+1)) //nolint:gosec
+			edges++
+		}
+	}
+
 	// Add the cross edges.
 	for k := range blocks {
 		for n := cross; n > 0; n -= 1000 {
@@ -111,7 +125,7 @@ func TestMarkReadsBuild(t *testing.T) {
 	}
 
 	// Encode the child lists.
-	for k := range total {
+	for k := range total + chain {
 		kids := make([]string, 0, len(children[k]))
 		for _, c := range children[k] {
 			kids = append(kids, markReadsBlock(int(c)))
@@ -157,8 +171,8 @@ func TestMarkReadsBuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("built %d live blocks, %d garbage, %d child edges in %s; %d keys, index %d MiB",
-		blocks, garbage, edges, time.Since(start).Round(time.Millisecond), u.IndexKeys, u.IndexBytes>>20)
+	t.Logf("built %d live blocks, %d garbage, a chain of %d, %d child edges in %s; %d keys, index %d MiB",
+		blocks, garbage, chain, edges, time.Since(start).Round(time.Millisecond), u.IndexKeys, u.IndexBytes>>20)
 }
 
 // TestMarkReads marks the built graph once and reports its costs.

@@ -20,10 +20,13 @@ const MarkReadBudget = 100 * time.Millisecond
 const markBudgetCheck = 64
 
 // markLimit bounds one read transaction of a scan mark: at most records
-// records when nonzero, and at most budget when nonzero.
+// records when nonzero, and at most budget when nonzero. Its tail bounds the
+// blocks a scan mark expands by point reads instead of another scan, none
+// when zero, as markScan describes.
 type markLimit struct {
 	records int
 	budget  time.Duration
+	tail    int
 }
 
 // MarkBlocksScan marks like MarkBlocks, but reads the child lists in key order
@@ -36,16 +39,20 @@ type markLimit struct {
 // It never falls back to MarkBlocks to name the reached blocks without a
 // child list: that walk would hold one snapshot for the whole graph.
 func (g *RefGraph) MarkBlocksScan(ctx context.Context) (*BlockMark, error) {
-	return g.markScan(ctx, markLimit{budget: MarkReadBudget}, nil)
+	return g.markScan(ctx, markLimit{budget: MarkReadBudget, tail: markTailLimit}, nil)
 }
 
 // markScan marks like MarkBlocks, but reads the child lists in key order:
 // each scan expands every list whose block is live and was not yet expanded,
-// and the scans repeat until one adds no child behind its position, since it
-// expanded every child it added after its position. A scan reads each index
-// page of the lists once, so a mark costs scans times pages instead of a page
-// a block. It counts the blocks without a list in mark.Unknown and lists
-// them, as settleUnknown describes.
+// and expands every child it adds after its position. The children it adds
+// behind its position are the scan's tail. While the tail stays within
+// limit.tail, expandTail expands it and everything it reaches by point
+// reads, which ends the mark; otherwise another scan follows. A scan reads
+// each index page of the lists once, so the scans cost pages, and the tail
+// costs a read a block only once it is small. Without the tail a chain whose
+// links sort before their children would cost a scan a link. It counts the
+// blocks without a list in mark.Unknown and lists them, as settleUnknown
+// describes.
 //
 // Each read transaction stays within limit, and the next resumes after the
 // last record read, calling between first when set. The adopt log of an open
@@ -101,11 +108,12 @@ func (g *RefGraph) markScan(ctx context.Context, limit markLimit, between func()
 		return nil, err
 	}
 
-	// Scan until a scan adds no child behind its position.
+	// Scan until a scan's tail is empty or expanded by point reads.
 	expanded := NewNodeSet()
 	lists := graphKey(kindChildren)
 	for {
 		mark.Scans++
+		var tail []byte
 		var behind int
 		err := g.scanRecords(ctx, mark, lists, limit, between, func(key []byte, it kvtx.Iterator) error {
 			// Expand a live list once, reading its value only then.
@@ -118,17 +126,19 @@ func (g *RefGraph) markScan(ctx context.Context, limit markLimit, between func()
 				return err
 			}
 
-			// Add its children, counting those behind the position, which
-			// only a later scan can expand.
+			// Add its children, keeping those behind the position, which
+			// this scan cannot expand, in the tail while it fits.
 			for len(value) != 0 {
 				n := blockNodeLen(value)
 				if n == 0 || n > len(value) {
 					return errChildNotBlock
 				}
-				if live.addBlock(value[:n]) {
+				if child := value[:n]; live.addBlock(child) {
 					liveBlocks++
-					if string(value[:n]) < string(enc) {
-						behind++
+					if string(child) < string(enc) {
+						if behind++; behind <= limit.tail {
+							tail = append(tail, child...)
+						}
 					}
 				}
 				value = value[n:]
@@ -139,6 +149,19 @@ func (g *RefGraph) markScan(ctx context.Context, limit markLimit, between func()
 			return nil, err
 		}
 		if behind == 0 {
+			break
+		}
+		if behind > limit.tail {
+			continue
+		}
+
+		// Expand the tail, scanning again only if it grew past the limit.
+		added, done, err := g.expandTail(ctx, mark, expanded, tail, behind, limit, between)
+		liveBlocks += added
+		if err != nil {
+			return nil, err
+		}
+		if done {
 			break
 		}
 	}
@@ -164,6 +187,85 @@ func (g *RefGraph) markScan(ctx context.Context, limit markLimit, between func()
 		return nil, err
 	}
 	return mark, nil
+}
+
+// markTailLimit is MarkBlocksScan's limit.tail. A point read costs about as
+// much as scanning a few dozen records, so the bound is far below the lists
+// of a large graph, and its encodings take a few MiB.
+const markTailLimit = 1 << 16
+
+// expandTail expands the live blocks queued in tail, the concatenated
+// encodings of queued blocks, and each block their lists make live, by point
+// reads in transactions within limit. It returns how many blocks it made
+// live, and whether it expanded every block it reached: it stops once queued
+// blocks would pass limit.tail, leaving the rest live but unexpanded for
+// another scan. A block without a list stays unexpanded, for settleUnknown.
+func (g *RefGraph) expandTail(ctx context.Context, mark *BlockMark, expanded *NodeSet, tail []byte, queued int, limit markLimit, between func() error) (int, bool, error) {
+	var added int
+	full := false
+	for first := true; len(tail) != 0 && !full; first = false {
+		// Let the caller act between transactions.
+		if !first && between != nil {
+			if err := between(); err != nil {
+				return added, false, err
+			}
+		}
+
+		// Expand queued blocks until the limit.
+		err := g.transaction(ctx, false, func(ctx context.Context, tx kvtx.Tx) error {
+			start := time.Now()
+			defer func() { mark.LongestRead = max(mark.LongestRead, time.Since(start)) }()
+			for n := 0; len(tail) != 0; n++ {
+				// Read the next block's list.
+				if n != 0 && limitReached(limit, n, start) {
+					return nil
+				}
+				size := blockNodeLen(tail)
+				if size == 0 || size > len(tail) {
+					return errChildNotBlock
+				}
+				enc := tail[:size]
+				tail = tail[size:]
+				if expanded.hasBlock(enc) {
+					continue
+				}
+				value, found, err := tx.Get(ctx, graphKey(kindChildren, prefixBlock+string(enc)))
+				if err != nil {
+					return err
+				}
+				if !found {
+					continue
+				}
+
+				// Expand it, queueing the children it makes live while they
+				// fit, and stop once they do not.
+				expanded.addBlock(enc)
+				for len(value) != 0 {
+					size := blockNodeLen(value)
+					if size == 0 || size > len(value) {
+						return errChildNotBlock
+					}
+					if child := value[:size]; mark.Live.addBlock(child) {
+						added++
+						if queued++; queued <= limit.tail {
+							tail = append(tail, child...)
+						} else {
+							full = true
+						}
+					}
+					value = value[size:]
+				}
+				if full {
+					return nil
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return added, false, err
+		}
+	}
+	return added, !full, nil
 }
 
 // settleLimit bounds the unexpanded live blocks settleUnknown checks.

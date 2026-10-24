@@ -11,7 +11,8 @@ import (
 
 // TestMarkScanAcrossWrites checks that a scan mark split into transactions of
 // a few records each, with random writes between them, keeps every block the
-// roots reach once the sweep's rescue has run.
+// roots reach once the sweep's rescue has run. A tail bound of a few blocks
+// makes the scans both finish by point reads and overflow to another scan.
 func TestMarkScanAcrossWrites(t *testing.T) {
 	for seed := range uint64(300) {
 		t.Run(strconv.FormatUint(seed, 10), func(t *testing.T) {
@@ -108,11 +109,12 @@ func testMarkScanAcrossWrites(t *testing.T, rnd *rand.Rand) {
 		return rg.ApplyRefBatch(ctx, adds, removes)
 	}
 
-	// Open a pass, mark a record or a few at a time, and rescue.
+	// Open a pass, mark a record or a few at a time with a small tail, and
+	// rescue.
 	if err := rg.BeginBlockPass(ctx); err != nil {
 		t.Fatal(err)
 	}
-	mark, err := rg.markScan(ctx, markLimit{records: 1 + rnd.IntN(3)}, between)
+	mark, err := rg.markScan(ctx, markLimit{records: 1 + rnd.IntN(3), tail: rnd.IntN(4)}, between)
 	if err != nil {
 		t.Fatal(err)
 	}
