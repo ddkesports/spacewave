@@ -21,6 +21,7 @@ type webArgs struct {
 	statePath        string
 	sessionIdx       uint
 	space            string
+	full             bool
 	host             string
 	port             uint
 	listenMultiaddr  string
@@ -53,6 +54,11 @@ func (a *webArgs) BuildFlags() []cli.Flag {
 			Name:        "space",
 			Usage:       "bind the listener to this Space ID or name and serve it read-only",
 			Destination: &a.space,
+		},
+		&cli.BoolFlag{
+			Name:        "full",
+			Usage:       "serve the native app with full access to the daemon, as its socket gives",
+			Destination: &a.full,
 		},
 		&cli.StringFlag{
 			Name:        "host",
@@ -105,6 +111,9 @@ func (a *webArgs) Run(c *cli.Context) error {
 	if a.displayPath == "" && a.displayComponent != "" {
 		return errors.New("--display-component requires --display")
 	}
+	if a.full && a.space != "" {
+		return errors.New("--full serves every Space; drop --space")
+	}
 	client, err := connectDaemonFromContext(ctx, c, a.statePath)
 	if err != nil {
 		return err
@@ -115,6 +124,7 @@ func (a *webArgs) Run(c *cli.Context) error {
 	req := &s4wave_root.AccessWebListenerRequest{
 		ListenMultiaddr: a.listenMultiaddr,
 		Background:      a.background,
+		Full:            a.full,
 	}
 	if req.ListenMultiaddr == "" {
 		req.ListenMultiaddr = buildWebListenMultiaddr(a.host, uint32(a.port))

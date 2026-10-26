@@ -1432,6 +1432,12 @@ export interface AccessWebListenerRequest {
    * SessionIdx is the session holding space_id. Required with space_id.
    */
   sessionIdx?: number
+  /**
+   * Full serves the native app over the daemon's whole Resource service at
+   * /_spacewave/resource, with the same access as the daemon socket. It
+   * excludes space_id.
+   */
+  full?: boolean
 }
 
 export const AccessWebListenerRequest: MessageType<AccessWebListenerRequest> =
@@ -1442,6 +1448,7 @@ export const AccessWebListenerRequest: MessageType<AccessWebListenerRequest> =
       [2, 'background', 8],
       [3, 'space_id', 9],
       [4, 'session_idx', 13],
+      [5, 'full', 8],
     ],
   )
 
@@ -1533,6 +1540,10 @@ export interface WebListenerInfo {
    * SessionIdx is the session of the bound Space, or zero.
    */
   sessionIdx?: number
+  /**
+   * Full is true when the listener serves the whole Resource service.
+   */
+  full?: boolean
 }
 
 export const WebListenerInfo: MessageType<WebListenerInfo> =
@@ -1545,6 +1556,7 @@ export const WebListenerInfo: MessageType<WebListenerInfo> =
       [4, 'background', 8],
       [5, 'space_id', 9],
       [6, 'session_idx', 13],
+      [7, 'full', 8],
     ],
   )
 

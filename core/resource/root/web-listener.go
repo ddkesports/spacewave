@@ -41,17 +41,17 @@ const webCapabilityCookie = "spacewave_local_cap"
 
 const webListenerReadHeaderTimeout = 5 * time.Second
 
-// webResourcePath serves a bound listener's Resource service over a websocket.
+// webResourcePath serves a native listener's Resource service over a websocket.
 const webResourcePath = "/_spacewave/resource"
 
-// webAppPluginID is the plugin whose browser build a bound listener serves.
+// webAppPluginID is the plugin whose browser build a native listener serves.
 const webAppPluginID = "spacewave-app"
 
 // webPkgPluginID is the plugin whose assets hold the web packages the app
 // build excludes and imports from /b/pkg/.
 const webPkgPluginID = "spacewave-web"
 
-// BoundPluginIDs are the plugins whose browser files a bound listener serves.
+// BoundPluginIDs are the plugins whose browser files a native listener serves.
 var BoundPluginIDs = []string{webAppPluginID, webPkgPluginID}
 
 // AccessWebListener creates or reuses a localhost web listener.
@@ -257,9 +257,9 @@ type webListener struct {
 	appFrontendPath string
 	// webPkgBasePath pins package modules to the listener's web manifest.
 	webPkgBasePath string
-	// resources serves the bound Resource service, or is nil when unbound.
+	// resources serves the bound or full Resource service, or is nil when unbound.
 	resources *srpc.HTTPServer
-	// releaseAssets releases the bound plugin files and their web packages.
+	// releaseAssets releases the native app files and their web packages.
 	releaseAssets func()
 	server        *http.Server
 	listener      net.Listener
@@ -278,8 +278,8 @@ type webListener struct {
 }
 
 // newWebListener starts a web listener for spec. rootMux is the Root resource
-// mux a bound listener serves through its webBinding; an unbound listener and
-// a listener without a bus ignore it.
+// mux a full listener serves whole and a bound listener serves through its
+// webBinding; an unbound listener and a listener without a bus ignore it.
 func newWebListener(
 	ctx context.Context,
 	le *logrus.Entry,
@@ -292,19 +292,22 @@ func newWebListener(
 		return nil, err
 	}
 
-	// Build the bound Resource service before taking the port.
+	// Build the bound or full Resource service before taking the port.
 	var resources *srpc.HTTPServer
-	if spec.spaceID != "" {
+	if spec.native() {
 		if rootMux == nil {
-			return nil, errors.New("bound web listener requires the Root resource")
+			return nil, errors.New("native web listener requires the Root resource")
 		}
-		binding := &webBinding{
-			le:         le.WithField("space-id", spec.spaceID),
-			sessionIdx: spec.sessionIdx,
-			spaceID:    spec.spaceID,
+		server := resource_server.NewResourceServer(rootMux)
+		if spec.spaceID != "" {
+			binding := &webBinding{
+				le:         le.WithField("space-id", spec.spaceID),
+				sessionIdx: spec.sessionIdx,
+				spaceID:    spec.spaceID,
+			}
+			server = resource_server.NewFilteredResourceServer(rootMux, binding.filter)
 		}
 		mux := srpc.NewMux()
-		server := resource_server.NewFilteredResourceServer(rootMux, binding.filter)
 		if err := server.Register(mux); err != nil {
 			return nil, err
 		}
@@ -358,7 +361,7 @@ func newWebListener(
 		bootstrapKeys:   make(map[string]struct{}),
 		capabilities:    make(map[string]struct{}),
 	}
-	if spec.spaceID != "" && b != nil {
+	if spec.native() && b != nil {
 		listener.appFrontendPath, listener.webPkgBasePath, listener.releaseAssets, err = holdBoundAssets(ctx, b)
 		if err != nil {
 			cancel()
@@ -405,6 +408,7 @@ func (l *webListener) info(background bool) *s4wave_root.WebListenerInfo {
 		Background:      background,
 		SpaceId:         l.spec.spaceID,
 		SessionIdx:      l.spec.sessionIdx,
+		Full:            l.spec.full,
 	}
 }
 
@@ -477,6 +481,10 @@ func (l *webListener) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 	if req.URL.Path == webResourcePath {
+		if !isSameOriginRequest(req) {
+			http.Error(rw, "spacewave: cross-origin resource request", http.StatusForbidden)
+			return
+		}
 		if l.resources == nil {
 			http.NotFound(rw, req)
 			return
@@ -563,6 +571,16 @@ func (l *webListener) isAuthorized(req *http.Request) bool {
 	return ok
 }
 
+// isSameOriginRequest reports whether a browser request came from a page the
+// listener served. The capability cookie is SameSite, and any port on the
+// loopback host is the same site, so a page on another local port would carry
+// the cookie; its Origin names that port. A request without an Origin is not
+// from a browser page.
+func isSameOriginRequest(req *http.Request) bool {
+	origin := req.Header.Get("Origin")
+	return origin == "" || origin == "http://"+req.Host
+}
+
 func isWebListenerBootShellPath(path string) bool {
 	return path == "/" || path == "/index.html" || path == "/display" || strings.HasPrefix(path, "/display/")
 }
@@ -646,8 +664,8 @@ func webListenerReleaseBootMetadataFromHTML(html string) (*webListenerReleaseBoo
 
 // renderWebListenerBootShell renders the shell that exchanges the bootstrap
 // secret for the capability cookie and then starts the app. An unbound
-// listener starts the released WASM runtime. A bound listener skips it: the
-// shell loads the native app entry and renders it over the listener's
+// listener starts the released WASM runtime. A bound or full listener skips
+// it: the shell loads the native app entry and renders it over the listener's
 // Resource websocket, opening the bound Space when no route is given. It first
 // unregisters any service worker on the origin, such as one an unbound listener
 // on the same port left behind, which would answer the app's asset requests
@@ -664,12 +682,16 @@ func renderWebListenerBootShell(metadata *webListenerReleaseBootMetadata, spec *
 		importMapScript = "<script type=\"importmap\">" + web_entrypoint_index.ImportMap{Imports: imports}.String() + "</script>"
 	}
 
-	// Start the bound native app or the unbound browser runtime.
+	// Start the native app or the unbound browser runtime.
 	start := "await import('/boot.mjs');"
-	if spec.spaceID != "" {
-		route := "/u/" + strconv.FormatUint(uint64(spec.sessionIdx), 10) + "/so/" + url.PathEscape(spec.spaceID)
-		start = `if (!location.hash) history.replaceState(null, '', '#' + ` + quoteWebListenerScriptString(route) + `);
-if (navigator.serviceWorker) {
+	if spec.native() {
+		start = ""
+		if spec.spaceID != "" {
+			route := "/u/" + strconv.FormatUint(uint64(spec.sessionIdx), 10) + "/so/" + url.PathEscape(spec.spaceID)
+			start = `if (!location.hash) history.replaceState(null, '', '#' + ` + quoteWebListenerScriptString(route) + `);
+`
+		}
+		start += `if (navigator.serviceWorker) {
   const registrations = await navigator.serviceWorker.getRegistrations();
   await Promise.all(registrations.map((registration) => registration.unregister()));
   if (navigator.serviceWorker.controller) {
@@ -850,18 +872,30 @@ type webListenSpec struct {
 	// spaceID and sessionIdx bind the listener to one Space, or are empty.
 	spaceID    string
 	sessionIdx uint32
+	// full serves the native app over the whole Resource service.
+	full bool
+}
+
+// native is true when the listener serves the native app over its Resource
+// service instead of starting the browser runtime.
+func (s *webListenSpec) native() bool {
+	return s.full || s.spaceID != ""
 }
 
 // reuseKey identifies the listeners a request may reuse: the same host, port
 // and binding. A request for port 0 reuses any listener this registry chose a
 // port for, and a request for an explicit port reuses the listener on it.
 func (s *webListenSpec) reuseKey() string {
+	// Key the host and port, then the Space binding or full access.
 	key := strings.ToLower(strings.Trim(s.host, "[]"))
 	if s.port != 0 {
 		key += ":" + strconv.FormatUint(uint64(s.port), 10)
 	}
 	if s.spaceID != "" {
 		key += "/" + strconv.FormatUint(uint64(s.sessionIdx), 10) + "/" + s.spaceID
+	}
+	if s.full {
+		key += "/full"
 	}
 	return key
 }
@@ -876,6 +910,10 @@ func parseWebListenRequest(req *s4wave_root.AccessWebListenerRequest) (*webListe
 	spec.spaceID, spec.sessionIdx = req.GetSpaceId(), req.GetSessionIdx()
 	if (spec.spaceID == "") != (spec.sessionIdx == 0) {
 		return nil, errors.New("web listener binding needs both a space id and a session index")
+	}
+	spec.full = req.GetFull()
+	if spec.full && spec.spaceID != "" {
+		return nil, errors.New("a full web listener cannot be bound to a space")
 	}
 	return spec, nil
 }

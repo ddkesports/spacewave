@@ -521,6 +521,10 @@ message AccessWebListenerRequest {
   string space_id = 3;
   // SessionIdx is the session holding space_id. Required with space_id.
   uint32 session_idx = 4;
+  // Full serves the native app over the daemon's whole Resource service at
+  // /_spacewave/resource, with the same access as the daemon socket. It
+  // excludes space_id.
+  bool full = 5;
 }
 
 // AccessWebListenerResponse is the response type for AccessWebListener.
@@ -556,6 +560,8 @@ message WebListenerInfo {
   string space_id = 5;
   // SessionIdx is the session of the bound Space, or zero.
   uint32 session_idx = 6;
+  // Full is true when the listener serves the whole Resource service.
+  bool full = 7;
 }
 
 // WatchWebListenersResponse is the response type for WatchWebListeners.
