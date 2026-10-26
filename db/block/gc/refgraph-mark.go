@@ -525,11 +525,11 @@ func (g *RefGraph) RescueAdopted(ctx context.Context, mark *BlockMark, stop func
 	err := g.transaction(ctx, true, func(ctx context.Context, tx kvtx.Tx) error {
 		// Consume the log and advance the pass past it.
 		r, open, err := readPassTx(ctx, tx)
-		if err != nil || !open {
+		if err != nil {
 			return err
 		}
 		var blocks []string
-		if r.legacy || r.lo != r.hi {
+		if open && (r.legacy || r.lo != r.hi) {
 			unseen := adoptRange{lo: max(r.lo, mark.logSeen), hi: r.hi, legacy: r.legacy}
 			if blocks, err = readAdoptLogTx(ctx, tx, unseen); err != nil {
 				return err

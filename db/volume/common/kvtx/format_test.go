@@ -772,8 +772,9 @@ func testCopyReachable(t *testing.T, src, dst db_kvtx.Store) {
 	// An owner edge is two records, an edge between blocks or from the queue
 	// lands in its block's child list, and a registered root has one root
 	// record: the copy keeps the reachable edges and lists and the root's
-	// record, and drops c's list and the unreachable bucket's edge.
-	want := CopyProgress{Keys: 13, DroppedBlocks: 3, UnownedBlocks: 1, DroppedRecords: 3}
+	// record, and drops c's list, the unreachable bucket's edge and the young
+	// log the writes appended.
+	want := CopyProgress{Keys: 13, DroppedBlocks: 3, UnownedBlocks: 1, DroppedRecords: 5}
 	last.Bytes, last.DroppedBytes = 0, 0
 	if last != want {
 		t.Fatalf("progress %+v, want %+v", last, want)

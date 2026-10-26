@@ -426,12 +426,13 @@ func TestPublicationCollectorSweepsCandidatesInOneCommit(t *testing.T) {
 	}
 
 	// Verify the collector sweeps the whole batch in one physical commit
-	// between the commits that open and close the pass.
+	// between the commit that opens the pass and those that promote its mark
+	// and close it.
 	raw.mu.Lock()
 	count := raw.commits - before
 	raw.mu.Unlock()
-	if count != 3 {
-		t.Fatalf("pass used %d physical commits for %d candidates, want 3", count, len(published))
+	if count != 4 {
+		t.Fatalf("pass used %d physical commits for %d candidates, want 4", count, len(published))
 	}
 	for _, p := range published {
 		assertPublishedBlock(t, v, p, false)
