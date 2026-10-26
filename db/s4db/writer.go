@@ -830,8 +830,8 @@ func (w *writer) runCheckpoint(st *state, stripe int) {
 	}
 
 	// Encode the saved space without the writer lock, then take the lock
-	// again to save the tree. A failed lock leaves the space holding the
-	// record's pages, which the saved space does not name.
+	// again to save the tree. A failed lock leaves the record's pages
+	// reserved, so the next saved space frees them.
 	if err == nil && t.save != nil {
 		w.unlock(nil)
 		if w.beforeSave != nil {
@@ -1044,8 +1044,13 @@ func (w *writer) prepareTree(t *tree) error {
 	}
 	rec := sp.alloc(pagesFor(est+est/8) + 1)
 
-	// Copy the space for encodeSpace, lending it the last copy's live counts.
+	// Reserve the record's pages until saveTree, so a space another
+	// checkpoint saves meanwhile frees them on reopen. Copy the space for
+	// encodeSpace, lending it the last copy's live counts. The copy saves
+	// the pages as its own record, so it does not reserve them.
+	sp.reserved = append(sp.reserved, rec)
 	cp := sp.clone(w.saveLive)
+	cp.reserved = dropRuns(cp.reserved, []run{rec})
 	w.saveLive = nil
 	t.save = &spaceSave{rec: rec, from: sp, seq: cur.seq, old: cur.sb.space, sp: cp, live: cp.live}
 	return nil
@@ -1100,7 +1105,7 @@ func (w *writer) saveTree(ctx context.Context, t *tree) error {
 	// Take back the copy's live counts, and drop a tree that can no longer
 	// be saved, as prepareTree does, also returning the record's pages. A
 	// space reloaded since prepareTree holds neither the record's pages nor
-	// the tree's.
+	// the tree's. Otherwise the record's pages leave the reservations.
 	db, sp, b, st, sv := w.db, w.sp, t.b, t.st, t.save
 	cur := db.cur.Load()
 	w.saveLive = sv.live
@@ -1108,6 +1113,7 @@ func (w *writer) saveTree(ctx context.Context, t *tree) error {
 		t.evict()
 		return nil
 	}
+	sp.reserved = dropRuns(sp.reserved, []run{sv.rec})
 	out := b.out
 	if cur.gen != st.gen {
 		sp.reserved = dropRuns(sp.reserved, out.runs)

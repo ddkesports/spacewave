@@ -2,7 +2,9 @@ package s4db
 
 import (
 	"context"
+	"maps"
 	"math/rand/v2"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -37,9 +39,11 @@ func TestCheckpointSavesSpaceCopy(t *testing.T) {
 			// past the file end.
 			var before, during uint64
 			var hookErr, bgErr error
+			var saved bool
 			bg := make(chan struct{})
 			db.w.beforeSave = func(tr *tree) {
 				// Note the seqno, grow the copy, and commit while unlocked.
+				saved = true
 				before = db.cur.Load().seq
 				if sp := tr.save.sp; outgrow {
 					for i := range uint64(4096) {
@@ -73,6 +77,11 @@ func TestCheckpointSavesSpaceCopy(t *testing.T) {
 			db.w.startCheckpoint()
 			db.w.unlock(nil)
 			db.w.builds.Wait()
+
+			// The hook ran and its commits succeeded.
+			if !saved {
+				t.Fatal("checkpoint did not encode a space copy")
+			}
 			if hookErr != nil {
 				t.Fatal(hookErr)
 			}
@@ -109,11 +118,15 @@ func TestCheckpointSavesSpaceCopy(t *testing.T) {
 // while a background checkpoint encodes its copy of the space, so under the
 // race detector the two copies must not share their live counts. The
 // background tree is dropped for the checkpoint that replaced it, and the
-// space and contents survive a reopen.
+// space and contents survive a reopen. A crash right after the replacing
+// checkpoint leaks no page: its saved space frees the record pages the
+// background checkpoint took.
 func TestCheckpointReplacedDuringEncode(t *testing.T) {
 	// Fill a file with random commits.
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "replace.s4wave")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "replace.s4wave")
+	crashed := filepath.Join(dir, "crashed.s4wave")
 	db := openTest(t, path, Options{})
 	r := rand.New(rand.NewPCG(3, 4)) // #nosec G404 -- test data.
 	m := model{}
@@ -126,10 +139,13 @@ func TestCheckpointReplacedDuringEncode(t *testing.T) {
 	// own copy.
 	var start uint64
 	var fgErr error
+	var saved bool
+	var atCrash model
 	fg, held := make(chan struct{}), make(chan struct{})
 	db.w.beforeSave = func(*tree) {
 		// Note the generation and return once the other checkpoint holds
 		// the lock.
+		saved = true
 		start = db.cur.Load().sb.gen
 		go func() {
 			// Commit, take the lock, and checkpoint under it.
@@ -141,9 +157,18 @@ func TestCheckpointReplacedDuringEncode(t *testing.T) {
 			if fgErr = db.w.lock(ctx); fgErr != nil {
 				return
 			}
+			defer db.w.unlock(nil)
 			held <- struct{}{}
-			fgErr = db.w.checkpoint(ctx)
-			db.w.unlock(nil)
+			if fgErr = db.w.checkpoint(ctx); fgErr != nil {
+				return
+			}
+
+			// Copy the file as a crash after the checkpoint would leave it.
+			var b []byte
+			if b, fgErr = os.ReadFile(path); fgErr != nil {
+				return
+			}
+			fgErr, atCrash = os.WriteFile(crashed, b, 0o600), maps.Clone(m)
 		}()
 		<-held
 	}
@@ -155,6 +180,11 @@ func TestCheckpointReplacedDuringEncode(t *testing.T) {
 	db.w.startCheckpoint()
 	db.w.unlock(nil)
 	db.w.builds.Wait()
+
+	// The hook ran and both checkpoints succeeded.
+	if !saved {
+		t.Fatal("checkpoint did not encode a space copy")
+	}
 	<-fg
 	if fgErr != nil {
 		t.Fatal(fgErr)
@@ -175,7 +205,16 @@ func TestCheckpointReplacedDuringEncode(t *testing.T) {
 		t.Fatal(err)
 	}
 	db = openTest(t, path, Options{})
-	defer db.Close()
 	checkSpace(t, db)
 	m.check(t, db)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// The crashed copy holds the contents as of the replacing checkpoint,
+	// and every page is accounted for.
+	db = openTest(t, crashed, Options{})
+	defer db.Close()
+	checkSpace(t, db)
+	atCrash.check(t, db)
 }

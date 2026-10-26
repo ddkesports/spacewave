@@ -114,7 +114,8 @@ func commitRandom(r *rand.Rand, db *DB, m model, keys int) (bool, error) {
 
 // checkSpace fails when two uses claim one page: a live value, a tree
 // page, a log chunk, or the saved space against each other or against a
-// free or pending run.
+// free or pending run. It also fails when a page below the end is none of
+// these, reserved, or in the open extent, which leaks it.
 func checkSpace(t *testing.T, db *DB) {
 	// Hold the writer lock so the space is stable.
 	t.Helper()
@@ -206,6 +207,36 @@ func checkSpace(t *testing.T, db *DB) {
 				t.Fatalf("%s page %d awaits release in %+v", who, p, x)
 			}
 		}
+	}
+
+	// Mark the pages free, awaiting release, or reserved.
+	held := make([]bool, sp.end)
+	mark := func(r run) {
+		for p := r.start; p < r.end() && p < sp.end; p++ {
+			held[p] = true
+		}
+	}
+	sp.free.Scan(func(start, n uint64) bool {
+		mark(run{start: start, n: n})
+		return true
+	})
+	for _, x := range slices.Concat(sp.values, sp.pages) {
+		mark(x.run)
+	}
+	for _, r := range sp.reserved {
+		mark(r)
+	}
+
+	// Every other page past the superblocks is claimed or in the open
+	// extent.
+	var leaked []uint64
+	for p := uint64(firstPage); p < sp.end; p++ {
+		if _, ok := owner[p]; !ok && !held[p] && !sp.inOpen(p) {
+			leaked = append(leaked, p)
+		}
+	}
+	if len(leaked) != 0 {
+		t.Fatalf("pages %v are neither used, free, pending, nor reserved", leaked)
 	}
 }
 
