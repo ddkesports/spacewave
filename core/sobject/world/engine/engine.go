@@ -747,9 +747,12 @@ func (e *soEngine) updateEngineState(ctx context.Context, state *InnerState) err
 }
 
 // applyHold applies hold and saves the replay, in one publication when the
-// store can publish, so an update commits to the volume once. Otherwise it
-// applies hold, then saves the replay, so the save names held Worlds. The
-// caller holds the writer lock and no admission is pending.
+// store can publish, so an update commits to the volume once. The engine admits
+// that publication like a write and returns without waiting for it, so the
+// writer lock is not held across the commit; the update after its receipt
+// settles holds what changed since. Otherwise it applies hold, then saves the
+// replay, so the save names held Worlds. The caller holds the writer lock and
+// no admission is pending.
 func (e *soEngine) applyHold(ctx context.Context, hold *rootHold) error {
 	// Fall back when there is no replay save to carry or the state or the
 	// store cannot join a publication.
@@ -776,13 +779,9 @@ func (e *soEngine) applyHold(ctx context.Context, hold *rootHold) error {
 		return err
 	}
 
-	// Record the save once it is durable.
-	err = receipt.Wait(ctx)
-	receipt.Release()
-	if err != nil {
-		return err
-	}
-	e.replay.saved()
+	// Admit it; the caller records what it holds.
+	e.admit(receipt, e.retained)
+	go receipt.Release()
 	return nil
 }
 

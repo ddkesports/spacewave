@@ -8,12 +8,12 @@ import (
 	"github.com/s4wave/spacewave/db/bucket"
 )
 
-// writeAdmission is a local write admitted to a publication whose receipt the
-// engine has not settled. It keeps what was durable before the publication,
-// which a failed receipt restores.
+// writeAdmission is a publication whose receipt the engine has not settled: a
+// local write's, or the engine's own hold and replay save. It keeps what was
+// durable before the publication, which a failed receipt restores.
 type writeAdmission struct {
-	// receipt resolves with the publication's durable result. The write owns
-	// it; the engine only reads it.
+	// receipt resolves with the publication's durable result. Its submitter
+	// owns it; the engine only reads it.
 	receipt *block.PublicationReceipt
 	// localID is the local id of the admitted operation, or empty when the
 	// SharedObject did not report it.
@@ -30,6 +30,8 @@ type writeAdmission struct {
 	// retained is the head held under the accepted World root before the
 	// publication.
 	retained *bucket.ObjectRef
+	// retainedRoots are the retained roots held before the publication.
+	retainedRoots []*RetainedRoot
 }
 
 // admit records a publication admitted with receipt, then records its replay
@@ -38,12 +40,13 @@ type writeAdmission struct {
 // passes the World the publication holds under the accepted World root.
 func (e *soEngine) admit(receipt *block.PublicationReceipt, held *bucket.ObjectRef) {
 	e.admissions = append(e.admissions, &writeAdmission{
-		receipt:    receipt,
-		base:       e.replay.base,
-		span:       e.replay.span,
-		spanLen:    e.replay.spanLen,
-		baseUnheld: e.replay.baseUnheld,
-		retained:   e.retained,
+		receipt:       receipt,
+		base:          e.replay.base,
+		span:          e.replay.span,
+		spanLen:       e.replay.spanLen,
+		baseUnheld:    e.replay.baseUnheld,
+		retained:      e.retained,
+		retainedRoots: e.retainedRoots,
 	})
 	e.retained = held
 	e.replay.saved()
@@ -62,8 +65,9 @@ func (e *soEngine) lastReceipt() *block.PublicationReceipt {
 
 // settle drops the admissions whose receipts resolved, in admission order. A
 // failed receipt fails every later admission through After, so settle drops
-// them all, restores the replay save and the held head from before the first,
-// and records their operations as failed. The caller holds the writer lock.
+// them all, restores the replay save, the held head and the held retained
+// roots from before the first, and records their operations as failed. The
+// caller holds the writer lock.
 func (e *soEngine) settle() {
 	for len(e.admissions) != 0 {
 		// Stop at the first unresolved receipt.
@@ -87,7 +91,7 @@ func (e *soEngine) settle() {
 			}
 		}
 		e.replay.unsave(adm.base, adm.span, adm.spanLen, adm.baseUnheld)
-		e.retained = adm.retained
+		e.retained, e.retainedRoots = adm.retained, adm.retainedRoots
 		e.admissions = nil
 	}
 }
