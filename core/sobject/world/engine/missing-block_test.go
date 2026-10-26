@@ -171,6 +171,9 @@ func testEngineStopsReplayAtBlockGap(t *testing.T, store *hidingBlockStore, want
 
 	// Build the engine over a store that hides the root block.
 	snap := &replayTestSnapshot{config: space.config, checkpoint: checkpoint, set: set}
+	if snap.participant, err = snap.GetParticipantConfigForPeer(ctx, pidA.String()); err != nil {
+		t.Fatal(err.Error())
+	}
 	store.BlockStore, store.ref = space.so.blockStore, payload
 	store.hidden.Store(true)
 	so := &testSharedObject{peerID: pidA, blockStore: store, localStore: store_kvtx_inmem.NewStore(), snapshot: snap}
@@ -249,7 +252,11 @@ func testEngineStopsReplayAtBlockGap(t *testing.T, store *hidingBlockStore, want
 		}()
 
 		// Cancel it once it waits for the peer with the write lock free.
-		<-store.asked
+		select {
+		case <-store.asked:
+		case err := <-done:
+			t.Fatalf("%s ended before waiting for an absent peer: %v", name, err)
+		}
 		writeLockFree()
 		writeCancel()
 		if err := <-done; !errors.Is(err, context.Canceled) {
