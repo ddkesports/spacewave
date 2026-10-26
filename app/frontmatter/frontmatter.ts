@@ -22,8 +22,9 @@ export interface Frontmatter {
 // readFrontmatter splits a Markdown file into its flat `---` frontmatter block
 // and its body. A file without a block has no fields and all of its text as
 // body. The frontmatter content mapper reads files with this same function.
+// Lines may end in CRLF, as a Windows checkout writes them.
 export function readFrontmatter(raw: string): Frontmatter {
-  const match = /^---\n([\s\S]*?)\n---\n/.exec(raw)
+  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n/.exec(raw)
   if (!match) return { fields: [], body: raw }
 
   // Read one field from each line with a key before its first colon.
