@@ -481,6 +481,9 @@ jobs:
       # Staging leaves Windows binaries unsigned: its developer machines
       # bypass SmartScreen, and the signer is a no-op without a profile.
       - name: Build Windows native plugin manifests
+        # A healthy build takes about 15 minutes; a stalled bundler child
+        # otherwise holds the release for the six-hour job limit.
+        timeout-minutes: 40
         shell: pwsh
         env:
           BLDR_WINDOWS_SIGN_PROFILE: ${{ needs.prep.outputs.sign_artifacts == 'true' && vars.BLDR_WINDOWS_SIGN_PROFILE || '' }}
