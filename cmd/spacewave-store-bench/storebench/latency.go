@@ -34,5 +34,5 @@ func rank(n int, q float64) int {
 
 // micros returns d in whole microseconds.
 func micros(d time.Duration) uint64 {
-	return uint64(d / time.Microsecond)
+	return uint64(d / time.Microsecond) // #nosec G115 -- latencies are positive.
 }

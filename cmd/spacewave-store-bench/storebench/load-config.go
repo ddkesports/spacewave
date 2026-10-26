@@ -46,4 +46,7 @@ type LoadConfig struct {
 	StallDumpDir string
 	// StallThreshold is how long a write runs before it counts as stalled.
 	StallThreshold time.Duration
+	// StallStacks also writes every goroutine's stack at each stall. Each
+	// dump stops the world, which lengthens the stall it records.
+	StallStacks bool
 }

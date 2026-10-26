@@ -20,7 +20,7 @@ const seedLinkPredicate = "seed/link"
 // It stands in for a copied server store while none is available.
 func Seed(ctx context.Context, le *logrus.Entry, eng world.Engine, conf *SeedConfig) error {
 	// Write the objects batch by batch.
-	rng := rand.New(rand.NewPCG(conf.Seed, 0))
+	rng := rand.New(rand.NewPCG(conf.Seed, 0)) // #nosec G404 -- seeded fixture data; no secret.
 	batch := max(conf.Batch, 1)
 	for start := 0; start < conf.Objects; start += batch {
 		end := min(start+batch, conf.Objects)

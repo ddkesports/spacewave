@@ -63,9 +63,9 @@ func attributeCPU(data []byte) ([]*CpuShare, error) {
 	}
 
 	// Report the total and each path's share of it.
-	out := []*CpuShare{{Name: "total", Fraction: 1, CpuMs: uint64(time.Duration(total) / time.Millisecond)}}
+	out := []*CpuShare{{Name: "total", Fraction: 1, CpuMs: uint64(time.Duration(total) / time.Millisecond)}} // #nosec G115 -- sample totals are positive.
 	for i, p := range cpuPaths {
-		share := &CpuShare{Name: p.name, CpuMs: uint64(time.Duration(paths[i]) / time.Millisecond)}
+		share := &CpuShare{Name: p.name, CpuMs: uint64(time.Duration(paths[i]) / time.Millisecond)} // #nosec G115 -- sample totals are positive.
 		if total > 0 {
 			share.Fraction = float64(paths[i]) / float64(total)
 		}

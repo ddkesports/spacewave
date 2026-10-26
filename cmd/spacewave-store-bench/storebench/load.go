@@ -7,6 +7,7 @@ import (
 	"os"
 	"runtime"
 	"runtime/pprof"
+	"runtime/trace"
 	"strconv"
 	"strings"
 	"sync"
@@ -51,6 +52,9 @@ type load struct {
 	dropped atomic.Uint64
 	// stallDumps counts the goroutine dumps of stalled writes.
 	stallDumps atomic.Uint64
+	// flight records the execution trace of the window when stall dumps
+	// are on, or is nil.
+	flight *trace.FlightRecorder
 
 	// mtx guards the fields below.
 	mtx sync.Mutex
@@ -128,6 +132,9 @@ func (l *load) measure(ctx context.Context) (*Report, error) {
 	if err := pprof.StartCPUProfile(&prof); err != nil {
 		return nil, errors.Wrap(err, "start cpu profile")
 	}
+	if fr := l.startFlight(); fr != nil {
+		defer fr.Stop()
+	}
 	l.measuring.Store(true)
 	start := time.Now()
 	l.le.WithField("duration", l.conf.Duration).Info("measuring")
@@ -163,8 +170,8 @@ func (l *load) measure(ctx context.Context) (*Report, error) {
 	defer l.mtx.Unlock()
 	report := &Report{
 		Label:         l.conf.Label,
-		DurationMs:    uint64(elapsed / time.Millisecond),
-		Watchers:      uint32(l.conf.Watchers),
+		DurationMs:    uint64(elapsed / time.Millisecond), // #nosec G115 -- elapsed is positive.
+		Watchers:      uint32(l.conf.Watchers),            // #nosec G115 -- a flag bounds the count.
 		WriteRate:     l.conf.WriteRate,
 		Writes:        uint64(len(l.latencies)),
 		WriteErrors:   l.errors,
@@ -175,7 +182,7 @@ func (l *load) measure(ctx context.Context) (*Report, error) {
 		Gc:            gcStats(&mem0, &mem1),
 		Cpu:           cpu,
 		WritesDropped: l.dropped.Load(),
-		Writers:       uint32(max(l.conf.Writers, 1)),
+		Writers:       uint32(max(l.conf.Writers, 1)), // #nosec G115 -- a flag bounds the count.
 		Publications:  publicationDelta(pub0, pub1),
 	}
 	for i, name := range l.stageNames {
@@ -348,7 +355,7 @@ func (l *load) createHot(ctx context.Context) error {
 // of sampled store objects and, for a share of the watchers, a written one.
 func (l *load) watch(ctx context.Context, i int) {
 	// Choose the objects the view reads.
-	rng := rand.New(rand.NewPCG(l.conf.Seed, uint64(i)))
+	rng := rand.New(rand.NewPCG(l.conf.Seed, uint64(i))) // #nosec G404 G115 -- seeded load choice; i is a watcher index.
 	keys := make([]string, 0, l.conf.ViewReads+1)
 	for range l.conf.ViewReads {
 		keys = append(keys, l.keys[rng.IntN(len(l.keys))])
@@ -370,7 +377,7 @@ func (l *load) watch(ctx context.Context, i int) {
 		}
 		return nil
 	})
-	if err != nil && ctx.Err() == nil {
+	if ctx.Err() == nil {
 		l.le.WithError(err).Warn("view watcher stopped")
 	}
 }
@@ -379,10 +386,10 @@ func (l *load) watch(ctx context.Context, i int) {
 func readObject(ctx context.Context, ws world.WorldState, key string) error {
 	// Look up the object, then read its root.
 	obj, found, err := ws.GetObject(ctx, key)
+	defer world.ReleaseObjectState(obj)
 	if err != nil || !found {
 		return err
 	}
-	defer world.ReleaseObjectState(obj)
 	_, _, err = obj.GetRootRef(ctx)
 	return err
 }
@@ -398,7 +405,7 @@ func sampleKeys(ctx context.Context, eng world.Engine, n int, seed uint64) ([]st
 	defer tx.Discard()
 
 	// Reservoir sample the object keys.
-	rng := rand.New(rand.NewPCG(seed, 0))
+	rng := rand.New(rand.NewPCG(seed, 0)) // #nosec G404 -- seeded sample; no secret.
 	keys := make([]string, 0, n)
 	it := tx.IterateObjects(ctx, "", false)
 	defer it.Close()
