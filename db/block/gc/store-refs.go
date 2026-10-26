@@ -55,13 +55,16 @@ func (g *GCStoreOps) getBlockEdges(ctx context.Context, ref *block.BlockRef, dat
 	}
 
 	// Distinguish a tracked leaf from bytes whose edges were never recorded.
+	// The graph reports the staging edge of a block that has a child list; an
+	// owner alone does not make the list, so a block taken by a parent after
+	// an untracked write stays unknown rather than read as a leaf.
 	known := len(refs) != 0 || g.hasBufferedBlockEdges(node)
 	if !known {
 		incoming, err := g.refGraph.GetIncomingRefs(ctx, node)
 		if err != nil {
 			return nil, err
 		}
-		known = len(incoming) != 0
+		known = slices.Contains(incoming, NodeUnreferenced)
 	}
 	return &block.StoredBlock{Data: data, Refs: refs, RefsKnown: known}, nil
 }

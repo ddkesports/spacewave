@@ -1097,15 +1097,12 @@ func TestGCStoreOps_ParentIRI_PutBlockBatchExistingTreeBuffersOwnerOnly(t *testi
 		t.Fatal(err.Error())
 	}
 
-	// Each block gets its owner and staging edges, and each referenced block
-	// leaves the owner to the block above it.
+	// Each block gets only its owner edge, since its first write made its
+	// child list, and each referenced block leaves the owner to the block
+	// above it.
 	var wantAdds, wantRemoves []RefEdge
 	for _, entry := range tree {
-		iri := BlockIRI(entry.Ref)
-		wantAdds = append(wantAdds,
-			RefEdge{Subject: parent, Object: iri},
-			RefEdge{Subject: NodeUnreferenced, Object: iri},
-		)
+		wantAdds = append(wantAdds, RefEdge{Subject: parent, Object: BlockIRI(entry.Ref)})
 	}
 	for _, entry := range []*block.PutBatchEntry{leaf, mid} {
 		wantRemoves = append(wantRemoves, RefEdge{Subject: parent, Object: BlockIRI(entry.Ref)})
@@ -1223,11 +1220,11 @@ func TestGCStoreOps_ParentIRI_ReputRecordsLostChildEdges(t *testing.T) {
 	leaf := buildTreeEntry(t, "lost-leaf")
 	lost := buildTreeEntry(t, "lost-parent", leaf)
 	other := buildTreeEntry(t, "lost-other", leaf)
-	if _, err := env.rawStore.PutBlockBatch(env.ctx, []*block.PutBatchEntry{leaf, lost}); err != nil {
+	if _, err := env.rawStore.PutBlockBatch(env.ctx, []*block.PutBatchEntry{lost}); err != nil {
 		t.Fatal(err.Error())
 	}
 
-	// The bucket stores the leaf again and a second parent of it, which adopts it.
+	// The bucket stores the leaf and a second parent of it, which adopts it.
 	if _, err := env.gcStore.PutBlockBatch(env.ctx, []*block.PutBatchEntry{leaf, other}); err != nil {
 		t.Fatal(err.Error())
 	}

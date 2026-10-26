@@ -57,6 +57,7 @@ type GCStoreOps struct {
 	mu                sync.Mutex
 	pendingReleases   map[string]struct{} // latest parent releases, canceled by a later put
 	pendingUnref      []string            // block IRIs needing parent/unreferenced -> block edges
+	pendingTakes      []string            // existing block IRIs needing only the parent -> block edge
 	pendingCandidates []string            // cache-filled block IRIs needing unreferenced -> block edges
 	pendingReputs     []pendingReput      // existing blocks written with refs, checked for lost edges
 	pendingRefs       []pendingRef        // source -> target block ref edges
@@ -316,7 +317,9 @@ func (g *GCStoreOps) RmBlock(ctx context.Context, ref *block.BlockRef) error {
 // references. An existing block recorded its edges at its first write unless it
 // was stored without tracking, so FlushPending checks that it has them. A
 // parent takes it again, clears its staging edge and adopts the blocks it
-// references, so a rewritten tree leaves the parent holding only its top. An
+// references, so a rewritten tree leaves the parent holding only its top. The
+// take adds no staging edge: that edge would give a block stored without
+// tracking an empty child list, declaring it a leaf whatever it references. An
 // unparented store leaves it as it is.
 func (g *GCStoreOps) bufferPutLocked(ref *block.BlockRef, targets []*block.BlockRef, existed bool) {
 	// Take a new block and the edges it holds.
@@ -337,7 +340,7 @@ func (g *GCStoreOps) bufferPutLocked(ref *block.BlockRef, targets []*block.Block
 	}
 
 	// Move the parent's hold from the referenced blocks to this one.
-	g.pendingUnref = append(g.pendingUnref, iri)
+	g.pendingTakes = append(g.pendingTakes, iri)
 	delete(g.pendingReleases, iri)
 	for _, t := range targets {
 		if t != nil && !t.GetEmpty() {
@@ -459,24 +462,25 @@ func (g *GCStoreOps) FlushPending(ctx context.Context) error {
 
 	// Take the buffered ownership changes.
 	g.mu.Lock()
-	unrefs := g.pendingUnref
+	unrefs, takes := g.pendingUnref, g.pendingTakes
 	candidates, refs := g.pendingCandidates, g.pendingRefs
 	ununrefs, releases := g.pendingUnunref, g.pendingReleases
-	g.pendingUnref = nil
+	g.pendingUnref, g.pendingTakes = nil, nil
 	g.pendingCandidates, g.pendingRefs = nil, nil
 	g.pendingUnunref, g.pendingReleases = nil, nil
 	g.mu.Unlock()
 
 	// Record the pending counts, or stop when nothing is buffered.
-	if len(unrefs) == 0 && len(candidates) == 0 && len(refs) == 0 &&
+	if len(unrefs) == 0 && len(takes) == 0 && len(candidates) == 0 && len(refs) == 0 &&
 		len(ununrefs) == 0 && len(releases) == 0 {
 		return nil
 	}
 	trace.Logf(
 		ctx,
 		"hydra/block-gc/store/flush-pending/pending",
-		"unrefs=%d refs=%d ununrefs=%d releases=%d",
+		"unrefs=%d takes=%d refs=%d ununrefs=%d releases=%d",
 		len(unrefs),
+		len(takes),
 		len(refs),
 		len(ununrefs),
 		len(releases),
@@ -488,16 +492,21 @@ func (g *GCStoreOps) FlushPending(ctx context.Context) error {
 		parent = NodeUnreferenced
 	}
 
-	// The staging edge of each written block records that its references are
-	// known, giving a leaf its empty child list. A block owns no queue entry,
-	// so a parent taking an existing block only adds its owner edge.
-	adds := make([]RefEdge, 0, 2*len(unrefs)+len(candidates)+len(refs)+len(releases))
+	// The staging edge of each new block records that its references are
+	// known, giving a leaf its empty child list. A parent taking an existing
+	// block only adds its owner edge: the block's list came from its first
+	// write or comes from recordLostEdges, and a block stored without tracking
+	// keeps no list, so the mark stops at it rather than sweep what it names.
+	adds := make([]RefEdge, 0, 2*len(unrefs)+len(takes)+len(candidates)+len(refs)+len(releases))
 	removes := make([]RefEdge, 0, len(ununrefs)+len(releases))
 	for _, iri := range unrefs {
 		adds = append(adds, RefEdge{Subject: parent, Object: iri})
 		if parent != NodeUnreferenced {
 			adds = append(adds, RefEdge{Subject: NodeUnreferenced, Object: iri})
 		}
+	}
+	for _, iri := range takes {
+		adds = append(adds, RefEdge{Subject: parent, Object: iri})
 	}
 
 	// Stage cache-fill candidates and record the buffered ref edges.
