@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, type ReactNode } from 'react'
 import {
   useAppEnvironment,
   useAppNavigation,
+  type AppEnvironment,
 } from '@s4wave/web/sdk/app/environment.js'
 import { BottomBarRoot } from '@s4wave/web/frame/bottom-bar-root.js'
 import { useStateAtom, useStateNamespace } from '@s4wave/web/state/index.js'
@@ -27,6 +28,7 @@ import { ShellMenuBar } from './ShellMenuBar.js'
 import { useShellTabs } from './ShellTabContext.js'
 import {
   classifyShellDocumentEntry,
+  resolveShellDocumentEntry,
   type ShellDocumentEntry,
 } from './ShellDocumentEntry.js'
 import { ShellProvider } from './ShellContext.js'
@@ -99,17 +101,30 @@ export function EditorShell() {
     </DocumentTitleProvider>
   )
 }
+
+// getDocumentStorage returns the environment's document storage, or undefined
+// where the browser denies it.
+function getDocumentStorage(environment: AppEnvironment): Storage | undefined {
+  try {
+    return environment.documentStorage
+  } catch {
+    return undefined
+  }
+}
+
 function useShellDocumentEntry(): ShellDocumentEntry {
   const environment = useAppEnvironment()
   const [entry] = useState(() =>
-    classifyShellDocumentEntry(
-      environment.id
-        ? {
-            ...environment.navigation.getAppNavigation(),
-            navigationType: 'navigate',
-            incarnation: environment.id,
-          }
-        : undefined,
+    resolveShellDocumentEntry(getDocumentStorage(environment), () =>
+      classifyShellDocumentEntry(
+        environment.id
+          ? {
+              ...environment.navigation.getAppNavigation(),
+              navigationType: 'navigate',
+              incarnation: environment.id,
+            }
+          : undefined,
+      ),
     ),
   )
   return entry

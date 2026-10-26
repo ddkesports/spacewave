@@ -96,3 +96,35 @@ export function isShellDocumentContinuation(
 export function isShellDocumentHandoff(entry: ShellDocumentEntry): boolean {
   return entry.kind === 'handoff' && entry.tabId !== undefined
 }
+
+// documentEntries holds the entry each document's first Shell mount
+// classified, keyed by the document storage that holds its state.
+const documentEntries = new WeakMap<Storage, ShellDocumentEntry>()
+
+// resolveShellDocumentEntry returns the entry for the document that owns
+// storage. The first mount classifies it. A later mount in the same document,
+// such as after the runtime root reloads behind the loading screen, continues
+// that entry: classifying it again would read the unchanged URL as a fresh
+// navigation and create another Shell record. The entry is only continued
+// while storage still holds its incarnation's state.
+export function resolveShellDocumentEntry(
+  storage: Storage | undefined,
+  classify: () => ShellDocumentEntry,
+): ShellDocumentEntry {
+  if (!storage) return classify()
+  const first = documentEntries.get(storage)
+  if (
+    first &&
+    readShellDocumentState(storage)?.incarnation === first.incarnation
+  ) {
+    return {
+      kind: 'continuation',
+      path: first.path,
+      params: first.params,
+      incarnation: first.incarnation,
+    }
+  }
+  const entry = classify()
+  documentEntries.set(storage, entry)
+  return entry
+}
