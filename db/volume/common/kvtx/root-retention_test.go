@@ -3,6 +3,7 @@ package kvtx
 import (
 	"context"
 	"slices"
+	"strconv"
 	"sync"
 	"testing"
 
@@ -499,4 +500,134 @@ func TestSetBucketRootsHoldsWrittenEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 	collect(false)
+}
+
+// prepareProofRoots prepares n distinct owned roots.
+func prepareProofRoots(t *testing.T, v *Volume, n int) []*block.BlockRef {
+	t.Helper()
+	roots := make([]*block.BlockRef, n)
+	for i := range roots {
+		root, _, err := v.PrepareOwnedBlock(t.Context(), "bucket", []byte("proof root "+strconv.Itoa(i)), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		roots[i] = root
+	}
+	return roots
+}
+
+// TestRootRetentionCommitCarriesBoundedProofs checks that one changing
+// transaction carries at most rootProofCarryLimit pending proofs, so a backlog
+// of proofs cannot lengthen a single commit without bound.
+func TestRootRetentionCommitCarriesBoundedProofs(t *testing.T) {
+	// Mark a backlog of proofs below the marker's own carrying threshold.
+	v, _ := newPublicationTestVolume(t)
+	ctx := t.Context()
+	roots := prepareProofRoots(t, v, 3*rootProofCarryLimit)
+	if err := v.MarkRootsComplete(ctx, roots); err != nil {
+		t.Fatal(err)
+	}
+	if n := v.pendingRootProofs(); n != len(roots) {
+		t.Fatalf("pending proofs before commit = %d, want %d", n, len(roots))
+	}
+
+	// Commit one unrelated write and verify it carried exactly one batch.
+	if _, _, err := v.PrepareOwnedBlock(ctx, "bucket", []byte("next write"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if n := v.pendingRootProofs(); n != len(roots)-rootProofCarryLimit {
+		t.Fatalf("pending proofs after commit = %d, want %d", n, len(roots)-rootProofCarryLimit)
+	}
+
+	// Every root still reads complete, pending or durable.
+	complete, err := v.RootsComplete(ctx, roots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, ok := range complete {
+		if !ok {
+			t.Fatalf("root %d lost its proof", i)
+		}
+	}
+}
+
+// TestRootRetentionMarkerCarriesBacklog checks that a marker leaving more
+// than rootProofBacklog pending proofs commits batches itself until the
+// backlog fits, and that the carried proofs are durable.
+func TestRootRetentionMarkerCarriesBacklog(t *testing.T) {
+	// Mark more proofs than the backlog holds, with no other writer.
+	v, raw := newPublicationTestVolume(t)
+	ctx := t.Context()
+	roots := prepareProofRoots(t, v, rootProofBacklog+2*rootProofCarryLimit+7)
+	raw.mu.Lock()
+	before := raw.commits
+	raw.mu.Unlock()
+	if err := v.MarkRootsComplete(ctx, roots); err != nil {
+		t.Fatal(err)
+	}
+
+	// The marker committed its excess in bounded batches.
+	if n := v.pendingRootProofs(); n > rootProofBacklog {
+		t.Fatalf("pending proofs = %d, want at most %d", n, rootProofBacklog)
+	}
+	raw.mu.Lock()
+	commits := raw.commits - before
+	raw.mu.Unlock()
+	if commits != 3 {
+		t.Fatalf("marker made %d commits, want 3", commits)
+	}
+
+	// Carried proofs are durable edges, and every root reads complete.
+	durable := 0
+	for _, root := range roots {
+		edges, err := v.GetRefGraph().GetOutgoingRefs(ctx, block_gc.BlockIRI(root))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if slices.Equal(edges, []string{completeWorldNode}) {
+			durable++
+		}
+	}
+	if want := len(roots) - v.pendingRootProofs(); durable != want {
+		t.Fatalf("durable proofs = %d, want %d", durable, want)
+	}
+	complete, err := v.RootsComplete(ctx, roots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, ok := range complete {
+		if !ok {
+			t.Fatalf("root %d lost its proof", i)
+		}
+	}
+}
+
+// TestRootRetentionSingleMarkLeavesBacklog checks that marking one root, as a
+// World commit does, does not commit the backlog a copy leaves, even with the
+// backlog full.
+func TestRootRetentionSingleMarkLeavesBacklog(t *testing.T) {
+	// Fill the backlog to the most a copy's marker leaves pending.
+	v, raw := newPublicationTestVolume(t)
+	ctx := t.Context()
+	roots := prepareProofRoots(t, v, rootProofBacklog+1)
+	if err := v.MarkRootsComplete(ctx, roots[:rootProofBacklog]); err != nil {
+		t.Fatal(err)
+	}
+	raw.mu.Lock()
+	before := raw.commits
+	raw.mu.Unlock()
+
+	// Mark one more root and verify the marker committed nothing.
+	if err := v.MarkRootsComplete(ctx, roots[len(roots)-1:]); err != nil {
+		t.Fatal(err)
+	}
+	raw.mu.Lock()
+	commits := raw.commits - before
+	raw.mu.Unlock()
+	if commits != 0 {
+		t.Fatalf("single mark made %d commits", commits)
+	}
+	if n := v.pendingRootProofs(); n != len(roots) {
+		t.Fatalf("pending proofs = %d, want %d", n, len(roots))
+	}
 }

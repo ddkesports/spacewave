@@ -3,7 +3,6 @@ package kvtx
 import (
 	"context"
 	"encoding/base64"
-	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -31,11 +30,73 @@ func RootOwnerIRI(bucketID, name string) string {
 // proof edge together with its other immutable dependencies.
 const completeWorldNode = "world:complete"
 
+// rootProofCarryLimit bounds the pending proofs one transaction carries. Each
+// carried proof costs an existence check and an edge write under the writer
+// lock, so a World commit never pays for more than this many.
+const rootProofCarryLimit = 256
+
+// rootProofBacklog bounds the pending proofs. A marker that leaves more than
+// one batch over it commits batches itself until the backlog fits, so a copy
+// that proves blocks faster than other writers commit waits its turn on the
+// writer instead of handing the work to their commits. The batch of slack
+// keeps a World commit, which marks one root, from paying for the copy.
+const rootProofBacklog = 4 * rootProofCarryLimit
+
 // MarkRootsComplete records completion proofs for stored roots. A proof stays
-// pending in memory until the next changing direct transaction carries it, so
-// marking costs no write barrier of its own. A crash loses only pending proofs,
-// which a later retention recomputes.
+// pending in memory until a changing direct transaction carries it, so
+// marking usually costs no write barrier of its own. Past rootProofBacklog the
+// marker carries batches itself. A crash loses only pending proofs, which a
+// later retention recomputes.
 func (v *Volume) MarkRootsComplete(ctx context.Context, roots []*block.BlockRef) error {
+	// Record the proofs for the next commits to carry.
+	if err := v.recordRootProofs(ctx, roots); err != nil {
+		return err
+	}
+
+	// Carry the backlog past the slack so other commits stay bounded.
+	return v.carryRootProofBacklog(ctx)
+}
+
+// carryRootProofBacklog commits batches of pending proofs once more than
+// rootProofBacklog+rootProofCarryLimit are pending, until at most
+// rootProofBacklog remain. It stops when a batch carries nothing, which leaves
+// proofs whose roots are gone for a sweep to drop.
+func (v *Volume) carryRootProofBacklog(ctx context.Context) error {
+	// Leave carrying to other writers when the store has no atomic publication.
+	if !v.SupportsAtomicPublication() {
+		return nil
+	}
+
+	// Leave a backlog within one batch of slack to other commits.
+	pending := v.pendingRootProofs()
+	if pending <= rootProofBacklog+rootProofCarryLimit {
+		return nil
+	}
+
+	// Commit batches until the backlog fits or a batch carries nothing.
+	for pending > rootProofBacklog {
+		if err := v.withDirectAtomic(ctx, nil); err != nil {
+			return err
+		}
+		next := v.pendingRootProofs()
+		if next >= pending {
+			return nil
+		}
+		pending = next
+	}
+	return nil
+}
+
+// pendingRootProofs returns the number of proofs no commit has carried yet.
+func (v *Volume) pendingRootProofs() int {
+	v.proofMu.Lock()
+	defer v.proofMu.Unlock()
+	return len(v.rootProofs)
+}
+
+// recordRootProofs checks that the roots are stored and records their pending
+// proofs.
+func (v *Volume) recordRootProofs(ctx context.Context, roots []*block.BlockRef) error {
 	for {
 		// Note the sweeps attempted before checking that the roots exist.
 		v.proofMu.Lock()
@@ -414,9 +475,9 @@ type deferredEdits struct {
 	proofs []string
 }
 
-// applyDeferred writes the removals of released reader pins and stages and the
-// pending root proofs into a direct transaction. A proof whose root is gone is
-// dropped. The caller settles the returned edits once the transaction ends,
+// applyDeferred writes the removals of released reader pins and stages and up
+// to rootProofCarryLimit pending root proofs into a direct transaction. A
+// proof whose root is gone is dropped. The caller settles the returned edits once the transaction ends,
 // also on error.
 func (v *Volume) applyDeferred(ctx context.Context, blocks block.StoreOps, rg *block_gc.RefGraph) (deferredEdits, error) {
 	// Lock the reader pins and stages.
@@ -444,9 +505,15 @@ func (v *Volume) applyDeferred(ctx context.Context, blocks block.StoreOps, rg *b
 	edits.stages, removes = v.releasedStagesLocked(removes)
 	unlock()
 
-	// Take the pending root proofs.
+	// Take at most rootProofCarryLimit pending root proofs.
+	proofs := make(map[string]*block.BlockRef)
 	v.proofMu.Lock()
-	proofs := maps.Clone(v.rootProofs)
+	for node, root := range v.rootProofs {
+		if len(proofs) == rootProofCarryLimit {
+			break
+		}
+		proofs[node] = root
+	}
 	v.proofMu.Unlock()
 
 	// Add the proof of each root still stored.
