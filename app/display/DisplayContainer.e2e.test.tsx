@@ -54,7 +54,6 @@ interface SpaceContainerProviderProps {
 }
 
 const h = vi.hoisted(() => ({
-  resourceCall: 0,
   watchCall: 0,
   resources: [] as TestResource[],
   watches: [] as unknown[],
@@ -78,14 +77,16 @@ vi.mock('@aptre/bldr-react', async (importOriginal) => ({
   },
 }))
 
+vi.mock('@s4wave/app/hooks/useSharedMounts.js', () => ({
+  useSessionMount: () => h.resources[0],
+  useSharedObjectMount: () => h.resources[1],
+  useSharedObjectBodyMount: () => h.resources[2],
+  useSpaceMount: () => h.resources[3],
+  useSpaceWorldMount: () => h.resources[4],
+  useSpaceContentsMount: () => h.resources[5],
+}))
+
 vi.mock('@aptre/bldr-sdk/hooks/useResource.js', () => ({
-  useResource: () => {
-    const resource = h.resources.length
-      ? h.resources[h.resourceCall % h.resources.length]
-      : undefined
-    h.resourceCall += 1
-    return resource
-  },
   useResourceValue: (resource?: TestResource) => resource?.value,
 }))
 
@@ -299,7 +300,6 @@ function setupDisplayRoute(options: {
   component?: string
   objects?: Array<{ objectKey: string; objectType: string }>
 }) {
-  h.resourceCall = 0
   h.watchCall = 0
   h.rootResource = readyResource({})
   h.sessionList = readyResource({ sessions: [{ sessionIndex: 3 }] })
