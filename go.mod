@@ -5,7 +5,7 @@ go 1.27.0
 tool github.com/s4wave/goscript/cmd/goscript
 
 replace (
-	github.com/cloudflare/circl => github.com/aperturerobotics/circl v1.6.4-0.20260922203741-ec4e0985fb65
+	github.com/cloudflare/circl => github.com/aperturerobotics/circl v1.6.4-0.20261026102657-7415ab3046b7
 	github.com/dgraph-io/ristretto/v2 => github.com/aperturerobotics/ristretto/v2 v2.0.0-20260922205806-ef08161157dc // main
 	github.com/dolthub/go-mysql-server => github.com/aperturerobotics/go-mysql-server v0.20.1-0.20261024013424-a1751f2da19d
 	github.com/dolthub/jsonpath => github.com/aperturerobotics/jsonpath v0.1.1-0.20260922211658-605a6e457746
@@ -26,15 +26,15 @@ require (
 	github.com/aperturerobotics/bbolt v0.0.0-20261024221644-3def6903e63a // master
 	github.com/aperturerobotics/bldr-saucer v0.4.4
 	github.com/aperturerobotics/cayley v0.15.1-0.20261021230328-e1c6a005d6ac
-	github.com/aperturerobotics/cli v1.1.1-0.20261008170756-47089de94fb3 // master
+	github.com/aperturerobotics/cli v1.1.1-0.20261024231437-afc764ba6d68 // master
 	github.com/aperturerobotics/common v0.36.5
-	github.com/aperturerobotics/controllerbus v0.53.6-0.20261023070010-9a6346344996 // master
+	github.com/aperturerobotics/controllerbus v0.53.6-0.20261024231433-2283cecf2d7b // master
 	github.com/aperturerobotics/cpp-yamux v0.0.0-20260929192932-26bdf6cab5b3
 	github.com/aperturerobotics/esbuild v0.24.1-0.20260219011422-6d4b923e2023 // https://github.com/evanw/esbuild/pull/3413 [rejected]
 	github.com/aperturerobotics/fastjson v0.1.2-0.20261024220211-b654d1d5b5aa
 	github.com/aperturerobotics/fsnotify v1.9.1-0.20261007093243-45a75ed654f0 // master
 	github.com/aperturerobotics/go-brotli-decoder v1.3.0
-	github.com/aperturerobotics/go-kvfile v0.10.1-0.20260705010911-5c5ed949ddfe // master
+	github.com/aperturerobotics/go-kvfile v0.10.1-0.20261024231416-0a1dc13010cd // master
 	github.com/aperturerobotics/go-multiaddr v0.17.1-0.20260514224402-c193991c3ce5
 	github.com/aperturerobotics/go-prometheus-client-lite v1.23.3-0.20261024041454-92147463582b
 	github.com/aperturerobotics/go-quickjs-wasi-reactor v0.15.2-0.20261024222814-5b9806d17e81
@@ -42,9 +42,9 @@ require (
 	github.com/aperturerobotics/go-websocket v1.8.15-0.20261024221652-c1205734f50c
 	github.com/aperturerobotics/go-winjob v0.0.0-20261024222822-b7a5589690d2
 	github.com/aperturerobotics/json-iterator-lite v1.1.0 // latest
-	github.com/aperturerobotics/protobuf-go-lite v0.19.1-0.20261024022728-f0dcc8ef200f // master
-	github.com/aperturerobotics/starpc v0.52.4-0.20261021005057-f60467d0da35 // master
-	github.com/aperturerobotics/util v1.34.10-0.20261024061815-104de78e8992 // master
+	github.com/aperturerobotics/protobuf-go-lite v0.19.1-0.20261024232153-ab66e6c9cb43 // master
+	github.com/aperturerobotics/starpc v0.52.4-0.20261024233818-0a9074172c29 // master
+	github.com/aperturerobotics/util v1.34.10-0.20261024231407-c6b31c4e4ea6 // master
 	github.com/cloudflare/circl v1.6.5
 	github.com/cockroachdb/apd/v3 v3.2.3
 	github.com/creack/pty v1.1.24
@@ -169,7 +169,7 @@ require (
 	github.com/stretchr/testify v1.12.1 // indirect
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
-	github.com/xrash/smetrics v0.0.0-20250705151800-55b8f293f342 // indirect
+	github.com/xrash/smetrics v0.0.0-20261013231157-39c47d93efba // indirect
 	github.com/zeebo/assert v1.3.0 // indirect
 	go.opentelemetry.io/otel v1.44.0 // indirect
 	go.opentelemetry.io/otel/trace v1.44.0 // indirect
