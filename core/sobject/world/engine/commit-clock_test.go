@@ -9,6 +9,8 @@ import (
 	"time"
 
 	sobject_world_engine "github.com/s4wave/spacewave/core/sobject/world/engine"
+	"github.com/s4wave/spacewave/db/bucket"
+	"github.com/s4wave/spacewave/db/world"
 	"github.com/sirupsen/logrus"
 	logtest "github.com/sirupsen/logrus/hooks/test"
 )
@@ -73,5 +75,62 @@ func TestWorldCommitLogsStageTimes(t *testing.T) {
 	}
 	if held != hold {
 		t.Fatalf("hold is %v, want the %v the held stages sum to", hold, held)
+	}
+}
+
+// TestWorldCommitReportsObserver checks that a write opened with a commit
+// observer reports its stage times once, every stage by name, with the hold
+// summed over the held stages, while a write without one reports nothing.
+func TestWorldCommitReportsObserver(t *testing.T) {
+	// Open a write whose context holds an observer.
+	w := startLocalWorld(t, t.TempDir(), nil)
+	var got []sobject_world_engine.CommitTimes
+	ctx := sobject_world_engine.WithCommitObserver(t.Context(), func(times sobject_world_engine.CommitTimes) {
+		got = append(got, times)
+	})
+
+	// Commit it, then commit one write without an observer.
+	tx, err := w.eng.NewTransaction(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	obj, err := tx.CreateObject(ctx, "observed/0", &bucket.ObjectRef{BucketId: "local-world-bucket"})
+	world.ReleaseObjectState(obj)
+	if err == nil {
+		err = tx.Commit(ctx)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.create(t, "observed/1")
+
+	// The observed write reports every stage, and its hold excludes the lock
+	// and receipt waits.
+	if len(got) != 1 {
+		t.Fatalf("observer ran %d times, want 1", len(got))
+	}
+	times := got[0]
+	names := []string{
+		"lock-wait", "fork-replay", "callback", "world-state-commit",
+		"block-commit", "publication-admission", "advance", "receipt-wait",
+	}
+	if len(times.Stages) != len(names) {
+		t.Fatalf("got %d stages, want %d", len(times.Stages), len(names))
+	}
+	var sum, held time.Duration
+	for i, st := range times.Stages {
+		if st.Name != names[i] {
+			t.Fatalf("stage %d is %s, want %s", i, st.Name, names[i])
+		}
+		sum += st.Duration
+		if i != 0 && i != len(names)-1 {
+			held += st.Duration
+		}
+	}
+	if sum > times.Elapsed {
+		t.Fatalf("stages sum to %v, more than the elapsed %v", sum, times.Elapsed)
+	}
+	if held != times.Hold {
+		t.Fatalf("hold is %v, want the %v the held stages sum to", times.Hold, held)
 	}
 }

@@ -1,0 +1,97 @@
+syntax = "proto3";
+package storebench;
+
+// Report is the result of one store speed run.
+message Report {
+  // Label names the run, such as the commit under test.
+  string label = 1;
+  // DurationMs is the length of the measured load, in milliseconds.
+  uint64 duration_ms = 2;
+  // Watchers is the number of view watchers the load ran.
+  uint32 watchers = 3;
+  // WriteRate is the requested World writes per second.
+  double write_rate = 4;
+  // Writes is the number of World writes that committed.
+  uint64 writes = 5;
+  // WriteErrors is the number of World writes that failed.
+  uint64 write_errors = 6;
+  // WriteLatency is the latency of a write from its NewTransaction to the
+  // end of Commit.
+  Latency write_latency = 7;
+  // Hold is the writer lock hold of each write.
+  Latency hold = 8;
+  // Stages are the stage times of each write, in stage order.
+  repeated StageLatency stages = 9;
+  // ViewRuns is the number of view evaluations the watchers ran.
+  uint64 view_runs = 10;
+  // Cache is the decoded block cache over the load.
+  CacheStats cache = 11;
+  // Gc is the garbage collector over the load.
+  GcStats gc = 12;
+  // Cpu attributes the sampled CPU of the load to code paths.
+  repeated CpuShare cpu = 13;
+  // WritesDropped is the number of scheduled writes skipped because every
+  // writer was busy and the queue was full.
+  uint64 writes_dropped = 14;
+}
+
+// Latency summarizes a set of durations, in microseconds.
+message Latency {
+  // Count is the number of durations.
+  uint64 count = 1;
+  // P50Us is the median.
+  uint64 p50_us = 2;
+  // P99Us is the 99th percentile.
+  uint64 p99_us = 3;
+  // MaxUs is the largest.
+  uint64 max_us = 4;
+  // MeanUs is the mean.
+  uint64 mean_us = 5;
+}
+
+// StageLatency is the latency of one World write stage.
+message StageLatency {
+  // Name is the stage's log name, such as lock-wait.
+  string name = 1;
+  // Latency summarizes the stage over every write.
+  Latency latency = 2;
+}
+
+// CacheStats is the decoded block cache change over the load.
+message CacheStats {
+  // MaxCost is the cache budget in bytes.
+  int64 max_cost = 1;
+  // Hits is the number of cache hits during the load.
+  uint64 hits = 2;
+  // Misses is the number of cache misses during the load.
+  uint64 misses = 3;
+  // HitRate is hits over lookups during the load.
+  double hit_rate = 4;
+  // Evictions is the number of keys evicted during the load.
+  uint64 evictions = 5;
+  // RetainedCost is the retained cost in bytes at the end of the load.
+  int64 retained_cost = 6;
+}
+
+// GcStats is the garbage collector change over the load.
+message GcStats {
+  // Cycles is the number of collections during the load.
+  uint32 cycles = 1;
+  // PauseTotalUs is the stop-the-world pause during the load.
+  uint64 pause_total_us = 2;
+  // HeapAllocBytes is the live heap at the end of the load.
+  uint64 heap_alloc_bytes = 3;
+  // AllocBytes is the bytes allocated during the load.
+  uint64 alloc_bytes = 4;
+}
+
+// CpuShare is the share of sampled CPU whose stack holds a code path.
+message CpuShare {
+  // Name names the code path, such as decode or gc.
+  string name = 1;
+  // Fraction is the share of samples, from 0 to 1. A sample counts toward
+  // every path its stack holds, so the shares can sum above 1.
+  double fraction = 2;
+  // CpuMs is the sampled CPU of the path, in milliseconds.
+  uint64 cpu_ms = 3;
+}

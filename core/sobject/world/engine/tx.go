@@ -72,7 +72,7 @@ func (t *soEngineWriteTx) Commit(ctx context.Context) error {
 	ctx, task := trace.NewTask(ctx, "alpha/so-engine/write-tx/commit")
 	defer task.End()
 	defer t.Discard()
-	defer t.clock.warnIfSlow(t.eng.c.le)
+	defer t.clock.finish(t.eng.c.le)
 	t.clock.end(stageCallback)
 
 	// Close the operation buffer before publishing its candidate blocks.

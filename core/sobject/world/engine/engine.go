@@ -315,7 +315,7 @@ func (e *soEngine) NewTransaction(ctx context.Context, write bool) (world.Tx, er
 	}
 
 	// Time the write from the writer lock wait.
-	clock := newCommitClock()
+	clock := newCommitClock(ctx)
 
 	// Serialize the write fork with other writes and replay.
 	ctx, task := trace.NewTask(ctx, "alpha/so-engine/new-transaction")

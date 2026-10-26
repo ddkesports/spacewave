@@ -993,6 +993,16 @@
         "bldr/web/view/observer/config.proto"
       ]
     },
+    "github.com/s4wave/spacewave/cmd/spacewave-store-bench/storebench": {
+      "hash": "c62082c6f2fa3f3f791936b5a1344d22b0550e5e8a73d8ae46d55b3c5ddd3c4e",
+      "generatedFiles": [
+        "cmd/spacewave-store-bench/storebench/bench.pb.go",
+        "cmd/spacewave-store-bench/storebench/bench.pb.ts"
+      ],
+      "protoFiles": [
+        "cmd/spacewave-store-bench/storebench/bench.proto"
+      ]
+    },
     "github.com/s4wave/spacewave/core/account/settings": {
       "hash": "ef21b68c9ba7524b28565096c230e4c9a235034c5f79d0605b650bba417d6344",
       "generatedFiles": [

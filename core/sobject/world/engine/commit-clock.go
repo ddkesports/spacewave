@@ -1,6 +1,7 @@
 package sobject_world_engine
 
 import (
+	"context"
 	"strings"
 	"time"
 
@@ -64,12 +65,15 @@ type commitClock struct {
 	open commitStage
 	// stages are the durations of the closed stages.
 	stages [commitStageCount]time.Duration
+	// observer receives the stage times when the write commits, or is nil.
+	observer CommitObserver
 }
 
-// newCommitClock starts the clock at the writer lock wait.
-func newCommitClock() *commitClock {
+// newCommitClock starts the clock at the writer lock wait. The write reports
+// its stage times to the CommitObserver of ctx, if it has one.
+func newCommitClock(ctx context.Context) *commitClock {
 	now := time.Now()
-	return &commitClock{started: now, mark: now}
+	return &commitClock{started: now, mark: now, observer: commitObserverFromContext(ctx)}
 }
 
 // end closes stage at the current time. Earlier open stages that never ran
@@ -87,31 +91,46 @@ func (c *commitClock) end(stage commitStage) {
 	c.open = stage + 1
 }
 
-// warnIfSlow logs the stage times when the write took longer than
-// slowCommitThreshold. The stages field lists them in stage order, and the
-// hold field is the writer lock hold: every stage after the lock wait up to
-// the end of advance.
-func (c *commitClock) warnIfSlow(le *logrus.Entry) {
-	// Stay quiet about a write that finished in time.
+// finish reports the stage times of the write to its observer as Commit ends and
+// logs them when the write took longer than slowCommitThreshold. The stages
+// field lists them in stage order, and the hold field is the writer lock hold:
+// every stage after the lock wait up to the end of advance.
+func (c *commitClock) finish(le *logrus.Entry) {
+	// Skip the work when nothing reads the times.
 	if c == nil {
 		return
 	}
 	elapsed := time.Since(c.started)
-	if elapsed <= slowCommitThreshold {
+	slow := elapsed > slowCommitThreshold
+	if !slow && c.observer == nil {
 		return
 	}
 
-	// Name the duration of every stage in order and sum the hold.
-	var stages strings.Builder
+	// Sum the hold over the stages from the end of the lock wait to advance.
 	var hold time.Duration
+	for stage := stageLockWait + 1; stage <= stageAdvance; stage++ {
+		hold += c.stages[stage]
+	}
+
+	// Report every stage to the observer.
+	if c.observer != nil {
+		times := CommitTimes{Elapsed: elapsed, Hold: hold, Stages: make([]CommitStageTime, commitStageCount)}
+		for stage, name := range commitStageNames {
+			times.Stages[stage] = CommitStageTime{Name: name, Duration: c.stages[stage]}
+		}
+		c.observer(times)
+	}
+
+	// Name the duration of every stage in order for a slow write.
+	if !slow {
+		return
+	}
+	var stages strings.Builder
 	for stage, name := range commitStageNames {
 		if stage != 0 {
 			stages.WriteByte(' ')
 		}
 		stages.WriteString(name + "=" + c.stages[stage].String())
-		if stage > int(stageLockWait) && stage <= int(stageAdvance) {
-			hold += c.stages[stage]
-		}
 	}
 	le.WithFields(logrus.Fields{
 		"elapsed": elapsed,
