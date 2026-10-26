@@ -4308,7 +4308,7 @@
       ]
     },
     "github.com/s4wave/spacewave/sdk/trace": {
-      "hash": "3fa94a40da16f0d249a26b7c934cf3e69d60313f896d4db4d6897fc62570910c",
+      "hash": "71098f4e20036ac7cd477f52476c5017ad8aa6b05fcc48330ffbc29aaf9630c4",
       "generatedFiles": [
         "sdk/trace/trace.pb.go",
         "sdk/trace/trace.pb.ts",
