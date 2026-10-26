@@ -3,6 +3,7 @@ import { isNormalRuntimeClientClose } from '@aptre/bldr'
 import { useLatestRef, useWatchStateRpc } from '@aptre/bldr-react'
 import { useResource } from '@aptre/bldr-sdk/hooks/useResource.js'
 import type { Resource } from '@aptre/bldr-sdk/hooks/useResource.js'
+import { ResourceClientError } from '@aptre/bldr-sdk/resource/client.js'
 import type { StateAtom } from '@aptre/bldr-sdk/state/state.js'
 import {
   WatchStateRequest,
@@ -38,13 +39,21 @@ type PendingBackendState<T> = {
 }
 
 // writeStateAtom writes stateJson to the backend atom without awaiting it.
-// A write cut off by the runtime client closing is the document shutting down,
-// so only other failures are logged.
+// A write cut off by the runtime client closing is the document shutting down.
+// A write cut off by the Resource client's control stream closing, as on a
+// reload or a host handoff, stays pending: the connection loss releases the
+// atom, and the hook writes the pending value again to its replacement. Only
+// other failures are logged.
 export function writeStateAtom(stateAtom: StateAtom, stateJson: string): void {
   stateAtom.setState(stateJson).catch((err: unknown) => {
-    if (!isNormalRuntimeClientClose(err)) {
-      console.error('Failed to write backend state:', err)
+    if (isNormalRuntimeClientClose(err)) return
+    if (
+      err instanceof ResourceClientError &&
+      err.code === 'CONNECTION_FAILED'
+    ) {
+      return
     }
+    console.error('Failed to write backend state:', err)
   })
 }
 

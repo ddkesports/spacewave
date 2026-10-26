@@ -8,6 +8,7 @@ import {
 } from '@testing-library/react'
 
 import { RuntimeClientClosedError } from '@aptre/bldr'
+import { ResourceClientError } from '@aptre/bldr-sdk/resource/client.js'
 
 import type { StateAtomAccessor } from './useBackendStateAtom.js'
 import { useBackendStateAtomValue } from './useBackendStateAtom.js'
@@ -121,6 +122,14 @@ describe('useBackendStateAtomValue', () => {
     {
       name: 'ends quietly when the runtime client closes during a write',
       err: new RuntimeClientClosedError('normal-close', 'client', 1),
+      logged: false,
+    },
+    {
+      name: 'ends quietly when the Resource client connection drops during a write',
+      err: new ResourceClientError(
+        'ResourceClient control stream closed',
+        'CONNECTION_FAILED',
+      ),
       logged: false,
     },
     {
