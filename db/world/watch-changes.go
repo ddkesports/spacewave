@@ -26,6 +26,18 @@ type ChangeWatcher interface {
 	WatchChanges(ctx context.Context, afterSeqno uint64, touches ChangeFilter, cb func(seqno uint64, changes *ChangeSet) error) error
 }
 
+// IndexedChangeWatcher is a ChangeWatcher that indexes its watchers by the
+// names in their ChangeInterests, so a change tests and wakes only the
+// watchers it names. An Engine wrapper that forwards WatchChanges forwards
+// WatchIndexedChanges too, or its watchers fall back to WatchChanges.
+type IndexedChangeWatcher interface {
+	ChangeWatcher
+	// WatchIndexedChanges is WatchChanges for the changes interest accepts. A
+	// change that names none of the interest's keys or quad fields never tests
+	// or wakes the watcher.
+	WatchIndexedChanges(ctx context.Context, afterSeqno uint64, interest *ChangeInterest, cb func(seqno uint64, changes *ChangeSet) error) error
+}
+
 // WatchChanges calls cb with each seqno of w after afterSeqno and the changes
 // since the previous call. w is an Engine or a WorldState; one that is not a
 // ChangeWatcher reports every advance as an unknown ChangeSet.
@@ -65,6 +77,22 @@ func WatchTouchingChanges(
 		}
 		afterSeqno = seqno
 	}
+}
+
+// WatchInterestedChanges is WatchTouchingChanges for the changes interest
+// accepts. A World whose change feed indexes its watchers tests interest only
+// on the changes it names; any other World tests it as a ChangeFilter.
+func WatchInterestedChanges(
+	ctx context.Context,
+	w WorldWaitSeqno,
+	afterSeqno uint64,
+	interest *ChangeInterest,
+	cb func(seqno uint64, changes *ChangeSet) error,
+) error {
+	if watcher, ok := w.(IndexedChangeWatcher); ok {
+		return watcher.WatchIndexedChanges(ctx, afterSeqno, interest, cb)
+	}
+	return WatchTouchingChanges(ctx, w, afterSeqno, interest.Accepts, cb)
 }
 
 // WatchViewOptions tunes WatchViewWith. The zero value is WatchView's behavior.

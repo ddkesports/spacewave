@@ -63,6 +63,16 @@ func (e *engineWorldState) WatchChanges(
 	return WatchTouchingChanges(ctx, e.e, afterSeqno, touches, cb)
 }
 
+// WatchIndexedChanges forwards the Engine's indexed change feed.
+func (e *engineWorldState) WatchIndexedChanges(
+	ctx context.Context,
+	afterSeqno uint64,
+	interest *ChangeInterest,
+	cb func(seqno uint64, changes *ChangeSet) error,
+) error {
+	return WatchInterestedChanges(ctx, e.e, afterSeqno, interest, cb)
+}
+
 // WaitObjectRev waits for the object at key through the Engine's key watch.
 func (e *engineWorldState) WaitObjectRev(ctx context.Context, key string, rev uint64, ignoreNotFound bool) (uint64, error) {
 	return e.e.WaitObjectRev(ctx, key, rev, ignoreNotFound)
@@ -332,7 +342,7 @@ func (e *engineWorldState) performOpOnce(ctx context.Context, write bool, cb fun
 
 // _ is a type assertion
 var (
-	_ WorldState      = (*engineWorldState)(nil)
-	_ ObjectRevWaiter = (*engineWorldState)(nil)
-	_ ChangeWatcher   = (*engineWorldState)(nil)
+	_ WorldState           = (*engineWorldState)(nil)
+	_ ObjectRevWaiter      = (*engineWorldState)(nil)
+	_ IndexedChangeWatcher = (*engineWorldState)(nil)
 )

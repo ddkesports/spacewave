@@ -42,3 +42,19 @@ func (p graphPattern) matches(q GraphQuad) bool {
 func matchesField(pattern, value string) bool {
 	return pattern == "" || pattern == value
 }
+
+// term returns the field an index keys the pattern by, preferring the
+// fields that name objects. It returns false for a pattern matching every quad.
+func (p graphPattern) term() (quadTerm, bool) {
+	switch {
+	case p.subject != "":
+		return quadTerm{quadSubject, p.subject}, true
+	case p.obj != "":
+		return quadTerm{quadObj, p.obj}, true
+	case p.predicate != "":
+		return quadTerm{quadPredicate, p.predicate}, true
+	case p.label != "":
+		return quadTerm{quadLabel, p.label}, true
+	}
+	return quadTerm{}, false
+}

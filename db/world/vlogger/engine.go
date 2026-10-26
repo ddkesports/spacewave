@@ -52,8 +52,18 @@ func (e *Engine) WatchChanges(
 	return world.WatchTouchingChanges(ctx, e.Engine, afterSeqno, touches, cb)
 }
 
+// WatchIndexedChanges forwards the indexed change feed of the underlying engine.
+func (e *Engine) WatchIndexedChanges(
+	ctx context.Context,
+	afterSeqno uint64,
+	interest *world.ChangeInterest,
+	cb func(seqno uint64, changes *world.ChangeSet) error,
+) error {
+	return world.WatchInterestedChanges(ctx, e.Engine, afterSeqno, interest, cb)
+}
+
 // _ is a type assertion
 var (
-	_ world.Engine        = (*Engine)(nil)
-	_ world.ChangeWatcher = (*Engine)(nil)
+	_ world.Engine               = (*Engine)(nil)
+	_ world.IndexedChangeWatcher = (*Engine)(nil)
 )

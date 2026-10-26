@@ -121,11 +121,18 @@ func (r *ReadSet) waitChange(ctx context.Context, w WorldWaitSeqno, afterSeqno u
 		return r.Touched(cs) || slices.ContainsFunc(shared, func(set *ReadSet) bool { return set.Touched(cs) })
 	}
 	for {
-		// Capture the read signal before subscribing, so a read recorded
-		// after the subscription starts restarts it.
+		// Capture the read signal before naming the reads, so a read recorded
+		// after they are named restarts the subscription.
 		r.mtx.Lock()
 		added := r.added
 		r.mtx.Unlock()
+
+		// Name the reads and the shared sets for the change feed's index.
+		interest := &ChangeInterest{filter: touches}
+		r.nameReads(interest)
+		for _, set := range shared {
+			set.nameReads(interest)
+		}
 
 		// Wait in the change feed for the first touching change since
 		// afterSeqno.
@@ -133,7 +140,7 @@ func (r *ReadSet) waitChange(ctx context.Context, w WorldWaitSeqno, afterSeqno u
 		done := make(chan error, 1)
 		var seqno uint64
 		go func() {
-			done <- WatchTouchingChanges(watchCtx, w, afterSeqno, touches, func(s uint64, _ *ChangeSet) error {
+			done <- WatchInterestedChanges(watchCtx, w, afterSeqno, interest, func(s uint64, _ *ChangeSet) error {
 				seqno = s
 				return errReadsTouched
 			})
@@ -155,6 +162,32 @@ func (r *ReadSet) waitChange(ctx context.Context, w WorldWaitSeqno, afterSeqno u
 			return seqno, nil
 		}
 		return 0, err
+	}
+}
+
+// nameReads adds the object keys and quad fields the reads may be touched
+// through to interest, or marks it as needing every change when a read has no
+// such name: an iterated prefix, a graph read beyond quad lookups, a read
+// beyond objects and the graph, or a quad lookup naming no field.
+func (r *ReadSet) nameReads(interest *ChangeInterest) {
+	// Hold the reads while naming them.
+	r.mtx.Lock()
+	defer r.mtx.Unlock()
+	if r.all || r.graph || len(r.prefixes) != 0 {
+		interest.all = true
+		return
+	}
+
+	// Name the read keys, the pattern endpoints, and a field of each pattern.
+	interest.keys = slices.AppendSeq(interest.keys, maps.Keys(r.keys))
+	interest.keys = slices.AppendSeq(interest.keys, maps.Keys(r.endpoints))
+	for _, p := range r.patterns {
+		term, ok := p.term()
+		if !ok {
+			interest.all = true
+			return
+		}
+		interest.terms = append(interest.terms, term)
 	}
 }
 

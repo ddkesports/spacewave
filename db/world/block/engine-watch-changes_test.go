@@ -253,7 +253,7 @@ func TestWatchChangesFilter(t *testing.T) {
 		locked := e.bcast.Lock()
 		n := 0
 		if e.changeWatch != nil {
-			n = len(e.changeWatch.subs)
+			n = e.changeWatch.subs.Len()
 		}
 		locked.Unlock()
 		if n == 2 {

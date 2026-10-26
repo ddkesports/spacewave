@@ -25,8 +25,8 @@ type watchedHead struct {
 // changeSubscriber is one WatchChanges call on the change watch. Its pending
 // changes have their own lock, so merging them never holds the Engine bcast.
 type changeSubscriber struct {
-	// touches selects the changes that wake the subscriber.
-	touches world.ChangeFilter
+	// interest selects the changes that wake the subscriber.
+	interest *world.ChangeInterest
 	// wake receives a value when changes is set or the watch loses track.
 	wake chan struct{}
 
@@ -62,15 +62,27 @@ func (e *Engine) WatchChanges(
 	touches world.ChangeFilter,
 	cb func(seqno uint64, changes *world.ChangeSet) error,
 ) error {
+	return e.WatchIndexedChanges(ctx, afterSeqno, world.NewChangeInterest(touches), cb)
+}
+
+// WatchIndexedChanges is WatchChanges for the changes interest accepts. The
+// change watch indexes the subscriber by the names in interest, so a change
+// naming none of them never tests or wakes it.
+func (e *Engine) WatchIndexedChanges(
+	ctx context.Context,
+	afterSeqno uint64,
+	interest *world.ChangeInterest,
+	cb func(seqno uint64, changes *world.ChangeSet) error,
+) error {
 	// Subscribe to the change watch.
-	sub := &changeSubscriber{touches: touches, wake: make(chan struct{}, 1)}
+	sub := &changeSubscriber{interest: interest, wake: make(chan struct{}, 1)}
 	locked := e.bcast.Lock()
 	w, err := e.startChangeWatchLocked()
 	if err != nil {
 		locked.Unlock()
 		return err
 	}
-	w.subs[sub] = struct{}{}
+	w.subs.Add(sub, interest)
 
 	// Copy the recorded spans when the change watch starts past afterSeqno and
 	// recorded every span since the head at afterSeqno. A reconnect wave
@@ -84,7 +96,7 @@ func (e *Engine) WatchChanges(
 	locked.Unlock()
 	defer func() {
 		locked := e.bcast.Lock()
-		delete(w.subs, sub)
+		w.subs.Remove(sub)
 		w.checkIdleLocked()
 		locked.Unlock()
 	}()
@@ -123,7 +135,7 @@ func (e *Engine) WatchChanges(
 
 		// Skip changes the caller already saw, and catch-up changes or
 		// changes merged before the filter ran that it rejects.
-		if seqno <= afterSeqno || !touches.Accepts(changes) {
+		if seqno <= afterSeqno || !interest.Accepts(changes) {
 			continue
 		}
 		if err := cb(seqno, changes); err != nil {
@@ -286,4 +298,4 @@ func (s *changeSubscriber) signal() {
 }
 
 // _ is a type assertion
-var _ world.ChangeWatcher = (*Engine)(nil)
+var _ world.IndexedChangeWatcher = (*Engine)(nil)

@@ -103,8 +103,13 @@ func (e *ReadTrackingEngine) WatchChanges(ctx context.Context, afterSeqno uint64
 	return WatchTouchingChanges(ctx, e.inner, afterSeqno, touches, cb)
 }
 
+// WatchIndexedChanges forwards the underlying indexed change feed.
+func (e *ReadTrackingEngine) WatchIndexedChanges(ctx context.Context, afterSeqno uint64, interest *ChangeInterest, cb func(uint64, *ChangeSet) error) error {
+	return WatchInterestedChanges(ctx, e.inner, afterSeqno, interest, cb)
+}
+
 // _ checks the tracking engine's public contracts.
 var (
-	_ Engine        = (*ReadTrackingEngine)(nil)
-	_ ChangeWatcher = (*ReadTrackingEngine)(nil)
+	_ Engine               = (*ReadTrackingEngine)(nil)
+	_ IndexedChangeWatcher = (*ReadTrackingEngine)(nil)
 )

@@ -215,8 +215,20 @@ func (e *RefCountEngine) WatchChanges(
 	touches ChangeFilter,
 	cb func(seqno uint64, changes *ChangeSet) error,
 ) error {
+	return e.WatchIndexedChanges(ctx, afterSeqno, NewChangeInterest(touches), cb)
+}
+
+// WatchIndexedChanges forwards the indexed change feed of the current engine.
+// A restart on a newly resolved engine continues after the last reported
+// seqno.
+func (e *RefCountEngine) WatchIndexedChanges(
+	ctx context.Context,
+	afterSeqno uint64,
+	interest *ChangeInterest,
+	cb func(seqno uint64, changes *ChangeSet) error,
+) error {
 	return e.rc.Access(ctx, func(ctx context.Context, val *Engine) error {
-		return WatchTouchingChanges(ctx, *val, afterSeqno, touches, func(seqno uint64, changes *ChangeSet) error {
+		return WatchInterestedChanges(ctx, *val, afterSeqno, interest, func(seqno uint64, changes *ChangeSet) error {
 			if err := cb(seqno, changes); err != nil {
 				return err
 			}
@@ -228,6 +240,6 @@ func (e *RefCountEngine) WatchChanges(
 
 // _ is a type assertion
 var (
-	_ Engine        = (*RefCountEngine)(nil)
-	_ ChangeWatcher = (*RefCountEngine)(nil)
+	_ Engine               = (*RefCountEngine)(nil)
+	_ IndexedChangeWatcher = (*RefCountEngine)(nil)
 )

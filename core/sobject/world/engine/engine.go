@@ -418,6 +418,12 @@ func (e *soEngine) WatchChanges(ctx context.Context, afterSeqno uint64, touches 
 	return e.bengine.WatchChanges(ctx, afterSeqno, touches, cb)
 }
 
+// WatchIndexedChanges is WatchChanges for the changes interest accepts,
+// through the block engine's watcher index.
+func (e *soEngine) WatchIndexedChanges(ctx context.Context, afterSeqno uint64, interest *world.ChangeInterest, cb func(seqno uint64, changes *world.ChangeSet) error) error {
+	return e.bengine.WatchIndexedChanges(ctx, afterSeqno, interest, cb)
+}
+
 // lockReplayed takes the writer lock and installs the World after every
 // operation of the current set, which the watcher may not have replayed yet.
 // A write replays even when this device follows the leader, since its own
@@ -799,6 +805,6 @@ const acceptedWorldRootName = "accepted-world"
 
 // _ is a type assertion
 var (
-	_ Engine              = (*soEngine)(nil)
-	_ world.ChangeWatcher = (*soEngine)(nil)
+	_ Engine                     = (*soEngine)(nil)
+	_ world.IndexedChangeWatcher = (*soEngine)(nil)
 )
