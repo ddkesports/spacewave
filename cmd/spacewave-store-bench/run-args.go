@@ -39,6 +39,8 @@ func (a *RunArgs) BuildFlags() []cli.Flag {
 		&cli.DurationFlag{Name: "duration", Usage: "measured load", Destination: &a.Load.Duration, Value: 2 * time.Minute},
 		&cli.Uint64Flag{Name: "seed", Usage: "seeds the key sampling", Destination: &a.Load.Seed, Value: 1},
 		&cli.StringFlag{Name: "cpu-profile", Usage: "write the measured CPU profile here", Destination: &a.Load.ProfilePath},
+		&cli.StringFlag{Name: "stall-dump-dir", Usage: "write goroutine dumps of stalled writes here", Destination: &a.Load.StallDumpDir},
+		&cli.DurationFlag{Name: "stall-threshold", Usage: "how long a write runs before it counts as stalled", Destination: &a.Load.StallThreshold, Value: 500 * time.Millisecond},
 		&cli.StringFlag{Name: "report", Usage: "write the JSON report here instead of printing it", Destination: &a.ReportPath},
 	)
 }

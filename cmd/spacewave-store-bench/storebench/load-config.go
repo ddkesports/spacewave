@@ -41,4 +41,9 @@ type LoadConfig struct {
 	// ProfilePath is where the CPU profile of the measured load is written.
 	// Empty skips writing it; the report still attributes the CPU.
 	ProfilePath string
+	// StallDumpDir is where goroutine dumps of stalled writes are written.
+	// Empty turns the dumps off.
+	StallDumpDir string
+	// StallThreshold is how long a write runs before it counts as stalled.
+	StallThreshold time.Duration
 }

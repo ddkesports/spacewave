@@ -49,6 +49,8 @@ type load struct {
 	writeSeq atomic.Uint64
 	// dropped counts writes skipped in the measured window.
 	dropped atomic.Uint64
+	// stallDumps counts the goroutine dumps of stalled writes.
+	stallDumps atomic.Uint64
 
 	// mtx guards the fields below.
 	mtx sync.Mutex
@@ -230,10 +232,17 @@ func (l *load) write(ctx context.Context) {
 		times, observed = t, true
 	})
 
-	// Run the write and stop quietly when the load ends.
+	// Run the write, dumping the goroutines when it stalls.
+	seq := l.writeSeq.Add(1)
+	stall := l.watchStall(seq)
 	start := time.Now()
-	err := l.commitWrite(wctx, l.writeSeq.Add(1))
+	err := l.commitWrite(wctx, seq)
 	elapsed := time.Since(start)
+	if stall != nil {
+		stall.Stop()
+	}
+
+	// Stop quietly when the load ends.
 	if ctx.Err() != nil {
 		return
 	}
