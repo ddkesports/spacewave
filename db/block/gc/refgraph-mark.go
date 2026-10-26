@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"math"
 	"slices"
 	"time"
 
@@ -201,8 +202,8 @@ func walkTx(ctx context.Context, tx kvtx.Tx, reached *NodeSet, stack []namedNode
 	}
 
 	// Walk chunks until the stack is empty.
-	records := make([]walkRecord, 0, reachChunk)
-	keys := make([][]byte, 0, reachChunk)
+	records := make([]walkRecord, 0, min(len(stack), reachChunk))
+	keys := make([][]byte, 0, cap(records))
 	for len(stack) != 0 {
 		// Pop a chunk and order the keys of its records.
 		chunk := stack[max(0, len(stack)-reachChunk):]
@@ -360,19 +361,39 @@ func (g *RefGraph) EndBlockPass(ctx context.Context) error {
 // CatchUpAdopted walks, like RescueAdopted, from the frontier an earlier walk
 // left, from the unknown blocks the mark listed and from the blocks of the
 // adopt log records no rescue or catch-up walked yet, in read transactions of
-// at most about MarkReadBudget each, and
-// returns the number of nodes it added to mark.Live. It leaves the log for
+// at most about MarkReadBudget each, and returns the number of nodes it added
+// to mark.Live. Writes append to the log while it walks, so it walks in
+// rounds, each up to the log's end as the round began, and starts another
+// only while the records left keep shrinking: a walk that chased the end
+// would never return once the writes outpaced it. It leaves the log for
 // RescueAdopted to consume, which then walks only the records written since,
 // so the walk a sweep transaction holds the writer for scales with the writes
 // since the catch-up, not with the mark's length. Reading a list before the
 // rescue is safe as the scan mark's later reads are: an edge added after the
 // read logs its object.
 func (g *RefGraph) CatchUpAdopted(ctx context.Context, mark *BlockMark) (int, error) {
+	// Walk the listed unknown blocks with the frontier, and the log in
+	// rounds of read transactions.
 	before := mark.Live.Len()
 	mark.frontier = append(mark.frontier, mark.takeAwaiting()...)
-	for done := false; !done; {
+	end, left := uint64(0), uint64(math.MaxUint64)
+	for round, done := true, false; !done; {
 		err := g.transaction(ctx, false, func(ctx context.Context, tx kvtx.Tx) (err error) {
-			done, err = catchUpTx(ctx, tx, mark, MarkReadBudget)
+			// Start a round at the log's end, unless the records left did
+			// not shrink since the last round began.
+			if round {
+				r, _, err := readPassTx(ctx, tx)
+				if err != nil {
+					return err
+				}
+				next := r.hi - min(r.hi, max(r.lo, mark.logSeen))
+				if next >= left {
+					done = true
+					return nil
+				}
+				end, left, round = r.hi, next, false
+			}
+			round, err = catchUpTx(ctx, tx, mark, end, MarkReadBudget)
 			return err
 		})
 		if err != nil {
@@ -383,10 +404,13 @@ func (g *RefGraph) CatchUpAdopted(ctx context.Context, mark *BlockMark) (int, er
 }
 
 // catchUpTx walks from the frontier, then from the blocks of the unwalked
-// adopt log records in order, until budget, and reports whether it walked
-// them all. It leaves what it did not walk in the frontier. A legacy log has
-// no order to resume in, so it leaves that to RescueAdopted.
-func catchUpTx(ctx context.Context, tx kvtx.Tx, mark *BlockMark, budget time.Duration) (bool, error) {
+// adopt log records before end, until budget, and reports whether it walked
+// them all. It walks the blocks of consecutive records together, up to a
+// chunk at a time, so each chunk's index pages load in one batch of reads
+// instead of one small batch per record. It leaves what it did not walk in
+// the frontier. A legacy log has no order to resume in, so it leaves that to
+// RescueAdopted.
+func catchUpTx(ctx context.Context, tx kvtx.Tx, mark *BlockMark, end uint64, budget time.Duration) (bool, error) {
 	// Read the log's range, then walk the frontier.
 	start := time.Now()
 	stop := func() bool { return time.Since(start) >= budget }
@@ -401,16 +425,23 @@ func catchUpTx(ctx context.Context, tx kvtx.Tx, mark *BlockMark, budget time.Dur
 		return true, nil
 	}
 
-	// Walk from each record's blocks until the budget runs out.
-	for seq := max(r.lo, mark.logSeen); seq < r.hi; seq++ {
+	// Walk from the records' blocks a chunk at a time until the budget runs
+	// out. A record is seen once its blocks are in Live, walked or left in
+	// the frontier.
+	end = min(end, r.hi)
+	for seq := max(r.lo, mark.logSeen); seq < end; {
 		if stop() {
 			return false, nil
 		}
-		blocks, err := readAdoptLogTx(ctx, tx, adoptRange{lo: seq, hi: seq + 1})
-		if err != nil {
-			return false, err
+		var blocks []string
+		for ; seq < end && len(blocks) < reachChunk; seq++ {
+			logged, err := readAdoptLogTx(ctx, tx, adoptRange{lo: seq, hi: seq + 1})
+			if err != nil {
+				return false, err
+			}
+			blocks = append(blocks, logged...)
 		}
-		mark.logSeen = seq + 1
+		mark.logSeen = seq
 		if done, err := walkFrontierTx(ctx, tx, mark, blocks, stop); err != nil || !done {
 			return false, err
 		}
