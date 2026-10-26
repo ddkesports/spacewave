@@ -15,8 +15,7 @@ import (
 // object of another type.
 func TestSetPureFunction(t *testing.T) {
 	// Start a World.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	tb := world_testbed.MustDefault(t, ctx)
 	exec := func(fn func(ctx context.Context, tx world.WorldState) error) error {
 		return world.ExecTransaction(ctx, tb.Engine, true, fn)
