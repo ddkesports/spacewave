@@ -21,6 +21,8 @@ type SRPCTraceServiceClient interface {
 	CaptureCPUProfile(ctx context.Context, in *CaptureCPUProfileRequest) (SRPCTraceService_CaptureCPUProfileClient, error)
 
 	CaptureMemoryProfile(ctx context.Context, in *CaptureMemoryProfileRequest) (SRPCTraceService_CaptureMemoryProfileClient, error)
+
+	CaptureGoroutineProfile(ctx context.Context, in *CaptureGoroutineProfileRequest) (SRPCTraceService_CaptureGoroutineProfileClient, error)
 }
 
 type srpcTraceServiceClient struct {
@@ -149,6 +151,39 @@ func (x *srpcTraceService_CaptureMemoryProfileClient) RecvTo(m *CaptureMemoryPro
 	return x.MsgRecv(m)
 }
 
+func (c *srpcTraceServiceClient) CaptureGoroutineProfile(ctx context.Context, in *CaptureGoroutineProfileRequest) (SRPCTraceService_CaptureGoroutineProfileClient, error) {
+	stream, err := c.cc.NewStream(ctx, c.serviceID, "CaptureGoroutineProfile", in)
+	if err != nil {
+		return nil, err
+	}
+	strm := &srpcTraceService_CaptureGoroutineProfileClient{stream}
+	// A failed half-close means the call ended; MsgRecv reports its outcome.
+	_ = strm.CloseSend()
+	return strm, nil
+}
+
+type SRPCTraceService_CaptureGoroutineProfileClient interface {
+	srpc.Stream
+	Recv() (*CaptureGoroutineProfileResponse, error)
+	RecvTo(*CaptureGoroutineProfileResponse) error
+}
+
+type srpcTraceService_CaptureGoroutineProfileClient struct {
+	srpc.Stream
+}
+
+func (x *srpcTraceService_CaptureGoroutineProfileClient) Recv() (*CaptureGoroutineProfileResponse, error) {
+	m := new(CaptureGoroutineProfileResponse)
+	if err := x.MsgRecv(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+func (x *srpcTraceService_CaptureGoroutineProfileClient) RecvTo(m *CaptureGoroutineProfileResponse) error {
+	return x.MsgRecv(m)
+}
+
 type SRPCTraceServiceServer interface {
 	StartTrace(context.Context, *StartTraceRequest) (*StartTraceResponse, error)
 
@@ -157,6 +192,8 @@ type SRPCTraceServiceServer interface {
 	CaptureCPUProfile(*CaptureCPUProfileRequest, SRPCTraceService_CaptureCPUProfileStream) error
 
 	CaptureMemoryProfile(*CaptureMemoryProfileRequest, SRPCTraceService_CaptureMemoryProfileStream) error
+
+	CaptureGoroutineProfile(*CaptureGoroutineProfileRequest, SRPCTraceService_CaptureGoroutineProfileStream) error
 }
 
 const SRPCTraceServiceServiceID = "s4wave.trace.TraceService"
@@ -189,6 +226,7 @@ func (SRPCTraceServiceHandler) GetMethodIDs() []string {
 		"StopTrace",
 		"CaptureCPUProfile",
 		"CaptureMemoryProfile",
+		"CaptureGoroutineProfile",
 	}
 }
 
@@ -209,6 +247,8 @@ func (d *SRPCTraceServiceHandler) InvokeMethod(
 		return true, d.InvokeMethod_CaptureCPUProfile(d.impl, strm)
 	case "CaptureMemoryProfile":
 		return true, d.InvokeMethod_CaptureMemoryProfile(d.impl, strm)
+	case "CaptureGoroutineProfile":
+		return true, d.InvokeMethod_CaptureGoroutineProfile(d.impl, strm)
 	default:
 		return false, nil
 	}
@@ -251,6 +291,15 @@ func (SRPCTraceServiceHandler) InvokeMethod_CaptureMemoryProfile(impl SRPCTraceS
 	}
 	serverStrm := &srpcTraceService_CaptureMemoryProfileStream{strm}
 	return impl.CaptureMemoryProfile(req, serverStrm)
+}
+
+func (SRPCTraceServiceHandler) InvokeMethod_CaptureGoroutineProfile(impl SRPCTraceServiceServer, strm srpc.Stream) error {
+	req := new(CaptureGoroutineProfileRequest)
+	if err := strm.MsgRecv(req); err != nil {
+		return err
+	}
+	serverStrm := &srpcTraceService_CaptureGoroutineProfileStream{strm}
+	return impl.CaptureGoroutineProfile(req, serverStrm)
 }
 
 type SRPCTraceService_StartTraceStream interface {
@@ -322,6 +371,29 @@ func (x *srpcTraceService_CaptureMemoryProfileStream) Send(m *CaptureMemoryProfi
 }
 
 func (x *srpcTraceService_CaptureMemoryProfileStream) SendAndClose(m *CaptureMemoryProfileResponse) error {
+	if m != nil {
+		if err := x.MsgSend(m); err != nil {
+			return err
+		}
+	}
+	return x.CloseSend()
+}
+
+type SRPCTraceService_CaptureGoroutineProfileStream interface {
+	srpc.Stream
+	Send(*CaptureGoroutineProfileResponse) error
+	SendAndClose(*CaptureGoroutineProfileResponse) error
+}
+
+type srpcTraceService_CaptureGoroutineProfileStream struct {
+	srpc.Stream
+}
+
+func (x *srpcTraceService_CaptureGoroutineProfileStream) Send(m *CaptureGoroutineProfileResponse) error {
+	return x.MsgSend(m)
+}
+
+func (x *srpcTraceService_CaptureGoroutineProfileStream) SendAndClose(m *CaptureGoroutineProfileResponse) error {
 	if m != nil {
 		if err := x.MsgSend(m); err != nil {
 			return err

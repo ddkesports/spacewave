@@ -17,6 +17,8 @@ type testTraceService struct {
 	cpuProfileCall int
 	memProfileData [][]byte
 	memProfileReq  *CaptureMemoryProfileRequest
+	goroutineCall  int
+	goroutineReq   *CaptureGoroutineProfileRequest
 	memProfileCall int
 }
 
@@ -54,6 +56,12 @@ func (t *testTraceService) CaptureMemoryProfile(req *CaptureMemoryProfileRequest
 		}
 	}
 	return nil
+}
+
+func (t *testTraceService) CaptureGoroutineProfile(req *CaptureGoroutineProfileRequest, strm SRPCTraceService_CaptureGoroutineProfileStream) error {
+	t.goroutineCall++
+	t.goroutineReq = req
+	return strm.Send(&CaptureGoroutineProfileResponse{Data: []byte("goroutine-profile")})
 }
 
 func newTestTraceClient(t *testing.T, impl SRPCTraceServiceServer) SRPCTraceServiceClient {
@@ -190,5 +198,28 @@ func TestTraceServiceContract(t *testing.T) {
 	}
 	if !bytes.Equal(memData, []byte("mem-profile")) {
 		t.Fatalf("expected streamed memory profile %q, got %q", []byte("mem-profile"), memData)
+	}
+
+	// Capture and assemble a goroutine profile.
+	goroutineStrm, err := client.CaptureGoroutineProfile(ctx, &CaptureGoroutineProfileRequest{Debug: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var goroutineData []byte
+	for {
+		msg, err := goroutineStrm.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		goroutineData = append(goroutineData, msg.GetData()...)
+	}
+	if impl.goroutineCall != 1 || impl.goroutineReq.GetDebug() != 1 {
+		t.Fatalf("unexpected CaptureGoroutineProfile call: %d %+v", impl.goroutineCall, impl.goroutineReq)
+	}
+	if !bytes.Equal(goroutineData, []byte("goroutine-profile")) {
+		t.Fatalf("expected streamed goroutine profile %q, got %q", []byte("goroutine-profile"), goroutineData)
 	}
 }

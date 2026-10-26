@@ -28,6 +28,7 @@ func newDebugCommand(_ func() cli_entrypoint.CliBus) *cli.Command {
 			newDebugTraceCommand(),
 			newDebugCPUProfileCommand(),
 			newDebugMemoryProfileCommand(),
+			newDebugGoroutineProfileCommand(),
 			newDebugVolumeUsageCommand(),
 			newDebugVolumeRepairCommand(),
 			newDebugVolumeCopyCommand(),
@@ -153,6 +154,36 @@ func newDebugMemoryProfileCommand() *cli.Command {
 		},
 		Action: func(c *cli.Context) error {
 			return runDebugMemoryProfile(c, statePath, c.String("socket-path"), outputPath, profile, gc, debug, c.String("output"))
+		},
+	}
+}
+
+func newDebugGoroutineProfileCommand() *cli.Command {
+	// Declare the shared client and profile flags.
+	var statePath string
+	var outputPath string
+	var debug int
+	return &cli.Command{
+		Name:    "goroutine-profile",
+		Aliases: []string{"goroutine", "goroutines"},
+		Usage:   "capture a Go goroutine profile from the running daemon",
+		Flags: []cli.Flag{
+			statePathFlag(&statePath),
+			socketPathFlag(),
+			&cli.StringFlag{
+				Name:        "out",
+				Aliases:     []string{"o"},
+				Usage:       "goroutine profile output path",
+				Destination: &outputPath,
+			},
+			&cli.IntFlag{
+				Name:        "debug",
+				Usage:       "pprof output debug level: 0 for pprof, 1 or 2 for text stacks",
+				Destination: &debug,
+			},
+		},
+		Action: func(c *cli.Context) error {
+			return runDebugGoroutineProfile(c, statePath, c.String("socket-path"), outputPath, debug, c.String("output"))
 		},
 	}
 }
@@ -400,6 +431,81 @@ func runDebugMemoryProfile(
 	return nil
 }
 
+func runDebugGoroutineProfile(
+	c *cli.Context,
+	statePath string,
+	socketPath string,
+	outputPath string,
+	debug int,
+	outputFormat string,
+) error {
+	// Validate the debug level and prepare the output path.
+	if debug < 0 {
+		return errors.New("debug must be greater than or equal to zero")
+	}
+	if debug > math.MaxInt32 {
+		return errors.New("debug exceeds int32 range")
+	}
+	if outputPath == "" {
+		outputPath = defaultDebugGoroutineProfileOutputPath(time.Now())
+	}
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
+		return errors.Wrap(err, "create goroutine profile output directory")
+	}
+
+	// Connect to the daemon trace endpoint.
+	client, err := connectDebugTraceDaemon(c.Context, c, statePath, socketPath)
+	if err != nil {
+		return errors.Wrap(err, "connect daemon")
+	}
+	defer client.close()
+
+	// Create the goroutine profile output file.
+	f, err := os.Create(outputPath)
+	if err != nil {
+		return errors.Wrap(err, "create goroutine profile output")
+	}
+	defer f.Close()
+
+	// Capture the goroutine profile into the output file.
+	traceClient := s4wave_trace.NewSRPCTraceServiceClient(client.srpc)
+	byteCount, err := trace_capture.CaptureGoroutineProfile(c.Context, traceClient, f, trace_capture.GoroutineProfileArgs{
+		Debug: int32(debug), //nolint:gosec // the MaxInt32 check above bounds the trace request field.
+	})
+	if err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return errors.Wrap(err, "close goroutine profile output")
+	}
+
+	// Marshal the profile summary as JSON or YAML when requested.
+	if outputFormat == "json" || outputFormat == "yaml" {
+		buf, ms := newMarshalBuf()
+		ms.WriteObjectStart()
+		var first bool
+		ms.WriteMoreIf(&first)
+		ms.WriteObjectField("path")
+		ms.WriteString(outputPath)
+		ms.WriteMoreIf(&first)
+		ms.WriteObjectField("debug")
+		ms.WriteInt64(int64(debug))
+		ms.WriteMoreIf(&first)
+		ms.WriteObjectField("bytes")
+		ms.WriteInt64(byteCount)
+		ms.WriteObjectEnd()
+		return formatOutput(buf.Bytes(), outputFormat)
+	}
+
+	// Print the profile summary fields.
+	writeFields(os.Stdout, [][2]string{
+		{"Goroutine Profile", outputPath},
+		{"Debug", strconv.Itoa(debug)},
+		{"Bytes", strconv.FormatInt(byteCount, 10)},
+	})
+	return nil
+}
+
 func connectDebugTraceDaemon(
 	ctx context.Context,
 	c *cli.Context,
@@ -429,4 +535,8 @@ func defaultDebugMemoryProfileOutputPath(now time.Time, profile string) string {
 		profile = "memory"
 	}
 	return filepath.Join(".tmp", "spacewave-daemon-"+now.Format("20060102-150405")+"-"+profile+".pprof")
+}
+
+func defaultDebugGoroutineProfileOutputPath(now time.Time) string {
+	return filepath.Join(".tmp", "spacewave-daemon-"+now.Format("20060102-150405")+"-goroutine.pprof")
 }

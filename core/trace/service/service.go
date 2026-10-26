@@ -192,5 +192,42 @@ func (s *Service) CaptureMemoryProfile(
 	return nil
 }
 
+// CaptureGoroutineProfile captures a pprof goroutine profile in the current process.
+//
+// The profile lists every live goroutine with its stack, so it shows where a
+// running daemon is blocked without a restart or a CPU capture.
+func (s *Service) CaptureGoroutineProfile(
+	req *s4wave_trace.CaptureGoroutineProfileRequest,
+	strm s4wave_trace.SRPCTraceService_CaptureGoroutineProfileStream,
+) error {
+	// Validate the capture options and look up the runtime profile.
+	debug := req.GetDebug()
+	if debug < 0 {
+		return errors.New("debug must be greater than or equal to zero")
+	}
+	prof := pprof.Lookup("goroutine")
+	if prof == nil {
+		return errors.New("goroutine profile not available")
+	}
+
+	// Encode and stream the goroutine profile.
+	var buf bytes.Buffer
+	if err := prof.WriteTo(&buf, int(debug)); err != nil {
+		return errors.Wrap(err, "write goroutine profile")
+	}
+	data := buf.Bytes()
+	for len(data) > 0 {
+		chunk := data
+		if len(chunk) > maxChunkSize {
+			chunk = chunk[:maxChunkSize]
+		}
+		data = data[len(chunk):]
+		if err := strm.Send(&s4wave_trace.CaptureGoroutineProfileResponse{Data: chunk}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // _ is a type assertion
 var _ s4wave_trace.SRPCTraceServiceServer = (*Service)(nil)

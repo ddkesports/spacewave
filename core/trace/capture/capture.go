@@ -30,6 +30,11 @@ type MemoryProfileArgs struct {
 	Debug   int32
 }
 
+// GoroutineProfileArgs configures a goroutine profile capture.
+type GoroutineProfileArgs struct {
+	Debug int32
+}
+
 // CaptureRuntimeTrace captures a runtime trace from a TraceService client.
 func CaptureRuntimeTrace(
 	ctx context.Context,
@@ -155,6 +160,46 @@ func CaptureMemoryProfile(
 	defer strm.Close()
 
 	// Copy memory profile chunks to the output and count the written bytes.
+	var byteCount int64
+	for {
+		resp, err := strm.Recv()
+		if err == io.EOF {
+			return byteCount, nil
+		}
+		if err != nil {
+			return byteCount, err
+		}
+		n, err := writeChunk(out, resp.GetData())
+		byteCount += n
+		if err != nil {
+			return byteCount, err
+		}
+	}
+}
+
+// CaptureGoroutineProfile captures a goroutine profile from a TraceService client.
+func CaptureGoroutineProfile(
+	ctx context.Context,
+	traceClient s4wave_trace.SRPCTraceServiceClient,
+	out io.Writer,
+	args GoroutineProfileArgs,
+) (int64, error) {
+	// Validate the goroutine profile request and open its remote stream.
+	if traceClient == nil {
+		return 0, errors.New("trace client cannot be nil")
+	}
+	if args.Debug < 0 {
+		return 0, errors.New("debug must be greater than or equal to zero")
+	}
+	strm, err := traceClient.CaptureGoroutineProfile(ctx, &s4wave_trace.CaptureGoroutineProfileRequest{
+		Debug: args.Debug,
+	})
+	if err != nil {
+		return 0, errors.Wrap(err, "capture goroutine profile")
+	}
+	defer strm.Close()
+
+	// Copy goroutine profile chunks to the output and count the written bytes.
 	var byteCount int64
 	for {
 		resp, err := strm.Recv()

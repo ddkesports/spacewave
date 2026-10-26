@@ -467,6 +467,41 @@ func TestTraceServiceCaptureMemoryProfile(t *testing.T) {
 	}
 }
 
+func TestTraceServiceCaptureGoroutineProfile(t *testing.T) {
+	// Require a runtime that supports streaming profile calls.
+	skipTraceServiceStreamingOnJS(t)
+
+	// Request the text goroutine dump through the Service client.
+	ctx := context.Background()
+	client := newTestTraceClient(t, NewService())
+	strm, err := client.CaptureGoroutineProfile(ctx, &s4wave_trace.CaptureGoroutineProfileRequest{Debug: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var profileData []byte
+	for {
+		msg, err := strm.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		profileData = append(profileData, msg.GetData()...)
+	}
+
+	// Require the text dump header.
+	if !strings.HasPrefix(string(profileData), "goroutine profile: total ") {
+		t.Fatalf("unexpected goroutine profile header: %.40q", profileData)
+	}
+
+	// Reject a negative debug level.
+	err = NewService().CaptureGoroutineProfile(&s4wave_trace.CaptureGoroutineProfileRequest{Debug: -1}, nil)
+	if err == nil {
+		t.Fatal("expected negative debug level to fail")
+	}
+}
+
 func TestTraceServiceReturnsStreamingErrors(t *testing.T) {
 	sendErr := errors.New("send memory profile chunk")
 	err := NewService().CaptureMemoryProfile(

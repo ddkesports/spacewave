@@ -8,10 +8,12 @@ import (
 	"net"
 	"path/filepath"
 	"runtime/trace"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/aperturerobotics/starpc/srpc"
+	"github.com/google/pprof/profile"
 	yamux "github.com/libp2p/go-yamux/v5"
 	trace_capture "github.com/s4wave/spacewave/core/trace/capture"
 	trace_service "github.com/s4wave/spacewave/core/trace/service"
@@ -162,6 +164,61 @@ func TestCaptureDaemonMemoryProfileWritesProfile(t *testing.T) {
 	}
 	if int64(out.Len()) != byteCount {
 		t.Fatalf("expected %d bytes, got %d", byteCount, out.Len())
+	}
+}
+
+func TestCaptureDaemonGoroutineProfileWritesProfile(t *testing.T) {
+	// Build a trace client and a goroutine that the profile must list.
+	ctx := context.Background()
+	traceClient := newDebugTraceTestClient(t)
+	var out bytes.Buffer
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	go debugGoroutineProfileMarker(release)
+
+	// Capture the goroutine profile the way the CLI does.
+	byteCount, err := trace_capture.CaptureGoroutineProfile(ctx, traceClient, &out, trace_capture.GoroutineProfileArgs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if byteCount == 0 || int64(out.Len()) != byteCount {
+		t.Fatalf("expected %d profile bytes, got %d", byteCount, out.Len())
+	}
+
+	// Parse the bytes with the pprof reader and find the blocked goroutine.
+	prof, err := profile.Parse(&out)
+	if err != nil {
+		t.Fatalf("parse goroutine profile: %v", err)
+	}
+	if len(prof.Sample) == 0 || len(prof.SampleType) == 0 || prof.SampleType[0].Type != "goroutine" {
+		t.Fatalf("unexpected goroutine profile: %d samples, types %v", len(prof.Sample), prof.SampleType)
+	}
+	var found bool
+	for _, sample := range prof.Sample {
+		for _, loc := range sample.Location {
+			for _, line := range loc.Line {
+				if strings.HasSuffix(line.Function.Name, "debugGoroutineProfileMarker") {
+					found = true
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatal("goroutine profile does not list the marker goroutine")
+	}
+}
+
+// debugGoroutineProfileMarker blocks until release closes so the goroutine
+// profile has a known stack to find.
+func debugGoroutineProfileMarker(release <-chan struct{}) {
+	<-release
+}
+
+func TestDefaultDebugGoroutineProfileOutputPath(t *testing.T) {
+	got := defaultDebugGoroutineProfileOutputPath(time.Date(2026, 5, 11, 18, 20, 30, 0, time.UTC))
+	want := ".tmp/spacewave-daemon-20260511-182030-goroutine.pprof"
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
 	}
 }
 

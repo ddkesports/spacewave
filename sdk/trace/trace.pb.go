@@ -182,6 +182,47 @@ func (x *CaptureMemoryProfileResponse) GetData() []byte {
 	return nil
 }
 
+// CaptureGoroutineProfileRequest is the request for CaptureGoroutineProfile.
+type CaptureGoroutineProfileRequest struct {
+	unknownFields []byte
+	// Debug is the pprof output debug level. Zero writes the compressed pprof
+	// protobuf; 1 and 2 write text stack dumps.
+	Debug int32 `protobuf:"varint,1,opt,name=debug,proto3" json:"debug,omitempty"`
+}
+
+func (x *CaptureGoroutineProfileRequest) Reset() {
+	*x = CaptureGoroutineProfileRequest{}
+}
+
+func (*CaptureGoroutineProfileRequest) ProtoMessage() {}
+
+func (x *CaptureGoroutineProfileRequest) GetDebug() int32 {
+	if x != nil {
+		return x.Debug
+	}
+	return 0
+}
+
+// CaptureGoroutineProfileResponse is a streamed response chunk for CaptureGoroutineProfile.
+type CaptureGoroutineProfileResponse struct {
+	unknownFields []byte
+	// Data is a chunk of the raw pprof goroutine profile bytes.
+	Data []byte `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
+}
+
+func (x *CaptureGoroutineProfileResponse) Reset() {
+	*x = CaptureGoroutineProfileResponse{}
+}
+
+func (*CaptureGoroutineProfileResponse) ProtoMessage() {}
+
+func (x *CaptureGoroutineProfileResponse) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
 func (m *StartTraceRequest) CloneVT() *StartTraceRequest {
 	if m == nil {
 		return (*StartTraceRequest)(nil)
@@ -308,6 +349,38 @@ func (m *CaptureMemoryProfileResponse) CloneVT() *CaptureMemoryProfileResponse {
 }
 
 func (m *CaptureMemoryProfileResponse) CloneMessageVT() protobuf_go_lite.CloneMessage {
+	return m.CloneVT()
+}
+
+func (m *CaptureGoroutineProfileRequest) CloneVT() *CaptureGoroutineProfileRequest {
+	if m == nil {
+		return (*CaptureGoroutineProfileRequest)(nil)
+	}
+	r := new(CaptureGoroutineProfileRequest)
+	r.Debug = m.Debug
+	if len(m.unknownFields) > 0 {
+		r.unknownFields = slices.Clone(m.unknownFields)
+	}
+	return r
+}
+
+func (m *CaptureGoroutineProfileRequest) CloneMessageVT() protobuf_go_lite.CloneMessage {
+	return m.CloneVT()
+}
+
+func (m *CaptureGoroutineProfileResponse) CloneVT() *CaptureGoroutineProfileResponse {
+	if m == nil {
+		return (*CaptureGoroutineProfileResponse)(nil)
+	}
+	r := new(CaptureGoroutineProfileResponse)
+	r.Data = protobuf_go_lite.CloneBytes(m.Data)
+	if len(m.unknownFields) > 0 {
+		r.unknownFields = slices.Clone(m.unknownFields)
+	}
+	return r
+}
+
+func (m *CaptureGoroutineProfileResponse) CloneMessageVT() protobuf_go_lite.CloneMessage {
 	return m.CloneVT()
 }
 
@@ -468,6 +541,46 @@ func (this *CaptureMemoryProfileResponse) EqualVT(that *CaptureMemoryProfileResp
 
 func (this *CaptureMemoryProfileResponse) EqualMessageVT(thatMsg any) bool {
 	that, ok := thatMsg.(*CaptureMemoryProfileResponse)
+	if !ok {
+		return false
+	}
+	return this.EqualVT(that)
+}
+
+func (this *CaptureGoroutineProfileRequest) EqualVT(that *CaptureGoroutineProfileRequest) bool {
+	if this == that {
+		return true
+	} else if this == nil || that == nil {
+		return false
+	}
+	if this.Debug != that.Debug {
+		return false
+	}
+	return string(this.unknownFields) == string(that.unknownFields)
+}
+
+func (this *CaptureGoroutineProfileRequest) EqualMessageVT(thatMsg any) bool {
+	that, ok := thatMsg.(*CaptureGoroutineProfileRequest)
+	if !ok {
+		return false
+	}
+	return this.EqualVT(that)
+}
+
+func (this *CaptureGoroutineProfileResponse) EqualVT(that *CaptureGoroutineProfileResponse) bool {
+	if this == that {
+		return true
+	} else if this == nil || that == nil {
+		return false
+	}
+	if !protobuf_go_lite.EqualBytes(this.Data, that.Data) {
+		return false
+	}
+	return string(this.unknownFields) == string(that.unknownFields)
+}
+
+func (this *CaptureGoroutineProfileResponse) EqualMessageVT(thatMsg any) bool {
+	that, ok := thatMsg.(*CaptureGoroutineProfileResponse)
 	if !ok {
 		return false
 	}
@@ -810,6 +923,90 @@ func (x *CaptureMemoryProfileResponse) UnmarshalJSON(b []byte) error {
 	return json.DefaultUnmarshalerConfig.Unmarshal(b, x)
 }
 
+// MarshalProtoJSON marshals the CaptureGoroutineProfileRequest message to JSON.
+func (x *CaptureGoroutineProfileRequest) MarshalProtoJSON(s *json.MarshalState) {
+	if x == nil {
+		s.WriteNil()
+		return
+	}
+	s.WriteObjectStart()
+	var wroteField bool
+	if x.Debug != 0 || s.HasField("debug") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("debug")
+		s.WriteInt32(x.Debug)
+	}
+	s.WriteObjectEnd()
+}
+
+// MarshalJSON marshals the CaptureGoroutineProfileRequest to JSON.
+func (x *CaptureGoroutineProfileRequest) MarshalJSON() ([]byte, error) {
+	return json.DefaultMarshalerConfig.Marshal(x)
+}
+
+// UnmarshalProtoJSON unmarshals the CaptureGoroutineProfileRequest message from JSON.
+func (x *CaptureGoroutineProfileRequest) UnmarshalProtoJSON(s *json.UnmarshalState) {
+	if s.ReadNil() {
+		return
+	}
+	s.ReadObject(func(key string) {
+		switch key {
+		default:
+			s.Skip() // ignore unknown field
+		case "debug":
+			s.AddField("debug")
+			x.Debug = s.ReadInt32()
+		}
+	})
+}
+
+// UnmarshalJSON unmarshals the CaptureGoroutineProfileRequest from JSON.
+func (x *CaptureGoroutineProfileRequest) UnmarshalJSON(b []byte) error {
+	return json.DefaultUnmarshalerConfig.Unmarshal(b, x)
+}
+
+// MarshalProtoJSON marshals the CaptureGoroutineProfileResponse message to JSON.
+func (x *CaptureGoroutineProfileResponse) MarshalProtoJSON(s *json.MarshalState) {
+	if x == nil {
+		s.WriteNil()
+		return
+	}
+	s.WriteObjectStart()
+	var wroteField bool
+	if len(x.Data) > 0 || s.HasField("data") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("data")
+		s.WriteBytes(x.Data)
+	}
+	s.WriteObjectEnd()
+}
+
+// MarshalJSON marshals the CaptureGoroutineProfileResponse to JSON.
+func (x *CaptureGoroutineProfileResponse) MarshalJSON() ([]byte, error) {
+	return json.DefaultMarshalerConfig.Marshal(x)
+}
+
+// UnmarshalProtoJSON unmarshals the CaptureGoroutineProfileResponse message from JSON.
+func (x *CaptureGoroutineProfileResponse) UnmarshalProtoJSON(s *json.UnmarshalState) {
+	if s.ReadNil() {
+		return
+	}
+	s.ReadObject(func(key string) {
+		switch key {
+		default:
+			s.Skip() // ignore unknown field
+		case "data":
+			s.AddField("data")
+			x.Data = s.ReadBytes()
+		}
+	})
+}
+
+// UnmarshalJSON unmarshals the CaptureGoroutineProfileResponse from JSON.
+func (x *CaptureGoroutineProfileResponse) UnmarshalJSON(b []byte) error {
+	return json.DefaultUnmarshalerConfig.Unmarshal(b, x)
+}
+
 func (m *StartTraceRequest) MarshalVT() (dAtA []byte, err error) {
 	if m == nil {
 		return nil, nil
@@ -1111,6 +1308,80 @@ func (m *CaptureMemoryProfileResponse) MarshalToSizedBufferVT(dAtA []byte) (int,
 	return len(dAtA) - i, nil
 }
 
+func (m *CaptureGoroutineProfileRequest) MarshalVT() (dAtA []byte, err error) {
+	if m == nil {
+		return nil, nil
+	}
+	size := m.SizeVT()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBufferVT(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *CaptureGoroutineProfileRequest) MarshalToVT(dAtA []byte) (int, error) {
+	size := m.SizeVT()
+	return m.MarshalToSizedBufferVT(dAtA[:size])
+}
+
+func (m *CaptureGoroutineProfileRequest) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
+	if m == nil {
+		return 0, nil
+	}
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.unknownFields != nil {
+		i = protobuf_go_lite.EncodeRawBytes(dAtA, i, m.unknownFields)
+	}
+	if m.Debug != 0 {
+		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(m.Debug))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *CaptureGoroutineProfileResponse) MarshalVT() (dAtA []byte, err error) {
+	if m == nil {
+		return nil, nil
+	}
+	size := m.SizeVT()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBufferVT(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *CaptureGoroutineProfileResponse) MarshalToVT(dAtA []byte) (int, error) {
+	size := m.SizeVT()
+	return m.MarshalToSizedBufferVT(dAtA[:size])
+}
+
+func (m *CaptureGoroutineProfileResponse) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
+	if m == nil {
+		return 0, nil
+	}
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.unknownFields != nil {
+		i = protobuf_go_lite.EncodeRawBytes(dAtA, i, m.unknownFields)
+	}
+	if len(m.Data) > 0 {
+		i = protobuf_go_lite.EncodeBytes(dAtA, i, m.Data)
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
 func (m *StartTraceRequest) SizeVT() (n int) {
 	if m == nil {
 		return 0
@@ -1190,6 +1461,28 @@ func (m *CaptureMemoryProfileRequest) SizeVT() (n int) {
 }
 
 func (m *CaptureMemoryProfileResponse) SizeVT() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	n += protobuf_go_lite.SizeBytesNonEmpty(1, m.Data)
+	n += len(m.unknownFields)
+	return n
+}
+
+func (m *CaptureGoroutineProfileRequest) SizeVT() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	n += protobuf_go_lite.SizeVarintNonZero(1, m.Debug)
+	n += len(m.unknownFields)
+	return n
+}
+
+func (m *CaptureGoroutineProfileResponse) SizeVT() (n int) {
 	if m == nil {
 		return 0
 	}
@@ -1313,6 +1606,34 @@ func (x *CaptureMemoryProfileResponse) MarshalProtoText() string {
 }
 
 func (x *CaptureMemoryProfileResponse) String() string {
+	return x.MarshalProtoText()
+}
+
+func (x *CaptureGoroutineProfileRequest) MarshalProtoText() string {
+	var sb protobuf_go_lite.TextBuilder
+	initialLen := protobuf_go_lite.TextStartMessage(&sb, "CaptureGoroutineProfileRequest")
+	if x.Debug != 0 {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "debug")
+		protobuf_go_lite.TextWriteInt(&sb, x.Debug)
+	}
+	return protobuf_go_lite.TextFinishMessage(&sb)
+}
+
+func (x *CaptureGoroutineProfileRequest) String() string {
+	return x.MarshalProtoText()
+}
+
+func (x *CaptureGoroutineProfileResponse) MarshalProtoText() string {
+	var sb protobuf_go_lite.TextBuilder
+	initialLen := protobuf_go_lite.TextStartMessage(&sb, "CaptureGoroutineProfileResponse")
+	if len(x.Data) != 0 {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "data")
+		protobuf_go_lite.TextWriteBytes(&sb, x.Data)
+	}
+	return protobuf_go_lite.TextFinishMessage(&sb)
+}
+
+func (x *CaptureGoroutineProfileResponse) String() string {
 	return x.MarshalProtoText()
 }
 
@@ -1709,6 +2030,109 @@ func (m *CaptureMemoryProfileResponse) UnmarshalVT(dAtA []byte) error {
 		}
 		if fieldNum <= 0 {
 			return fmt.Errorf("proto: CaptureMemoryProfileResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Data", wireType)
+			}
+			m.Data, iNdEx, err = protobuf_go_lite.DecodeBytesAppend(m.Data, dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+		default:
+			iNdEx = preIndex
+			skippy, err := protobuf_go_lite.Skip(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return protobuf_go_lite.ErrInvalidLength
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.unknownFields = append(m.unknownFields, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+
+func (m *CaptureGoroutineProfileRequest) UnmarshalVT(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	var err error
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		wire, iNdEx, err = protobuf_go_lite.DecodeVarint(dAtA, iNdEx)
+		if err != nil {
+			return err
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: CaptureGoroutineProfileRequest: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: CaptureGoroutineProfileRequest: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Debug", wireType)
+			}
+			m.Debug = 0
+			m.Debug, iNdEx, err = protobuf_go_lite.DecodeVarintInt32(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+		default:
+			iNdEx = preIndex
+			skippy, err := protobuf_go_lite.Skip(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return protobuf_go_lite.ErrInvalidLength
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.unknownFields = append(m.unknownFields, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+
+func (m *CaptureGoroutineProfileResponse) UnmarshalVT(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	var err error
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		wire, iNdEx, err = protobuf_go_lite.DecodeVarint(dAtA, iNdEx)
+		if err != nil {
+			return err
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: CaptureGoroutineProfileResponse: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: CaptureGoroutineProfileResponse: illegal tag %d (wire type %d)", fieldNum, wire)
 		}
 		switch fieldNum {
 		case 1:

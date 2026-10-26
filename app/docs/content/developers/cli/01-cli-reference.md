@@ -87,7 +87,7 @@ UnixFS, Git, and Canvas, as well as other object types.
 - `apt import-deb`
 - `forge create-cluster|create-job|create-worker`
 - `vm list|info|create|start|stop|watch|image|run`
-- `debug trace|cpu-profile|mem-profile`
+- `debug trace|cpu-profile|mem-profile|goroutine-profile`
 
 `plugin list --watch` keeps printing plugin state as it changes. `device
 approve` approves a device's link ticket for a Space. `device policy` manages

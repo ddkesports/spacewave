@@ -157,3 +157,40 @@ export const CaptureMemoryProfileResponse: MessageType<CaptureMemoryProfileRespo
     's4wave.trace.CaptureMemoryProfileResponse',
     () => [[1, 'data', 12]],
   )
+
+/**
+ * CaptureGoroutineProfileRequest is the request for CaptureGoroutineProfile.
+ *
+ * @generated from message s4wave.trace.CaptureGoroutineProfileRequest
+ */
+export interface CaptureGoroutineProfileRequest {
+  /**
+   * Debug is the pprof output debug level. Zero writes the compressed pprof
+   * protobuf; 1 and 2 write text stack dumps.
+   */
+  debug?: number
+}
+
+export const CaptureGoroutineProfileRequest: MessageType<CaptureGoroutineProfileRequest> =
+  /* @__PURE__ */ createMessageType<CaptureGoroutineProfileRequest>(
+    's4wave.trace.CaptureGoroutineProfileRequest',
+    () => [[1, 'debug', 5]],
+  )
+
+/**
+ * CaptureGoroutineProfileResponse is a streamed response chunk for CaptureGoroutineProfile.
+ *
+ * @generated from message s4wave.trace.CaptureGoroutineProfileResponse
+ */
+export interface CaptureGoroutineProfileResponse {
+  /**
+   * Data is a chunk of the raw pprof goroutine profile bytes.
+   */
+  data?: Uint8Array
+}
+
+export const CaptureGoroutineProfileResponse: MessageType<CaptureGoroutineProfileResponse> =
+  /* @__PURE__ */ createMessageType<CaptureGoroutineProfileResponse>(
+    's4wave.trace.CaptureGoroutineProfileResponse',
+    () => [[1, 'data', 12]],
+  )

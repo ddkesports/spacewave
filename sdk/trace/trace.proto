@@ -6,6 +6,7 @@ service TraceService {
   rpc StopTrace(StopTraceRequest) returns (stream StopTraceResponse);
   rpc CaptureCPUProfile(CaptureCPUProfileRequest) returns (stream CaptureCPUProfileResponse);
   rpc CaptureMemoryProfile(CaptureMemoryProfileRequest) returns (stream CaptureMemoryProfileResponse);
+  rpc CaptureGoroutineProfile(CaptureGoroutineProfileRequest) returns (stream CaptureGoroutineProfileResponse);
 }
 
 // StartTraceRequest is the request for StartTrace.
@@ -53,5 +54,18 @@ message CaptureMemoryProfileRequest {
 // CaptureMemoryProfileResponse is a streamed response chunk for CaptureMemoryProfile.
 message CaptureMemoryProfileResponse {
   // Data is a chunk of the raw pprof memory profile bytes.
+  bytes data = 1;
+}
+
+// CaptureGoroutineProfileRequest is the request for CaptureGoroutineProfile.
+message CaptureGoroutineProfileRequest {
+  // Debug is the pprof output debug level. Zero writes the compressed pprof
+  // protobuf; 1 and 2 write text stack dumps.
+  int32 debug = 1;
+}
+
+// CaptureGoroutineProfileResponse is a streamed response chunk for CaptureGoroutineProfile.
+message CaptureGoroutineProfileResponse {
+  // Data is a chunk of the raw pprof goroutine profile bytes.
   bytes data = 1;
 }

@@ -5,6 +5,8 @@
 import {
   CaptureCPUProfileRequest,
   CaptureCPUProfileResponse,
+  CaptureGoroutineProfileRequest,
+  CaptureGoroutineProfileResponse,
   CaptureMemoryProfileRequest,
   CaptureMemoryProfileResponse,
   StartTraceRequest,
@@ -62,6 +64,15 @@ export const TraceServiceDefinition = {
       O: CaptureMemoryProfileResponse,
       kind: MethodKind.ServerStreaming,
     },
+    /**
+     * @generated from rpc s4wave.trace.TraceService.CaptureGoroutineProfile
+     */
+    CaptureGoroutineProfile: {
+      name: 'CaptureGoroutineProfile',
+      I: CaptureGoroutineProfileRequest,
+      O: CaptureGoroutineProfileResponse,
+      kind: MethodKind.ServerStreaming,
+    },
   },
 } as const
 
@@ -100,6 +111,14 @@ export interface TraceService {
     request: CaptureMemoryProfileRequest,
     abortSignal?: AbortSignal,
   ): MessageStream<CaptureMemoryProfileResponse>
+
+  /**
+   * @generated from rpc s4wave.trace.TraceService.CaptureGoroutineProfile
+   */
+  CaptureGoroutineProfile(
+    request: CaptureGoroutineProfileRequest,
+    abortSignal?: AbortSignal,
+  ): MessageStream<CaptureGoroutineProfileResponse>
 }
 
 /**
@@ -141,6 +160,15 @@ export interface TraceServiceHandler {
     abortSignal: AbortSignal,
     context: ServerContext,
   ): MessageStream<CaptureMemoryProfileResponse>
+
+  /**
+   * @generated from rpc s4wave.trace.TraceService.CaptureGoroutineProfile
+   */
+  CaptureGoroutineProfile(
+    request: CaptureGoroutineProfileRequest,
+    abortSignal: AbortSignal,
+    context: ServerContext,
+  ): MessageStream<CaptureGoroutineProfileResponse>
 }
 
 export const TraceServiceServiceName = TraceServiceDefinition.typeName
@@ -155,6 +183,7 @@ export class TraceServiceClient implements TraceService {
     this.StopTrace = this.StopTrace.bind(this)
     this.CaptureCPUProfile = this.CaptureCPUProfile.bind(this)
     this.CaptureMemoryProfile = this.CaptureMemoryProfile.bind(this)
+    this.CaptureGoroutineProfile = this.CaptureGoroutineProfile.bind(this)
   }
   /**
    * @generated from rpc s4wave.trace.TraceService.StartTrace
@@ -222,5 +251,22 @@ export class TraceServiceClient implements TraceService {
       abortSignal || undefined,
     )
     return buildDecodeMessageTransform(CaptureMemoryProfileResponse)(result)
+  }
+
+  /**
+   * @generated from rpc s4wave.trace.TraceService.CaptureGoroutineProfile
+   */
+  CaptureGoroutineProfile(
+    request: CaptureGoroutineProfileRequest,
+    abortSignal?: AbortSignal,
+  ): MessageStream<CaptureGoroutineProfileResponse> {
+    const requestMsg = CaptureGoroutineProfileRequest.create(request)
+    const result = this.rpc.serverStreamingRequest(
+      this.service,
+      TraceServiceDefinition.methods.CaptureGoroutineProfile.name,
+      CaptureGoroutineProfileRequest.toBinary(requestMsg),
+      abortSignal || undefined,
+    )
+    return buildDecodeMessageTransform(CaptureGoroutineProfileResponse)(result)
   }
 }
