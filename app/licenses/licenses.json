@@ -814,7 +814,7 @@
     },
     {
       "name": "github.com/aperturerobotics/cli",
-      "version": "v1.1.1-0.20261008170756-47089de94fb3",
+      "version": "v1.1.1-0.20261024231437-afc764ba6d68",
       "spdx": "MIT",
       "source": "go",
       "repo": "https://github.com/aperturerobotics/cli",
@@ -830,7 +830,7 @@
     },
     {
       "name": "github.com/aperturerobotics/controllerbus",
-      "version": "v0.53.6-0.20261023070010-9a6346344996",
+      "version": "v0.53.6-0.20261024231433-2283cecf2d7b",
       "spdx": "MIT",
       "source": "go",
       "repo": "https://github.com/aperturerobotics/controllerbus",
@@ -870,7 +870,7 @@
     },
     {
       "name": "github.com/aperturerobotics/go-kvfile",
-      "version": "v0.10.1-0.20260705010911-5c5ed949ddfe",
+      "version": "v0.10.1-0.20261024231416-0a1dc13010cd",
       "spdx": "MIT",
       "source": "go",
       "repo": "https://github.com/aperturerobotics/go-kvfile",
@@ -941,7 +941,7 @@
     },
     {
       "name": "github.com/aperturerobotics/protobuf-go-lite",
-      "version": "v0.19.1-0.20261024022728-f0dcc8ef200f",
+      "version": "v0.19.1-0.20261024232153-ab66e6c9cb43",
       "spdx": "BSD-3-Clause",
       "source": "go",
       "repo": "https://github.com/aperturerobotics/protobuf-go-lite",
@@ -949,7 +949,7 @@
     },
     {
       "name": "github.com/aperturerobotics/starpc",
-      "version": "v0.52.4-0.20261021005057-f60467d0da35",
+      "version": "v0.52.4-0.20261024233818-0a9074172c29",
       "spdx": "MIT",
       "source": "go",
       "repo": "https://github.com/aperturerobotics/starpc",
@@ -957,7 +957,7 @@
     },
     {
       "name": "github.com/aperturerobotics/util",
-      "version": "v1.34.10-0.20261024061815-104de78e8992",
+      "version": "v1.34.10-0.20261024231407-c6b31c4e4ea6",
       "spdx": "MIT",
       "source": "go",
       "repo": "https://github.com/aperturerobotics/util",
@@ -1690,7 +1690,7 @@
     },
     {
       "name": "github.com/xrash/smetrics",
-      "version": "v0.0.0-20250705151800-55b8f293f342",
+      "version": "v0.0.0-20261013231157-39c47d93efba",
       "spdx": "MIT",
       "source": "go",
       "repo": "https://github.com/xrash/smetrics",
