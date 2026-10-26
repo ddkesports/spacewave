@@ -213,8 +213,11 @@ func (s *SOSync) runSolicitationGeneration(ctx context.Context) (bool, error) {
 		generation.stopAndWait(cancel)
 		return false, err
 	}
-	defer solicitRef.Release()
+
+	// Withdraw the solicitation before joining workers: new streams stop
+	// matching and unclaimed ones close instead of waiting on the join.
 	defer generation.stopAndWait(cancel)
+	defer solicitRef.Release()
 
 	// Keep the directive admitted through terminal peer states; only a
 	// recoverable stream error retires this generation.

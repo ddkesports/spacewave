@@ -181,8 +181,7 @@ func (s *messageStream) Close() error {
 		s.link.messagesMtx.Lock()
 		delete(s.link.messages, string(s.prefix))
 		s.link.messagesMtx.Unlock()
-		s.control.CancelRead(0)
-		_ = s.control.Close()
+		_ = reliableStream{s.control}.Close()
 	})
 	return nil
 }

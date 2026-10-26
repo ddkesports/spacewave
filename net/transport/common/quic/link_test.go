@@ -123,3 +123,48 @@ func TestParallelLinksKeepDistinctIdentities(t *testing.T) {
 		t.Fatalf("received %q", data)
 	}
 }
+
+// TestCloseReleasesBlockedWrite closes a stream whose Write waits on flow
+// control credit from a peer that stopped reading, and checks the Write returns.
+func TestCloseReleasesBlockedWrite(t *testing.T) {
+
+	// Open a stream the peer accepts but never reads past its first byte.
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	links := newLinkPair(ctx, t, &Opts{DisablePathMtuDiscovery: true})
+	strm, err := links[0].OpenStream(stream.OpenOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The peer sees the stream once it carries data.
+	if _, err := strm.Write([]byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	accepted, _, err := links[1].AcceptStream()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer accepted.Close()
+
+	// Fill the peer's receive window so the next Write blocks, then close.
+	written := make(chan error, 1)
+	go func() {
+		_, err := strm.Write(make([]byte, 64<<20))
+		written <- err
+	}()
+	select {
+	case err := <-written:
+		t.Fatalf("write past the receive window returned early: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	_ = strm.Close()
+	select {
+	case err := <-written:
+		if err == nil {
+			t.Fatal("blocked write succeeded after close")
+		}
+	case <-ctx.Done():
+		t.Fatal("close left the write blocked")
+	}
+}
