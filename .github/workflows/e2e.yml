@@ -71,7 +71,9 @@ jobs:
             needs_playwright: false
             playwright_browsers: ''
             timeout_minutes: 20
-    timeout-minutes: ${{ matrix.suite.timeout_minutes }}
+    # The steps carry the bounds: a slow apt mirror spends the browser
+    # install's budget, not the suite's.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -88,10 +90,12 @@ jobs:
 
       - name: Install Playwright browsers for Go tests
         if: ${{ matrix.suite.needs_playwright && matrix.suite.name != 'alpha-browser' }}
+        timeout-minutes: 15
         run: go run github.com/mxschmitt/playwright-go/cmd/playwright install --with-deps ${{ matrix.suite.playwright_browsers }}
 
       - name: Install Playwright browsers for Vitest
         if: ${{ matrix.suite.name == 'alpha-browser' }}
+        timeout-minutes: 15
         run: bunx playwright install --with-deps ${{ matrix.suite.playwright_browsers }}
 
       - name: Cache aptre tools
@@ -104,6 +108,7 @@ jobs:
         run: bun run prepare
 
       - name: Run E2E suite
+        timeout-minutes: ${{ matrix.suite.timeout_minutes }}
         run: bun run ${{ matrix.suite.script }}
 
   e2e-wasm:
@@ -273,7 +278,9 @@ jobs:
             script: bldr:test:e2e
             playwright_browsers: chromium firefox
             timeout_minutes: 15
-    timeout-minutes: ${{ matrix.suite.timeout_minutes }}
+    # The steps carry the bounds: a slow apt mirror spends the browser
+    # install's budget, not the suite's.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -289,6 +296,7 @@ jobs:
         run: bun install --frozen-lockfile --ignore-scripts
 
       - name: Install Playwright browsers
+        timeout-minutes: 15
         run: bunx playwright install --with-deps ${{ matrix.suite.playwright_browsers }}
 
       - name: Cache aptre tools
@@ -301,4 +309,5 @@ jobs:
         run: bun run prepare
 
       - name: Run Playwright E2E suite
+        timeout-minutes: ${{ matrix.suite.timeout_minutes }}
         run: bun run ${{ matrix.suite.script }}
