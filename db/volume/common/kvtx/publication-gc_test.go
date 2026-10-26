@@ -68,7 +68,7 @@ func TestPublicationSweepRescuesAdoptedBlock(t *testing.T) {
 
 	// The sweep rescues the block and keeps it and its new head.
 	var stats block_gc.Stats
-	if err := v.sweepUnreached(ctx, mark, &stats); err != nil {
+	if _, err := v.sweepUnreached(ctx, mark, &stats); err != nil {
 		t.Fatal(err)
 	}
 	if stats.RescuedNodes == 0 || stats.BlocksSwept != 0 {
@@ -113,7 +113,7 @@ func TestPublicationSweepUnknownBlocks(t *testing.T) {
 	// not name: the sweep keeps the block and reports the unknown block.
 	mark.Unknown, mark.UnknownSample = 1, []string{"untracked"}
 	var stats block_gc.Stats
-	if err := v.sweepUnreached(ctx, mark, &stats); err != nil {
+	if _, err := v.sweepUnreached(ctx, mark, &stats); err != nil {
 		t.Fatal(err)
 	}
 	if stats.BlocksSwept != 0 || stats.UnknownBlocks != 1 || !slices.Equal(stats.UnknownSample, []string{"untracked"}) {
@@ -144,7 +144,7 @@ func TestPublicationSweepUnknownBlocks(t *testing.T) {
 		}, nil)
 	}()
 	stats = block_gc.Stats{}
-	if err := v.sweepUnreached(ctx, mark, &stats); err != nil {
+	if _, err := v.sweepUnreached(ctx, mark, &stats); err != nil {
 		t.Fatal(err)
 	}
 	if err := <-flushed; err != nil {
@@ -241,6 +241,10 @@ func TestPublicationCollectForStopsAtBudget(t *testing.T) {
 	}
 }
 
+// TestPublicationCollectorUsesAtomicSweep checks that the collector sweeps
+// through the Volume: a block pass sweeps an unreached block, and minor passes
+// between block passes sweep a released young block and keep the live ones,
+// including a young block that an old block names through a later edge.
 func TestPublicationCollectorUsesAtomicSweep(t *testing.T) {
 	// Publish and orphan the collector test block.
 	v, _ := newPublicationTestVolume(t)
@@ -265,6 +269,58 @@ func TestPublicationCollectorUsesAtomicSweep(t *testing.T) {
 	stats, err = block_gc.NewCollector(v.GetRefGraph(), v, nil).Collect(t.Context())
 	if err != nil || stats.NodesSwept != 0 {
 		t.Fatalf("repeat stats=%+v err=%v", stats, err)
+	}
+
+	// Between block passes, the collector runs minor passes, which the
+	// completed passes above enabled.
+	ctx := t.Context()
+	rg := v.GetRefGraph()
+	collector := block_gc.NewCollector(rg, v, nil)
+	collector.SetMarkInterval(time.Hour, time.Now().Add(time.Hour))
+	minor := func(swept int) {
+		t.Helper()
+		stats, err := collector.CollectFor(ctx, time.Minute)
+		if err != nil || stats.MinorPasses != 1 || stats.BlockPasses != 0 || stats.BlocksSwept != swept {
+			t.Fatalf("minor stats=%+v err=%v", stats, err)
+		}
+	}
+
+	// A minor pass sweeps a released young block and keeps a live one.
+	dead := publicationFor(t, "young-dead", "", "one")
+	kept := publicationFor(t, "young-kept", "", "one")
+	for _, p := range []*block.AtomicPublication{dead, kept} {
+		if err := v.PublishAtomic(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	release := func(p *block.AtomicPublication) {
+		t.Helper()
+		edge := block_gc.RefEdge{Subject: block_gc.BucketIRI(p.BucketID), Object: block_gc.BlockIRI(p.Entries[0].Ref)}
+		if err := rg.ApplyRefBatch(ctx, nil, []block_gc.RefEdge{edge}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	release(dead)
+	minor(1)
+	assertPublishedBlock(t, v, dead, false)
+	assertPublishedBlock(t, v, kept, true)
+
+	// The kept block is now old. A young block it names only through a
+	// later edge survives a minor pass, which seeds the children of each
+	// old block whose list changed, and the next one too.
+	child := publicationFor(t, "young-child", "", "one")
+	if err := v.PublishAtomic(ctx, child); err != nil {
+		t.Fatal(err)
+	}
+	parentNode, childNode := block_gc.BlockIRI(kept.Entries[0].Ref), block_gc.BlockIRI(child.Entries[0].Ref)
+	if err := rg.ApplyRefBatch(ctx, []block_gc.RefEdge{{Subject: parentNode, Object: childNode}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	release(child)
+	minor(0)
+	minor(0)
+	if _, found, err := v.GetBlock(ctx, child.Entries[0].Ref); err != nil || !found {
+		t.Fatalf("child found=%v err=%v", found, err)
 	}
 }
 
@@ -400,7 +456,7 @@ func TestPublicationSweepFailureRollsBackGraphAndBlock(t *testing.T) {
 
 	// Verify the failed sweep reports no deleted blocks.
 	var stats block_gc.Stats
-	err := v.sweepUnreached(t.Context(), mark, &stats)
+	_, err := v.sweepUnreached(t.Context(), mark, &stats)
 	if stats.BlocksSwept != 0 || !errors.Is(err, failure) {
 		t.Fatalf("failed sweep: stats=%+v err=%v", stats, err)
 	}

@@ -44,6 +44,17 @@ type AtomicSweepStore interface {
 	SweepUnreachedBlocks(ctx context.Context, graph RefGraphOps, stats *Stats) error
 }
 
+// YoungSweepStore runs minor passes, which sweep only the blocks written since
+// the last pass, as RefGraph.MarkYoung describes.
+type YoungSweepStore interface {
+	// SweepYoungBlocks runs one minor pass: it opens a block pass, marks the
+	// young blocks, and removes the tracked young blocks the mark did not
+	// reach, as SweepUnreachedBlocks removes the unreached blocks. It does
+	// nothing until a block pass in the same process swept everything it
+	// marked, and records the pass in stats.
+	SweepYoungBlocks(ctx context.Context, graph RefGraphOps, stats *Stats) error
+}
+
 // BlockMarker marks the blocks of a reference graph in one snapshot, as
 // RefGraph.MarkBlocks describes.
 type BlockMarker interface {
@@ -158,6 +169,7 @@ func (c *Collector) Collect(ctx context.Context) (*Stats, error) {
 // listing the candidates takes. When the queue is empty and the mark interval
 // has passed since the last pass ended, it then runs a block pass, which the
 // budget does not stop: the pass sweeps every block its mark found unreached.
+// Between block passes it runs a minor pass where the store supports one.
 func (c *Collector) CollectFor(ctx context.Context, budget time.Duration) (*Stats, error) {
 	return c.collect(ctx, true, budget)
 }
@@ -169,7 +181,7 @@ func (c *Collector) CollectGraphOnly(ctx context.Context) (*Stats, error) {
 }
 
 // collect sweeps the unreferenced nodes, then runs a block pass when one is
-// due, stopping when a nonzero budget has elapsed.
+// due, or else a minor pass, stopping when a nonzero budget has elapsed.
 func (c *Collector) collect(ctx context.Context, removeBlocks bool, budget time.Duration) (*Stats, error) {
 	// Start timing and accumulate cycle statistics across cascaded sweeps.
 	start := time.Now()
@@ -185,11 +197,25 @@ func (c *Collector) collect(ctx context.Context, removeBlocks bool, budget time.
 		return stats, c.collectBlocks(ctx, removeBlocks, stats)
 	}
 	if time.Now().Before(c.nextMark) {
-		return stats, nil
+		return stats, c.collectYoung(ctx, removeBlocks, stats)
 	}
 	err := c.collectBlocks(ctx, removeBlocks, stats)
 	c.scheduleMark(stats, err)
 	return stats, err
+}
+
+// collectYoung runs a minor pass where the store supports one.
+func (c *Collector) collectYoung(ctx context.Context, removeBlocks bool, stats *Stats) error {
+	// Sweep only through a store that sweeps atomically, as collectBlocks.
+	young, ok := c.store.(YoungSweepStore)
+	if !ok || !removeBlocks || c.onSwept != nil {
+		return nil
+	}
+	err := young.SweepYoungBlocks(ctx, c.refGraph, stats)
+	if err != nil && ctx.Err() == nil {
+		err = errors.Wrap(err, "sweep young blocks")
+	}
+	return err
 }
 
 // collectQueue loops until no unreferenced nodes remain, since removing a node

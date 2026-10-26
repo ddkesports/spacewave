@@ -119,9 +119,12 @@ func (c *Controller) runGCSweep(ctx context.Context) error {
 		// Report each collection that found candidates or marked, warn of a
 		// pass that blocks of unknown references stopped, and continue a
 		// collection the budget stopped.
-		if stats.UnreferencedNodeCount != 0 || stats.BlockPasses != 0 {
+		if stats.UnreferencedNodeCount != 0 || stats.BlockPasses != 0 || stats.MinorPasses != 0 {
 			le := c.le
-			if stats.BlockPasses != 0 {
+			if stats.MinorPasses != 0 {
+				le = le.WithField("minor", true).WithField("young", stats.YoungBlocks)
+			}
+			if stats.BlockPasses != 0 || stats.MinorPasses != 0 {
 				le = le.
 					WithField("roots", stats.MarkRoots).
 					WithField("owners", block_gc.FormatOwners(stats.MarkOwners)).

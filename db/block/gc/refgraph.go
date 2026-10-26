@@ -28,6 +28,9 @@ const (
 	kindChildren byte = 'c'
 	// kindForward keys an edge by subject then object.
 	kindForward byte = 'f'
+	// kindYoungHead is the one record of the young log's range, as
+	// MarkYoung describes.
+	kindYoungHead byte = 'g'
 	// kindIncoming keys an edge by object then subject.
 	kindIncoming byte = 'i'
 	// kindNode keyed the node inventory of the mark-sweep collector, which
@@ -37,6 +40,10 @@ const (
 	kindPass byte = 'p'
 	// kindRoot keys the registered roots.
 	kindRoot byte = 'r'
+	// kindYoung keys a record of the young log by a big-endian sequence.
+	// Its value lists the blocks whose child lists one write created or
+	// changed.
+	kindYoung byte = 'y'
 )
 
 // RefGraph stores the garbage collection ownership graph as plain records in
@@ -55,6 +62,9 @@ const (
 // its own. Incoming queries of a block report its owners that are not blocks,
 // and the unreferenced queue while the block is tracked. While a block pass
 // runs, each write also logs the blocks it adopts, as MarkBlocks describes.
+// Each write also logs the blocks whose child lists it creates or changes in
+// the young log, so a minor pass can sweep the blocks written since the last
+// pass without reading the rest, as MarkYoung describes.
 type RefGraph struct {
 	// store holds the graph records.
 	store kvtx.Store
@@ -217,7 +227,8 @@ func (g *RefGraph) ApplyRefBatch(ctx context.Context, adds, removes []RefEdge) e
 
 // applyRefBatchTx applies one transaction slice in ownership order, marking
 // each object that is not a block and loses its last owner as unreferenced,
-// and logs the blocks it adds edges to while a block pass runs.
+// logs the blocks it adds edges to while a block pass runs, and logs the
+// blocks whose child lists it creates or changes in the young log.
 func (g *RefGraph) applyRefBatchTx(ctx context.Context, tx kvtx.Tx, adds, removes []RefEdge) error {
 	// Prefetch every record the checks below read. A store that reads many
 	// keys together then answers each check from its cache instead of
@@ -242,16 +253,27 @@ func (g *RefGraph) applyRefBatchTx(ctx context.Context, tx kvtx.Tx, adds, remove
 			children[parent] = list
 			continue
 		}
-		if err := g.addRefTx(ctx, tx, edge.Subject, edge.Object); err != nil {
+		if err := addRefTx(ctx, tx, edge.Subject, edge.Object); err != nil {
 			return err
 		}
 	}
+	var young youngRecord
 	for _, parent := range slices.Sorted(maps.Keys(children)) {
-		if err := g.addChildrenTx(ctx, tx, parent, children[parent]); err != nil {
+		created, changed, err := addChildrenTx(ctx, tx, parent, children[parent])
+		if err != nil {
 			return err
+		}
+		switch {
+		case created:
+			young.created = append(young.created, parent)
+		case changed:
+			young.changed = append(young.changed, parent)
 		}
 	}
 	if err := logAdoptedTx(ctx, tx, adopted); err != nil {
+		return err
+	}
+	if err := logYoungTx(ctx, tx, young); err != nil {
 		return err
 	}
 
@@ -283,7 +305,7 @@ func (g *RefGraph) applyRefBatchTx(ctx context.Context, tx kvtx.Tx, adds, remove
 			return err
 		}
 		if !owned {
-			if err := g.addRefTx(ctx, tx, NodeUnreferenced, object); err != nil {
+			if err := addRefTx(ctx, tx, NodeUnreferenced, object); err != nil {
 				return err
 			}
 		}
@@ -319,18 +341,9 @@ func edgeKey(edge RefEdge) []byte {
 	return graphKey(kindForward, edge.Subject, edge.Object)
 }
 
-// addRefTx adds an edge to its block's child list, or adds both directions of
-// any other edge unless the exact forward edge already exists.
-func (g *RefGraph) addRefTx(ctx context.Context, tx kvtx.Tx, subject, object string) error {
-	// Merge a child edge into its block's list.
-	if parent, child, ok := childEdge(RefEdge{Subject: subject, Object: object}); ok {
-		var children []string
-		if child != "" {
-			children = []string{child}
-		}
-		return g.addChildrenTx(ctx, tx, parent, children)
-	}
-
+// addRefTx adds both directions of an edge that is not a child edge unless
+// the exact forward edge already exists.
+func addRefTx(ctx context.Context, tx kvtx.Tx, subject, object string) error {
 	// Skip the edge when its exact forward record already exists.
 	forward := graphKey(kindForward, subject, object)
 	exists, err := tx.Exists(ctx, forward)

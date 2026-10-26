@@ -38,6 +38,10 @@ type Stats struct {
 	RemoveBlockDuration time.Duration
 	// BlockPasses is the number of block passes that marked the graph.
 	BlockPasses int
+	// MinorPasses is the number of minor passes that marked the young blocks.
+	MinorPasses int
+	// YoungBlocks is the number of young blocks the last minor pass marked.
+	YoungBlocks int
 	// MarkDuration is time spent marking blocks.
 	MarkDuration time.Duration
 	// MarkScans is the number of child list scans the last mark made, zero
@@ -79,8 +83,20 @@ type Stats struct {
 
 // RecordMark records a block pass's mark.
 func (s *Stats) RecordMark(mark *BlockMark) {
-	// Count the pass and copy the mark's totals.
 	s.BlockPasses++
+	s.recordMark(mark)
+}
+
+// RecordYoungMark records a minor pass's mark.
+func (s *Stats) RecordYoungMark(mark *BlockMark) {
+	s.MinorPasses++
+	s.YoungBlocks = mark.YoungBlocks
+	s.recordMark(mark)
+}
+
+// recordMark copies a mark's totals.
+func (s *Stats) recordMark(mark *BlockMark) {
+	// Copy the reach, the unknown blocks, and the mark's costs.
 	s.LiveNodes = mark.Live.Len()
 	s.UnreachedBlocks = len(mark.Unreached)
 	s.UnknownBlocks = mark.Unknown

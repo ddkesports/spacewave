@@ -228,7 +228,72 @@ func (v *Volume) SweepUnreferenced(ctx context.Context, graph block_gc.RefGraphO
 // and budgeted as SweepUnreferenced's are. A block a write adopts after the
 // mark is therefore never removed: the write either committed before the
 // transaction, which then rescues it, or waits behind it.
+//
+// A pass that sweeps everything it marked promotes its mark, as
+// RefGraph.PromoteYoung describes, from the young log position it read before
+// the pass opened, and lets minor passes run.
 func (v *Volume) SweepUnreachedBlocks(ctx context.Context, graph block_gc.RefGraphOps, stats *block_gc.Stats) error {
+	return v.runBlockPass(ctx, graph, false, func(actual *transactionRefGraph) error {
+		// Read the young log position before the pass opens: every block a
+		// record before it lists was written before the mark began.
+		var bound uint64
+		err := actual.read(ctx, func(rg *block_gc.RefGraph) (err error) {
+			bound, err = rg.YoungPosition(ctx)
+			return err
+		})
+		if err != nil {
+			return err
+		}
+		return v.inBlockPass(ctx, actual, func() error {
+			// Mark and sweep, then promote a pass that swept everything.
+			mark, complete, err := v.sweepBlockPass(ctx, actual, stats)
+			if err != nil || !complete {
+				return err
+			}
+			if err := v.promoteYoung(ctx, mark, bound); err != nil {
+				return err
+			}
+			v.youngReady = true
+			return nil
+		})
+	})
+}
+
+// SweepYoungBlocks runs one minor pass as a block pass whose mark covers only
+// the young blocks, as RefGraph.MarkYoung describes, and sweeps the young
+// blocks it did not reach as SweepUnreachedBlocks does. It does nothing until
+// a block pass in this process promoted its mark. A minor pass that sweeps
+// everything it marked promotes its mark too.
+func (v *Volume) SweepYoungBlocks(ctx context.Context, graph block_gc.RefGraphOps, stats *block_gc.Stats) error {
+	return v.runBlockPass(ctx, graph, true, func(actual *transactionRefGraph) error {
+		return v.inBlockPass(ctx, actual, func() error {
+			// Mark the young blocks in one read transaction.
+			start := time.Now()
+			var mark *block_gc.BlockMark
+			err := actual.read(ctx, func(rg *block_gc.RefGraph) (err error) {
+				mark, err = rg.MarkYoung(ctx)
+				return err
+			})
+			stats.MarkDuration += time.Since(start)
+			if err != nil {
+				return err
+			}
+			stats.RecordYoungMark(mark)
+
+			// Sweep the unreached, then promote.
+			complete, err := v.sweepUnreached(ctx, mark, stats)
+			if err != nil || !complete {
+				return err
+			}
+			return v.promoteYoung(ctx, mark, mark.YoungBound())
+		})
+	})
+}
+
+// runBlockPass runs fn as the Volume's one block pass, after checking that
+// graph is the Volume's own. A minor pass returns without running fn until a
+// block pass promoted its mark.
+func (v *Volume) runBlockPass(ctx context.Context, graph block_gc.RefGraphOps, minor bool, fn func(*transactionRefGraph) error) error {
 	// Require the Volume transaction domain and run one pass at a time.
 	actual, ok := v.refGraph.(*transactionRefGraph)
 	given, sameType := graph.(*transactionRefGraph)
@@ -240,19 +305,46 @@ func (v *Volume) SweepUnreachedBlocks(ctx context.Context, graph block_gc.RefGra
 		return err
 	}
 	defer release()
+	if minor && !v.youngReady {
+		return nil
+	}
+	return fn(actual)
+}
 
-	// Open the pass, and close it when the pass ends, also on cancellation.
+// inBlockPass opens a block pass, runs fn, and closes the pass when fn
+// returns, also on cancellation.
+func (v *Volume) inBlockPass(ctx context.Context, actual *transactionRefGraph, fn func() error) error {
+	// Open the pass in its own commit, so later writes log their adoptions.
 	if err := actual.write(ctx, func(rg *block_gc.RefGraph) error { return rg.BeginBlockPass(ctx) }); err != nil {
 		return err
 	}
-	err = v.sweepBlockPass(ctx, actual, stats)
+	err := fn()
 	endCtx := context.WithoutCancel(ctx)
 	endErr := actual.write(endCtx, func(rg *block_gc.RefGraph) error { return rg.EndBlockPass(endCtx) })
 	return errors.Join(err, endErr)
 }
 
-// sweepBlockPass marks the blocks of an open pass and sweeps the unreached.
-func (v *Volume) sweepBlockPass(ctx context.Context, actual *transactionRefGraph, stats *block_gc.Stats) error {
+// promoteYoung promotes mark from bound in budgeted transactions, as
+// RefGraph.PromoteYoung describes, each yielding the writer after its budget
+// or to a waiting writer.
+func (v *Volume) promoteYoung(ctx context.Context, mark *block_gc.BlockMark, bound uint64) error {
+	for {
+		var done bool
+		err := v.withDirectAtomic(ctx, func(_ block.StoreOps, rg *block_gc.RefGraph) (err error) {
+			held := time.Now()
+			yield := func() bool { return time.Since(held) >= sweepBudget || v.writersWaiting() }
+			done, err = rg.PromoteYoung(ctx, mark, bound, yield)
+			return err
+		})
+		if err != nil || done {
+			return err
+		}
+	}
+}
+
+// sweepBlockPass marks the blocks of an open pass and sweeps the unreached,
+// and reports whether it swept everything it marked.
+func (v *Volume) sweepBlockPass(ctx context.Context, actual *transactionRefGraph, stats *block_gc.Stats) (*block_gc.BlockMark, bool, error) {
 	// Mark by scan, unless the setting selects the walk.
 	markBlocks := actual.MarkBlocksScan
 	if v.gcMarkWalk {
@@ -266,13 +358,14 @@ func (v *Volume) sweepBlockPass(ctx context.Context, actual *transactionRefGraph
 	mark, err := markBlocks(ctx)
 	stats.MarkDuration += time.Since(start)
 	if err != nil {
-		return err
+		return nil, false, err
 	}
 	stats.RecordMark(mark)
 	if !mark.Awaitable() {
-		return nil
+		return mark, false, nil
 	}
-	return v.sweepUnreached(ctx, mark, stats)
+	complete, err := v.sweepUnreached(ctx, mark, stats)
+	return mark, complete, err
 }
 
 // sweepUnreached removes all the blocks mark did not reach in budgeted
@@ -281,8 +374,9 @@ func (v *Volume) sweepBlockPass(ctx context.Context, actual *transactionRefGraph
 // Each transaction yields the writer after its budget or to a waiting writer,
 // and the next continues the same list. While a reached block has no child
 // list, it sweeps nothing and waits for the next commit, up to awaitLimit,
-// then reports the blocks still unknown and stops.
-func (v *Volume) sweepUnreached(ctx context.Context, mark *block_gc.BlockMark, stats *block_gc.Stats) error {
+// then reports the blocks still unknown and stops. It reports whether it
+// swept every unreached block and every block the mark reached has a list.
+func (v *Volume) sweepUnreached(ctx context.Context, mark *block_gc.BlockMark, stats *block_gc.Stats) (bool, error) {
 	// Time the sweep, starting from the default chunk size.
 	nodes := mark.Unreached
 	size := sweepChunkSize
@@ -300,7 +394,7 @@ func (v *Volume) sweepUnreached(ctx context.Context, mark *block_gc.BlockMark, s
 		// arrived since.
 		caught, err := openRefGraph(&directReadStore{volume: v}).CatchUpAdopted(ctx, mark)
 		if err != nil {
-			return err
+			return false, err
 		}
 		stats.RescuedNodes += caught
 
@@ -368,7 +462,7 @@ func (v *Volume) sweepUnreached(ctx context.Context, mark *block_gc.BlockMark, s
 		}
 		v.forgetSweptProofs(batch)
 		if err != nil {
-			return err
+			return false, err
 		}
 		stats.NodesSwept += len(batch)
 		stats.BlocksSwept += len(batch)
@@ -385,14 +479,14 @@ func (v *Volume) sweepUnreached(ctx context.Context, mark *block_gc.BlockMark, s
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return false, ctx.Err()
 		case <-commit:
 		case <-deadline.C:
 			stats.UnknownBlocks, stats.UnknownSample, stats.UnknownNamers = mark.Unknown, mark.UnknownSample, mark.UnknownNamers
-			return nil
+			return false, nil
 		}
 	}
-	return nil
+	return mark.Unknown == 0, nil
 }
 
 // sweepBlockChunk removes the chunk's blocks that the mark and the rescues
@@ -550,5 +644,6 @@ func markerState(ctx context.Context, rg *block_gc.RefGraph, node string) (marke
 
 var (
 	_ block_gc.AtomicSweepStore = (*Volume)(nil)
+	_ block_gc.YoungSweepStore  = (*Volume)(nil)
 	_ block.AtomicBlockPreparer = (*Volume)(nil)
 )

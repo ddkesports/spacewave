@@ -69,21 +69,21 @@ func encodeChildren(children []string) []byte {
 }
 
 // addChildrenTx adds children to the child list of block, creating the list
-// when it is missing. The list is written only when it changes.
-func (g *RefGraph) addChildrenTx(ctx context.Context, tx kvtx.TxOps, block string, children []string) error {
+// when it is missing, and reports whether it created the list or changed an
+// existing one. The list is written only when it changes.
+func addChildrenTx(ctx context.Context, tx kvtx.TxOps, block string, children []string) (created, changed bool, err error) {
 	// Merge the children into the stored list.
 	stored, found, err := readChildrenTx(ctx, tx, block)
 	if err != nil {
-		return err
+		return false, false, err
 	}
 	merged := append(slices.Clone(stored), children...)
 	slices.Sort(merged)
 	merged = slices.Compact(merged)
 	if found && len(merged) == len(stored) {
-		return nil
+		return false, false, nil
 	}
-
-	return tx.Set(ctx, graphKey(kindChildren, block), encodeChildren(merged))
+	return !found, found, tx.Set(ctx, graphKey(kindChildren, block), encodeChildren(merged))
 }
 
 // removeChildTx removes child from the child list of block and reports whether

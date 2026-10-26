@@ -38,7 +38,7 @@ func (g *RefGraph) Reachable(ctx context.Context) (*NodeSet, error) {
 		}
 
 		// Walk from them.
-		_, err = walkTx(ctx, tx, reached, stack, nil, nil)
+		_, err = walkTx(ctx, tx, reached, stack, nil, nil, nil)
 		return err
 	})
 	if err != nil {
@@ -50,15 +50,16 @@ func (g *RefGraph) Reachable(ctx context.Context) (*NodeSet, error) {
 // RecordSubject returns the node whose liveness decides whether a complete
 // collection keeps the graph record key: the subject of an edge in either
 // direction, the block of a child list, or the node of a node or root record.
-// The records of a block pass name no node, so it returns an empty subject
-// for them, which no collection keeps.
+// The records of a block pass and of the young log name no node, so it
+// returns an empty subject for them, which no collection keeps: a collection
+// that keeps only reachable records leaves every block it keeps old.
 func RecordSubject(key []byte) (string, error) {
 	// Split the kind byte from the nodes.
 	if len(key) == 0 {
 		return "", fmt.Errorf("decode empty reference graph record")
 	}
 	kind, rest := key[0], key[1:]
-	if kind == kindPass || kind == kindAdopt {
+	if kind == kindPass || kind == kindAdopt || kind == kindYoung || kind == kindYoungHead {
 		return "", nil
 	}
 

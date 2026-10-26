@@ -102,6 +102,11 @@ type Volume struct {
 	// blockPassMu runs one block pass at a time, since a pass consumes the
 	// adopt log that the graph keeps while one is open.
 	blockPassMu csync.Mutex
+	// youngReady reports that a block pass in this process swept everything
+	// it marked and promoted its mark, so minor passes may run. It is not
+	// stored: a build without the young log may write before a restart.
+	// Guarded by blockPassMu.
+	youngReady bool
 }
 
 // KvtxVolume is an interface for a volume with a kvtx store.
