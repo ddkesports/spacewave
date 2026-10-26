@@ -129,7 +129,7 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: trusted-go-${{ github.job }}-${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          key: trusted-go-${{ github.job }}-${{ runner.os }}-go-${{ hashFiles('go.sum') }}
 
       - name: Prune superseded Go dependency caches
         uses: ./.github/actions/prune-go-cache
@@ -229,7 +229,7 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: trusted-go-${{ github.job }}-${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          key: trusted-go-${{ github.job }}-${{ runner.os }}-go-${{ hashFiles('go.sum') }}
 
       - name: Prune superseded Go dependency caches
         uses: ./.github/actions/prune-go-cache
@@ -344,7 +344,7 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: trusted-go-${{ github.job }}-${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          key: trusted-go-${{ github.job }}-${{ runner.os }}-go-${{ hashFiles('go.sum') }}
 
       - name: Prune superseded Go dependency caches
         uses: ./.github/actions/prune-go-cache
@@ -550,7 +550,7 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: trusted-go-${{ github.job }}-${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          key: trusted-go-${{ github.job }}-${{ runner.os }}-go-${{ hashFiles('go.sum') }}
 
       - name: Prune superseded Go dependency caches
         uses: ./.github/actions/prune-go-cache
@@ -630,7 +630,7 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: trusted-go-${{ github.job }}-${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          key: trusted-go-${{ github.job }}-${{ runner.os }}-go-${{ hashFiles('go.sum') }}
 
       - name: Prune superseded Go dependency caches
         uses: ./.github/actions/prune-go-cache

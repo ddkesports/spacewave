@@ -12,7 +12,7 @@ runs:
       env:
         GH_TOKEN: ${{ github.token }}
         CACHE_PREFIX: trusted-go-${{ github.job }}-${{ runner.os }}-go-
-        CACHE_KEY: trusted-go-${{ github.job }}-${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        CACHE_KEY: trusted-go-${{ github.job }}-${{ runner.os }}-go-${{ hashFiles('go.sum') }}
       run: |
         set -euo pipefail
         gh cache list --repo "${GITHUB_REPOSITORY}" --key "${CACHE_PREFIX}" --limit 100 \

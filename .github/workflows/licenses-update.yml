@@ -45,7 +45,7 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: trusted-go-${{ github.job }}-${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          key: trusted-go-${{ github.job }}-${{ runner.os }}-go-${{ hashFiles('go.sum') }}
 
       - name: Prune superseded Go dependency caches
         uses: ./.github/actions/prune-go-cache
@@ -59,7 +59,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ./.tools
-          key: trusted-licenses-update-${{ runner.os }}-aptre-tools-${{ hashFiles('**/go.sum') }}
+          key: trusted-licenses-update-${{ runner.os }}-aptre-tools-${{ hashFiles('go.sum', 'scripts/licenses/go.sum') }}
 
       - name: Setup aptre tools and vendor
         run: |
