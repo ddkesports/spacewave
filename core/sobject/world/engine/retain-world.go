@@ -161,8 +161,10 @@ func storeRootBlock(ctx context.Context, so sobject.SharedObject, root *block.Bl
 const LocalProofKeyPrefix = "world-publication-v3/"
 
 // recheckReads is the number of block reads a recheck keeps in flight. A
-// recheck walks every block of a World on a device that is serving it.
-const recheckReads = 16
+// recheck walks every block of a World on a device that is serving it, and
+// most of its reads miss the page cache, so it keeps few in flight to leave
+// the disk to the World's commits.
+const recheckReads = 4
 
 // retainProofBatchEntries is the number of proofs, and of buffered block
 // writes, per durability fence.

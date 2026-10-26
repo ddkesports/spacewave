@@ -184,6 +184,9 @@ func (e *soEngine) executeBackfill(ctx context.Context, _ bool) error {
 			le.WithField("block", ref.MarshalString()).Warn("backfill found a block no peer holds")
 		}
 		opts := &RetainOptions{Missing: missing, Recheck: recheck}
+		if recheck {
+			opts.Visited = recheckProgress(le, start)
+		}
 		if err := copyWorlds(ctx, e.so, backfillProofStoreID, roots, opts); err != nil {
 			return err
 		}
@@ -205,6 +208,29 @@ func (e *soEngine) executeBackfill(ctx context.Context, _ bool) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-waitCh:
+		}
+	}
+}
+
+// recheckProgressInterval is how often a recheck logs its progress.
+const recheckProgressInterval = time.Minute
+
+// recheckProgress returns a Visited callback that counts the blocks a recheck
+// walks and logs the count and bytes about once per recheckProgressInterval.
+// CopyGraph calls Visited from one goroutine.
+func recheckProgress(le *logrus.Entry, start time.Time) func(*block.BlockRef, []byte) {
+	var blocks, size uint64
+	next := start.Add(recheckProgressInterval)
+	return func(_ *block.BlockRef, data []byte) {
+		blocks++
+		size += uint64(len(data))
+		if now := time.Now(); now.After(next) {
+			next = now.Add(recheckProgressInterval)
+			le.WithFields(logrus.Fields{
+				"blocks": blocks,
+				"bytes":  size,
+				"dur":    now.Sub(start).Round(time.Second).String(),
+			}).Info("rechecking the backfilled World")
 		}
 	}
 }
