@@ -185,11 +185,28 @@ func (l *resourceLifetime) getOrCreateClientLocked(resourceID uint32) (srpc.Clie
 		return nil, resource.ErrResourceNotFound
 	}
 
-	// Build the ResourceRpc client bound to a per-resource context.
+	// Bind streams to a per-resource context, which a release cancels, and
+	// unary calls to the generation, so a call the server already answered
+	// still reads its answer when the release overtakes it.
 	resourceCtx, cancel := context.WithCancel(l.ctx)
 	l.resourceContexts[resourceID] = cancel
-	client := resource.NewResourceRpcClient(func(ctx context.Context) (resource.SRPCResourceService_ResourceRpcClient, error) {
-		callCtx, releaseCallCtx := resourceRPCCallContext(resourceCtx, ctx)
+	client := &orderedResourceClient{
+		lifetime:   l,
+		resourceID: resourceID,
+		calls:      l.newResourceRPCClient(l.ctx, resourceID),
+		streams:    l.newResourceRPCClient(resourceCtx, resourceID),
+	}
+
+	// Cache the ordered client wrapper for later calls.
+	l.srpcClients[resourceID] = client
+	return client, nil
+}
+
+// newResourceRPCClient opens ResourceRpc routes to resourceID whose calls end
+// with scope.
+func (l *resourceLifetime) newResourceRPCClient(scope context.Context, resourceID uint32) srpc.Client {
+	return resource.NewResourceRpcClient(func(ctx context.Context) (resource.SRPCResourceService_ResourceRpcClient, error) {
+		callCtx, releaseCallCtx := resourceRPCCallContext(scope, ctx)
 		strm, err := l.service.ResourceRpc(callCtx)
 		if err != nil {
 			releaseCallCtx()
@@ -201,11 +218,6 @@ func (l *resourceLifetime) getOrCreateClientLocked(resourceID uint32) (srpc.Clie
 			release:                               releaseCallCtx,
 		}, nil
 	}, resourceID)
-
-	// Cache the ordered client wrapper for later calls.
-	client = &orderedResourceClient{lifetime: l, resourceID: resourceID, client: client}
-	l.srpcClients[resourceID] = client
-	return client, nil
 }
 
 func (l *resourceLifetime) enqueueControl(req *resource.ResourceClientRequest) bool {
@@ -274,8 +286,10 @@ type orderedResourceClient struct {
 	lifetime *resourceLifetime
 	// resourceID identifies the routed resource.
 	resourceID uint32
-	// client opens ResourceRpc routes to resourceID.
-	client srpc.Client
+	// calls opens unary routes to resourceID, ending with the generation.
+	calls srpc.Client
+	// streams opens streaming routes to resourceID, ending with its release.
+	streams srpc.Client
 }
 
 // ExecCall invokes a unary method after every queued lifecycle control.
@@ -283,7 +297,7 @@ func (c *orderedResourceClient) ExecCall(ctx context.Context, service, method st
 	if err := c.lifetime.waitForControls(ctx); err != nil {
 		return err
 	}
-	return c.retireRefused(c.client.ExecCall(ctx, service, method, in, out))
+	return c.retireRefused(c.calls.ExecCall(ctx, service, method, in, out))
 }
 
 // NewStream opens a streaming method after every queued lifecycle control.
@@ -291,7 +305,7 @@ func (c *orderedResourceClient) NewStream(ctx context.Context, service, method s
 	if err := c.lifetime.waitForControls(ctx); err != nil {
 		return nil, err
 	}
-	strm, err := c.client.NewStream(ctx, service, method, firstMsg)
+	strm, err := c.streams.NewStream(ctx, service, method, firstMsg)
 	return strm, c.retireRefused(err)
 }
 
