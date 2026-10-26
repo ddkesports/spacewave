@@ -33,6 +33,10 @@ message Report {
   // WritesDropped is the number of scheduled writes skipped because every
   // writer was busy and the queue was full.
   uint64 writes_dropped = 14;
+  // Writers is the number of writes that could run at once.
+  uint32 writers = 15;
+  // Publications is the account volume's publication queue over the load.
+  PublicationStats publications = 16;
 }
 
 // Latency summarizes a set of durations, in microseconds.
@@ -94,4 +98,15 @@ message CpuShare {
   double fraction = 2;
   // CpuMs is the sampled CPU of the path, in milliseconds.
   uint64 cpu_ms = 3;
+}
+
+// PublicationStats is the publication queue change over the load.
+message PublicationStats {
+  // Accepted is the number of publications the queue admitted.
+  uint64 accepted = 1;
+  // PhysicalCommits is the number of physical transactions that made them
+  // durable.
+  uint64 physical_commits = 2;
+  // PerCommit is accepted over physical commits.
+  double per_commit = 3;
 }

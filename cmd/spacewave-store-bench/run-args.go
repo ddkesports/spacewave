@@ -54,7 +54,7 @@ func (a *RunArgs) Run(c *cli.Context) error {
 	defer st.Close()
 
 	// Drive the load and encode its report.
-	report, err := storebench.RunLoad(ctx, le, st.Engine, &a.Load)
+	report, err := storebench.RunLoad(ctx, le, st, &a.Load)
 	if err != nil {
 		return err
 	}

@@ -46,6 +46,10 @@ type Report struct {
 	// WritesDropped is the number of scheduled writes skipped because every
 	// writer was busy and the queue was full.
 	WritesDropped uint64 `protobuf:"varint,14,opt,name=writes_dropped,json=writesDropped,proto3" json:"writesDropped,omitempty"`
+	// Writers is the number of writes that could run at once.
+	Writers uint32 `protobuf:"varint,15,opt,name=writers,proto3" json:"writers,omitempty"`
+	// Publications is the account volume's publication queue over the load.
+	Publications *PublicationStats `protobuf:"bytes,16,opt,name=publications,proto3" json:"publications,omitempty"`
 }
 
 func (x *Report) Reset() {
@@ -150,6 +154,20 @@ func (x *Report) GetWritesDropped() uint64 {
 		return x.WritesDropped
 	}
 	return 0
+}
+
+func (x *Report) GetWriters() uint32 {
+	if x != nil {
+		return x.Writers
+	}
+	return 0
+}
+
+func (x *Report) GetPublications() *PublicationStats {
+	if x != nil {
+		return x.Publications
+	}
+	return nil
 }
 
 // Latency summarizes a set of durations, in microseconds.
@@ -388,6 +406,45 @@ func (x *CpuShare) GetCpuMs() uint64 {
 	return 0
 }
 
+// PublicationStats is the publication queue change over the load.
+type PublicationStats struct {
+	unknownFields []byte
+	// Accepted is the number of publications the queue admitted.
+	Accepted uint64 `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
+	// PhysicalCommits is the number of physical transactions that made them
+	// durable.
+	PhysicalCommits uint64 `protobuf:"varint,2,opt,name=physical_commits,json=physicalCommits,proto3" json:"physicalCommits,omitempty"`
+	// PerCommit is accepted over physical commits.
+	PerCommit float64 `protobuf:"fixed64,3,opt,name=per_commit,json=perCommit,proto3" json:"perCommit,omitempty"`
+}
+
+func (x *PublicationStats) Reset() {
+	*x = PublicationStats{}
+}
+
+func (*PublicationStats) ProtoMessage() {}
+
+func (x *PublicationStats) GetAccepted() uint64 {
+	if x != nil {
+		return x.Accepted
+	}
+	return 0
+}
+
+func (x *PublicationStats) GetPhysicalCommits() uint64 {
+	if x != nil {
+		return x.PhysicalCommits
+	}
+	return 0
+}
+
+func (x *PublicationStats) GetPerCommit() float64 {
+	if x != nil {
+		return x.PerCommit
+	}
+	return 0
+}
+
 func (m *Report) CloneVT() *Report {
 	if m == nil {
 		return (*Report)(nil)
@@ -401,12 +458,14 @@ func (m *Report) CloneVT() *Report {
 	r.WriteErrors = m.WriteErrors
 	r.ViewRuns = m.ViewRuns
 	r.WritesDropped = m.WritesDropped
+	r.Writers = m.Writers
 	r.WriteLatency = protobuf_go_lite.CloneVTValue(m.WriteLatency)
 	r.Hold = protobuf_go_lite.CloneVTValue(m.Hold)
 	r.Stages = protobuf_go_lite.CloneVTSlice(m.Stages)
 	r.Cache = protobuf_go_lite.CloneVTValue(m.Cache)
 	r.Gc = protobuf_go_lite.CloneVTValue(m.Gc)
 	r.Cpu = protobuf_go_lite.CloneVTSlice(m.Cpu)
+	r.Publications = protobuf_go_lite.CloneVTValue(m.Publications)
 	if len(m.unknownFields) > 0 {
 		r.unknownFields = slices.Clone(m.unknownFields)
 	}
@@ -512,6 +571,24 @@ func (m *CpuShare) CloneMessageVT() protobuf_go_lite.CloneMessage {
 	return m.CloneVT()
 }
 
+func (m *PublicationStats) CloneVT() *PublicationStats {
+	if m == nil {
+		return (*PublicationStats)(nil)
+	}
+	r := new(PublicationStats)
+	r.Accepted = m.Accepted
+	r.PhysicalCommits = m.PhysicalCommits
+	r.PerCommit = m.PerCommit
+	if len(m.unknownFields) > 0 {
+		r.unknownFields = slices.Clone(m.unknownFields)
+	}
+	return r
+}
+
+func (m *PublicationStats) CloneMessageVT() protobuf_go_lite.CloneMessage {
+	return m.CloneVT()
+}
+
 func (this *Report) EqualVT(that *Report) bool {
 	if this == that {
 		return true
@@ -558,6 +635,12 @@ func (this *Report) EqualVT(that *Report) bool {
 		return false
 	}
 	if this.WritesDropped != that.WritesDropped {
+		return false
+	}
+	if this.Writers != that.Writers {
+		return false
+	}
+	if !protobuf_go_lite.IsEqualVT(this.Publications, that.Publications) {
 		return false
 	}
 	return string(this.unknownFields) == string(that.unknownFields)
@@ -710,6 +793,31 @@ func (this *CpuShare) EqualMessageVT(thatMsg any) bool {
 	}
 	return this.EqualVT(that)
 }
+func (this *PublicationStats) EqualVT(that *PublicationStats) bool {
+	if this == that {
+		return true
+	} else if this == nil || that == nil {
+		return false
+	}
+	if this.Accepted != that.Accepted {
+		return false
+	}
+	if this.PhysicalCommits != that.PhysicalCommits {
+		return false
+	}
+	if this.PerCommit != that.PerCommit {
+		return false
+	}
+	return string(this.unknownFields) == string(that.unknownFields)
+}
+
+func (this *PublicationStats) EqualMessageVT(thatMsg any) bool {
+	that, ok := thatMsg.(*PublicationStats)
+	if !ok {
+		return false
+	}
+	return this.EqualVT(that)
+}
 
 // MarshalProtoJSON marshals the Report message to JSON.
 func (x *Report) MarshalProtoJSON(s *json.MarshalState) {
@@ -800,6 +908,16 @@ func (x *Report) MarshalProtoJSON(s *json.MarshalState) {
 		s.WriteMoreIf(&wroteField)
 		s.WriteObjectField("writesDropped")
 		s.WriteUint64(x.WritesDropped)
+	}
+	if x.Writers != 0 || s.HasField("writers") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("writers")
+		s.WriteUint32(x.Writers)
+	}
+	if x.Publications != nil || s.HasField("publications") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("publications")
+		x.Publications.MarshalProtoJSON(s.WithField("publications"))
 	}
 	s.WriteObjectEnd()
 }
@@ -906,6 +1024,16 @@ func (x *Report) UnmarshalProtoJSON(s *json.UnmarshalState) {
 		case "writes_dropped", "writesDropped":
 			s.AddField("writes_dropped")
 			x.WritesDropped = s.ReadUint64()
+		case "writers":
+			s.AddField("writers")
+			x.Writers = s.ReadUint32()
+		case "publications":
+			if s.ReadNil() {
+				x.Publications = nil
+				return
+			}
+			x.Publications = &PublicationStats{}
+			x.Publications.UnmarshalProtoJSON(s.WithField("publications", true))
 		}
 	})
 }
@@ -1249,6 +1377,64 @@ func (x *CpuShare) UnmarshalJSON(b []byte) error {
 	return json.DefaultUnmarshalerConfig.Unmarshal(b, x)
 }
 
+// MarshalProtoJSON marshals the PublicationStats message to JSON.
+func (x *PublicationStats) MarshalProtoJSON(s *json.MarshalState) {
+	if x == nil {
+		s.WriteNil()
+		return
+	}
+	s.WriteObjectStart()
+	var wroteField bool
+	if x.Accepted != 0 || s.HasField("accepted") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("accepted")
+		s.WriteUint64(x.Accepted)
+	}
+	if x.PhysicalCommits != 0 || s.HasField("physicalCommits") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("physicalCommits")
+		s.WriteUint64(x.PhysicalCommits)
+	}
+	if x.PerCommit != 0 || s.HasField("perCommit") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("perCommit")
+		s.WriteFloat64(x.PerCommit)
+	}
+	s.WriteObjectEnd()
+}
+
+// MarshalJSON marshals the PublicationStats to JSON.
+func (x *PublicationStats) MarshalJSON() ([]byte, error) {
+	return json.DefaultMarshalerConfig.Marshal(x)
+}
+
+// UnmarshalProtoJSON unmarshals the PublicationStats message from JSON.
+func (x *PublicationStats) UnmarshalProtoJSON(s *json.UnmarshalState) {
+	if s.ReadNil() {
+		return
+	}
+	s.ReadObject(func(key string) {
+		switch key {
+		default:
+			s.Skip() // ignore unknown field
+		case "accepted":
+			s.AddField("accepted")
+			x.Accepted = s.ReadUint64()
+		case "physical_commits", "physicalCommits":
+			s.AddField("physical_commits")
+			x.PhysicalCommits = s.ReadUint64()
+		case "per_commit", "perCommit":
+			s.AddField("per_commit")
+			x.PerCommit = s.ReadFloat64()
+		}
+	})
+}
+
+// UnmarshalJSON unmarshals the PublicationStats from JSON.
+func (x *PublicationStats) UnmarshalJSON(b []byte) error {
+	return json.DefaultUnmarshalerConfig.Unmarshal(b, x)
+}
+
 func (m *Report) MarshalVT() (dAtA []byte, err error) {
 	if m == nil {
 		return nil, nil
@@ -1277,6 +1463,23 @@ func (m *Report) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	_ = l
 	if m.unknownFields != nil {
 		i = protobuf_go_lite.EncodeRawBytes(dAtA, i, m.unknownFields)
+	}
+	if m.Publications != nil {
+		size, err := m.Publications.MarshalToSizedBufferVT(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(size))
+		i--
+		dAtA[i] = 0x1
+		i--
+		dAtA[i] = 0x82
+	}
+	if m.Writers != 0 {
+		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(m.Writers))
+		i--
+		dAtA[i] = 0x78
 	}
 	if m.WritesDropped != 0 {
 		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(m.WritesDropped))
@@ -1650,6 +1853,53 @@ func (m *CpuShare) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
+func (m *PublicationStats) MarshalVT() (dAtA []byte, err error) {
+	if m == nil {
+		return nil, nil
+	}
+	size := m.SizeVT()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBufferVT(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *PublicationStats) MarshalToVT(dAtA []byte) (int, error) {
+	size := m.SizeVT()
+	return m.MarshalToSizedBufferVT(dAtA[:size])
+}
+
+func (m *PublicationStats) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
+	if m == nil {
+		return 0, nil
+	}
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.unknownFields != nil {
+		i = protobuf_go_lite.EncodeRawBytes(dAtA, i, m.unknownFields)
+	}
+	if m.PerCommit != 0 {
+		i = protobuf_go_lite.EncodeFixed64(dAtA, i, uint64(math.Float64bits(float64(m.PerCommit))))
+		i--
+		dAtA[i] = 0x19
+	}
+	if m.PhysicalCommits != 0 {
+		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(m.PhysicalCommits))
+		i--
+		dAtA[i] = 0x10
+	}
+	if m.Accepted != 0 {
+		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(m.Accepted))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
 func (m *Report) SizeVT() (n int) {
 	if m == nil {
 		return 0
@@ -1688,6 +1938,11 @@ func (m *Report) SizeVT() (n int) {
 		n += protobuf_go_lite.SizeMessage(1, l)
 	}
 	n += protobuf_go_lite.SizeVarintNonZero(1, m.WritesDropped)
+	n += protobuf_go_lite.SizeVarintNonZero(1, m.Writers)
+	if m.Publications != nil {
+		l = m.Publications.SizeVT()
+		n += protobuf_go_lite.SizeMessage(2, l)
+	}
 	n += len(m.unknownFields)
 	return n
 }
@@ -1761,6 +2016,19 @@ func (m *CpuShare) SizeVT() (n int) {
 	n += protobuf_go_lite.SizeStringNonEmpty(1, m.Name)
 	n += protobuf_go_lite.SizeFixed64NonZero(1, m.Fraction)
 	n += protobuf_go_lite.SizeVarintNonZero(1, m.CpuMs)
+	n += len(m.unknownFields)
+	return n
+}
+
+func (m *PublicationStats) SizeVT() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	n += protobuf_go_lite.SizeVarintNonZero(1, m.Accepted)
+	n += protobuf_go_lite.SizeVarintNonZero(1, m.PhysicalCommits)
+	n += protobuf_go_lite.SizeFixed64NonZero(1, m.PerCommit)
 	n += len(m.unknownFields)
 	return n
 }
@@ -1839,6 +2107,14 @@ func (x *Report) MarshalProtoText() string {
 	if x.WritesDropped != 0 {
 		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "writes_dropped")
 		protobuf_go_lite.TextWriteUint(&sb, x.WritesDropped)
+	}
+	if x.Writers != 0 {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "writers")
+		protobuf_go_lite.TextWriteUint(&sb, x.Writers)
+	}
+	if x.Publications != nil {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "publications")
+		protobuf_go_lite.TextWriteTextMarshaler(&sb, x.Publications)
 	}
 	return protobuf_go_lite.TextFinishMessage(&sb)
 }
@@ -1969,6 +2245,27 @@ func (x *CpuShare) MarshalProtoText() string {
 }
 
 func (x *CpuShare) String() string {
+	return x.MarshalProtoText()
+}
+func (x *PublicationStats) MarshalProtoText() string {
+	var sb protobuf_go_lite.TextBuilder
+	initialLen := protobuf_go_lite.TextStartMessage(&sb, "PublicationStats")
+	if x.Accepted != 0 {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "accepted")
+		protobuf_go_lite.TextWriteUint(&sb, x.Accepted)
+	}
+	if x.PhysicalCommits != 0 {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "physical_commits")
+		protobuf_go_lite.TextWriteUint(&sb, x.PhysicalCommits)
+	}
+	if x.PerCommit != 0 {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "per_commit")
+		protobuf_go_lite.TextWriteFloat64(&sb, x.PerCommit)
+	}
+	return protobuf_go_lite.TextFinishMessage(&sb)
+}
+
+func (x *PublicationStats) String() string {
 	return x.MarshalProtoText()
 }
 func (m *Report) UnmarshalVT(dAtA []byte) error {
@@ -2153,6 +2450,30 @@ func (m *Report) UnmarshalVT(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
+		case 15:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Writers", wireType)
+			}
+			m.Writers = 0
+			m.Writers, iNdEx, err = protobuf_go_lite.DecodeVarintUint32(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+		case 16:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Publications", wireType)
+			}
+			msgStart, postIndex, err := protobuf_go_lite.DecodeLengthDelimited(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			if m.Publications == nil {
+				m.Publications = &PublicationStats{}
+			}
+			if err := m.Publications.UnmarshalVT(dAtA[msgStart:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := protobuf_go_lite.Skip(dAtA[iNdEx:])
@@ -2557,6 +2878,78 @@ func (m *CpuShare) UnmarshalVT(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
+		default:
+			iNdEx = preIndex
+			skippy, err := protobuf_go_lite.Skip(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return protobuf_go_lite.ErrInvalidLength
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.unknownFields = append(m.unknownFields, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *PublicationStats) UnmarshalVT(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	var err error
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		wire, iNdEx, err = protobuf_go_lite.DecodeVarint(dAtA, iNdEx)
+		if err != nil {
+			return err
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: PublicationStats: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: PublicationStats: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Accepted", wireType)
+			}
+			m.Accepted = 0
+			m.Accepted, iNdEx, err = protobuf_go_lite.DecodeVarint(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field PhysicalCommits", wireType)
+			}
+			m.PhysicalCommits = 0
+			m.PhysicalCommits, iNdEx, err = protobuf_go_lite.DecodeVarint(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+		case 3:
+			if wireType != 1 {
+				return fmt.Errorf("proto: wrong wireType = %d for field PerCommit", wireType)
+			}
+			var v uint64
+			var _v64 uint64
+			_v64, iNdEx, err = protobuf_go_lite.DecodeFixed64(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			v = uint64(_v64)
+			m.PerCommit = float64(math.Float64frombits(v))
 		default:
 			iNdEx = preIndex
 			skippy, err := protobuf_go_lite.Skip(dAtA[iNdEx:])

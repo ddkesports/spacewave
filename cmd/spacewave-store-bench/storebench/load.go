@@ -17,6 +17,8 @@ import (
 	sobject_world_engine "github.com/s4wave/spacewave/core/sobject/world/engine"
 	"github.com/s4wave/spacewave/db/block"
 	"github.com/s4wave/spacewave/db/block/byteslice"
+	"github.com/s4wave/spacewave/db/volume"
+	volume_kvtx "github.com/s4wave/spacewave/db/volume/common/kvtx"
 	"github.com/s4wave/spacewave/db/world"
 	"github.com/sirupsen/logrus"
 )
@@ -33,6 +35,8 @@ type load struct {
 	eng world.Engine
 	// conf shapes the load.
 	conf *LoadConfig
+	// vol is the account volume, or nil.
+	vol volume.Volume
 	// keys are the sampled store object keys.
 	keys []string
 	// hot are the keys of the written objects.
@@ -60,11 +64,12 @@ type load struct {
 	errors uint64
 }
 
-// RunLoad drives conf's load on eng and returns the report of its measured
-// window.
-func RunLoad(ctx context.Context, le *logrus.Entry, eng world.Engine, conf *LoadConfig) (*Report, error) {
+// RunLoad drives conf's load on the store's World and returns the report of
+// its measured window.
+func RunLoad(ctx context.Context, le *logrus.Entry, st *Store, conf *LoadConfig) (*Report, error) {
 	// Sample the store keys the views and writes read.
-	l := &load{le: le, eng: eng, conf: conf}
+	eng := st.Engine
+	l := &load{le: le, eng: eng, conf: conf, vol: st.Volume}
 	keys, err := sampleKeys(ctx, eng, conf.SampleKeys, conf.Seed)
 	if err != nil {
 		return nil, err
@@ -73,6 +78,8 @@ func RunLoad(ctx context.Context, le *logrus.Entry, eng world.Engine, conf *Load
 		return nil, errors.New("the World holds no objects to read")
 	}
 	l.keys = keys
+
+	// Name the hot keys the writes rewrite and create them.
 	for i := range max(conf.HotKeys, 1) {
 		l.hot = append(l.hot, HotKeyPrefix+"hot-"+strconv.Itoa(i))
 	}
@@ -112,6 +119,7 @@ func (l *load) measure(ctx context.Context) (*Report, error) {
 	cache0 := cache.Snapshot()
 	var mem0 runtime.MemStats
 	runtime.ReadMemStats(&mem0)
+	pub0 := l.publicationStats()
 
 	// Profile the CPU and start counting the window's writes and views.
 	var prof bytes.Buffer
@@ -127,9 +135,12 @@ func (l *load) measure(ctx context.Context) (*Report, error) {
 	l.measuring.Store(false)
 	elapsed := time.Since(start)
 	pprof.StopCPUProfile()
+
+	// Read the counters at the end of the window.
 	cache1 := cache.Snapshot()
 	var mem1 runtime.MemStats
 	runtime.ReadMemStats(&mem1)
+	pub1 := l.publicationStats()
 	if werr != nil {
 		return nil, werr
 	}
@@ -162,6 +173,8 @@ func (l *load) measure(ctx context.Context) (*Report, error) {
 		Gc:            gcStats(&mem0, &mem1),
 		Cpu:           cpu,
 		WritesDropped: l.dropped.Load(),
+		Writers:       uint32(max(l.conf.Writers, 1)),
+		Publications:  publicationDelta(pub0, pub1),
 	}
 	for i, name := range l.stageNames {
 		report.Stages = append(report.Stages, &StageLatency{Name: name, Latency: summarize(l.stages[i])})
@@ -407,6 +420,28 @@ func cacheStats(a, b block.DecodedBlockCacheSnapshot) *CacheStats {
 	}
 	if lookups := out.Hits + out.Misses; lookups > 0 {
 		out.HitRate = float64(out.Hits) / float64(lookups)
+	}
+	return out
+}
+
+// publicationStats returns the account volume's publication counters, or
+// zero when the volume does not publish.
+func (l *load) publicationStats() volume_kvtx.PublicationStats {
+	vol, ok := l.vol.(*volume_kvtx.Volume)
+	if !ok {
+		return volume_kvtx.PublicationStats{}
+	}
+	return vol.GetPublicationStats()
+}
+
+// publicationDelta returns the publication queue change from a to b.
+func publicationDelta(a, b volume_kvtx.PublicationStats) *PublicationStats {
+	out := &PublicationStats{
+		Accepted:        b.Accepted - a.Accepted,
+		PhysicalCommits: b.PhysicalCommits - a.PhysicalCommits,
+	}
+	if out.PhysicalCommits > 0 {
+		out.PerCommit = float64(out.Accepted) / float64(out.PhysicalCommits)
 	}
 	return out
 }

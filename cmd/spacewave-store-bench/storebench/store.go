@@ -24,6 +24,7 @@ import (
 	bucket_lookup_concurrent "github.com/s4wave/spacewave/db/bucket/lookup/concurrent"
 	bucket_setup "github.com/s4wave/spacewave/db/bucket/setup"
 	node_controller "github.com/s4wave/spacewave/db/node/controller"
+	"github.com/s4wave/spacewave/db/volume"
 	volume_controller "github.com/s4wave/spacewave/db/volume/controller"
 	volume_s4db "github.com/s4wave/spacewave/db/volume/s4db"
 	"github.com/s4wave/spacewave/db/world"
@@ -39,6 +40,8 @@ const storageID = "default"
 type Store struct {
 	// Engine is the running World engine.
 	Engine world.Engine
+	// Volume is the account volume that holds the World.
+	Volume volume.Volume
 	// rels release the composition in reverse order.
 	rels []func()
 }
@@ -127,6 +130,9 @@ func OpenStore(ctx context.Context, le *logrus.Entry, conf *StoreConfig, create 
 		return nil, errors.Wrap(err, "open account "+conf.AccountID)
 	}
 	s.rels = append(s.rels, accRef.Release)
+	if localAcc, ok := acc.(*provider_local.ProviderAccount); ok {
+		s.Volume = localAcc.GetVolume()
+	}
 	ref, err := findSharedObject(ctx, acc, conf, create)
 	if err != nil {
 		return nil, err

@@ -994,7 +994,7 @@
       ]
     },
     "github.com/s4wave/spacewave/cmd/spacewave-store-bench/storebench": {
-      "hash": "c62082c6f2fa3f3f791936b5a1344d22b0550e5e8a73d8ae46d55b3c5ddd3c4e",
+      "hash": "e5be1061fd0e8204575605649811160527b30ee5956a726b8ae0603f8107c66a",
       "generatedFiles": [
         "cmd/spacewave-store-bench/storebench/bench.pb.go",
         "cmd/spacewave-store-bench/storebench/bench.pb.ts"
