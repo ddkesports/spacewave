@@ -204,6 +204,8 @@ type soEngine struct {
 	// backfill copies the installed World and the retained roots into the
 	// local store while this device's backfill choice is on.
 	backfill *routine.StateRoutineContainer[bool]
+	// backfillRecheck is set while the next or running copy is a recheck.
+	backfillRecheck atomic.Bool
 	// backfillChoice is this device's backfill choice, written under the
 	// controller's writer lock.
 	backfillChoice *ccontainer.CContainer[bool]

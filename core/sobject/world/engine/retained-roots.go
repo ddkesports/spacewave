@@ -124,14 +124,14 @@ func holdRootSet(ctx context.Context, so sobject.SharedObject, name string, root
 
 // copyWorlds copies the complete World graph of each root into the local
 // store, recording completion proofs in the local state store proofStoreID.
-// missing, when set, accepts blocks no reachable store holds as holes, as in
-// RetainWorld. Callers of the same proof store serialize calls.
+// opts applies to each copy, as in RetainWorld. Callers of the same proof store
+// serialize calls.
 func copyWorlds(
 	ctx context.Context,
 	so sobject.SharedObject,
 	proofStoreID string,
 	roots []*block.BlockRef,
-	missing func(*block.BlockRef),
+	opts *RetainOptions,
 ) error {
 	// Open the proof store.
 	proofs, release, err := so.AccessLocalStateStore(ctx, proofStoreID, nil)
@@ -147,7 +147,7 @@ func copyWorlds(
 			continue
 		}
 		head := &bucket.ObjectRef{BucketId: store.GetID(), RootRef: root}
-		if err := RetainWorld(ctx, so, head, proofs, nil, missing); err != nil {
+		if err := RetainWorld(ctx, so, head, proofs, opts); err != nil {
 			return errors.Wrapf(err, "copy World %s", root.MarshalString())
 		}
 	}

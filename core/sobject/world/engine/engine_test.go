@@ -145,6 +145,14 @@ func TestWorldEngineController(t *testing.T) {
 			return err
 		}
 
+		// A recheck walks the whole World again and reports a complete copy.
+		if err := backfill.RecheckBackfill(ctx); err != nil {
+			return err
+		}
+		if err := waitBackfilled(ctx, eng, backfill); err != nil {
+			return err
+		}
+
 		// Turn backfill off, which clears its state.
 		if err := backfill.SetBackfill(ctx, false); err != nil {
 			return err

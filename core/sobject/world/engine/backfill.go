@@ -6,6 +6,7 @@ import (
 
 	"github.com/aperturerobotics/util/backoff"
 	"github.com/aperturerobotics/util/ccontainer"
+	"github.com/pkg/errors"
 	"github.com/s4wave/spacewave/core/sobject"
 	"github.com/s4wave/spacewave/db/block"
 	"github.com/s4wave/spacewave/db/kvtx"
@@ -51,6 +52,12 @@ type BackfillEngine interface {
 	// GetBackfillState watches the outcome of the last finished copy, nil
 	// while backfill is off or before its first copy finishes.
 	GetBackfillState() ccontainer.Watchable[*BackfillState]
+	// RecheckBackfill restarts the copy so it walks every block of the
+	// covered roots, trusting no completion proof, and fetches each one the
+	// store lacks. A false proof, such as one an older build recorded, hides
+	// the blocks under it from every other copy. It returns once the
+	// recheck starts; GetBackfillState reports its outcome.
+	RecheckBackfill(ctx context.Context) error
 }
 
 // IsComplete reports whether the local store held every block of the covered
@@ -90,6 +97,25 @@ func (e *soEngine) GetBackfill() ccontainer.Watchable[bool] {
 // GetBackfillState watches the outcome of the last finished copy.
 func (e *soEngine) GetBackfillState() ccontainer.Watchable[*BackfillState] {
 	return e.backfillState
+}
+
+// RecheckBackfill restarts the copy as a recheck.
+func (e *soEngine) RecheckBackfill(ctx context.Context) error {
+	// Serialize with the choice, so a recheck never runs with backfill off.
+	unlockWriteMtx, err := e.c.writeMtx.Lock(ctx, "recheck-backfill")
+	if err != nil {
+		return err
+	}
+	defer unlockWriteMtx()
+	if !e.backfillChoice.GetValue() {
+		return errors.New("backfill is off")
+	}
+
+	// Clear the last outcome so a waiter sees the recheck's, then restart.
+	e.backfillRecheck.Store(true)
+	e.backfillState.SetValue(nil)
+	e.backfill.RestartRoutine()
+	return nil
 }
 
 // readBackfill reads this device's backfill choice for the World of so.
@@ -137,6 +163,7 @@ func writeBackfill(ctx context.Context, so sobject.SharedObject, enabled bool) e
 // finished.
 func (e *soEngine) executeBackfill(ctx context.Context, _ bool) error {
 	le := e.c.le
+	recheck := e.backfillRecheck.Load()
 	for {
 		// Take the wait before the targets, so a change during the copy is
 		// not missed.
@@ -156,13 +183,19 @@ func (e *soEngine) executeBackfill(ctx context.Context, _ bool) error {
 			holes++
 			le.WithField("block", ref.MarshalString()).Warn("backfill found a block no peer holds")
 		}
-		if err := copyWorlds(ctx, e.so, backfillProofStoreID, roots, missing); err != nil {
+		opts := &RetainOptions{Missing: missing, Recheck: recheck}
+		if err := copyWorlds(ctx, e.so, backfillProofStoreID, roots, opts); err != nil {
 			return err
 		}
-		le.WithFields(logrus.Fields{
-			"dur":   time.Since(start).String(),
-			"holes": holes,
-		}).Debug("backfilled the World")
+		fields := logrus.Fields{"dur": time.Since(start).String(), "holes": holes}
+		if recheck {
+			// Later copies trust the proofs this one recorded.
+			e.backfillRecheck.Store(false)
+			recheck = false
+			le.WithFields(fields).Info("rechecked the backfilled World")
+		} else {
+			le.WithFields(fields).Debug("backfilled the World")
+		}
 		if err := e.publishBackfill(ctx, &BackfillState{Root: roots[0], Holes: holes, Seqno: seqno}); err != nil {
 			return err
 		}

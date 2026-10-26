@@ -27,6 +27,11 @@ type GraphCopyOptions struct {
 	Complete func(ctx context.Context, ref *BlockRef) error
 	// Visited observes each block after its read.
 	Visited func(ref *BlockRef, data []byte)
+	// Forget drops each finished block from the copy's memory, so the copy
+	// holds only the blocks between the root and its frontier. A block reached
+	// again through another parent is checked with Known again and copied
+	// again when Known does not report it.
+	Forget bool
 	// Missing handles a block src cannot serve now, because it does not hold
 	// it or no source served it (IsNotAvailable). Returning nil leaves a hole:
 	// the copy continues, and writes the hole's ancestors without completing
@@ -239,6 +244,7 @@ func (c *graphCopy) expand(ctx context.Context, node *graphCopyNode, data []byte
 				child.done = true
 				child.parents = nil
 				node.waiting--
+				c.forget(child)
 				continue
 			}
 			c.queue = append(c.queue, child)
@@ -306,7 +312,15 @@ func (c *graphCopy) finish(node *graphCopyNode) []*graphCopyNode {
 		}
 	}
 	node.parents = nil
+	c.forget(node)
 	return ready
+}
+
+// forget drops a finished node from the seen set when the copy forgets.
+func (c *graphCopy) forget(node *graphCopyNode) {
+	if c.opts.Forget {
+		delete(c.nodes, node.ref.MarshalString())
+	}
 }
 
 // known reports which refs already have a complete copy.

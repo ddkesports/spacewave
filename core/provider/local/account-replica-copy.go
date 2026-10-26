@@ -342,7 +342,7 @@ func (a *ProviderAccount) copyAccountWorld(ctx context.Context, so sobject.Share
 	}
 	holes := &worldHolesError{}
 	missing := func(ref *block.BlockRef) { holes.refs = append(holes.refs, ref.CloneVT()) }
-	if err := sobject_world_engine.RetainWorld(ctx, so, progress.GetHead(), local, visited, missing); err != nil {
+	if err := sobject_world_engine.RetainWorld(ctx, so, progress.GetHead(), local, &sobject_world_engine.RetainOptions{Visited: visited, Missing: missing}); err != nil {
 		return err
 	}
 	if len(holes.refs) != 0 {

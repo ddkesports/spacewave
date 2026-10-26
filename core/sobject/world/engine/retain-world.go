@@ -27,16 +27,28 @@ func (c *Controller) retainPublicationWorld(ctx context.Context, so sobject.Shar
 		return err
 	}
 	defer release()
-	return RetainWorld(ctx, so, head, local, nil, nil)
+	return RetainWorld(ctx, so, head, local, nil)
+}
+
+// RetainOptions adjusts a RetainWorld copy.
+type RetainOptions struct {
+	// Visited observes newly traversed blocks; cached complete subtrees are
+	// omitted.
+	Visited func(*block.BlockRef, []byte)
+	// Missing accepts, when set, a block no reachable store holds or serves as
+	// a hole, which leaves the World without a completion proof.
+	Missing func(*block.BlockRef)
+	// Recheck walks the whole graph, trusting no completion proof, and proves
+	// each subtree again. A false proof hides the blocks under it from every
+	// other copy.
+	Recheck bool
 }
 
 // RetainWorld copies a complete World graph into its SharedObject's block store.
 // It follows the refs the store reports for each block, so it needs no block
 // types. Completion proofs skip immutable subtrees only after their ownership
 // writes are durable. The caller owns the proof store and serializes calls for
-// it. visited observes newly traversed blocks; cached complete subtrees are
-// omitted. missing, when set, accepts a block no reachable store holds or
-// serves as a hole, which leaves the World without a completion proof.
+// it. opts may be nil.
 //
 // A volume proof does not own its root, so a sweep may remove an unowned
 // proved root with its graph at any time. A skipped subtree is held under a
@@ -47,38 +59,51 @@ func RetainWorld(
 	so sobject.SharedObject,
 	head *bucket.ObjectRef,
 	local kvtx.Store,
-	visited func(*block.BlockRef, []byte),
-	missing func(*block.BlockRef),
+	opts *RetainOptions,
 ) error {
+	// Fill missing options.
+	if opts == nil {
+		opts = &RetainOptions{}
+	}
+
 	// Short-circuit a World whose graph is already complete in the store. A
 	// proof is volume-wide; a second bucket still needs root ownership.
 	store := so.GetBlockStore()
-	if complete, err := block.RootComplete(ctx, store, head.GetRootRef()); err != nil {
-		return err
-	} else if complete {
-		kept, err := storeRootBlock(ctx, so, head.GetRootRef())
-		if err != nil || kept {
+	if !opts.Recheck {
+		if complete, err := block.RootComplete(ctx, store, head.GetRootRef()); err != nil {
 			return err
+		} else if complete {
+			kept, err := storeRootBlock(ctx, so, head.GetRootRef())
+			if err != nil || kept {
+				return err
+			}
 		}
 	}
 
 	// Copy the graph through the proof recorder.
 	proofs := newRetainProofs(store, store.GetID(), local)
 	defer proofs.release()
-	opts := &block.GraphCopyOptions{
-		Known:    proofs.known,
+	copyOpts := &block.GraphCopyOptions{
 		Complete: proofs.complete,
-		Visited:  visited,
+		Visited:  opts.Visited,
+	}
+	if opts.Recheck {
+		// Walk the graph streaming, and trust only this copy's own proofs.
+		copyOpts.Known = proofs.knownPending
+		copyOpts.Forget = true
+		copyOpts.Reads = recheckReads
+	} else {
+		copyOpts.Known = proofs.known
 	}
 	var holes int
-	if missing != nil {
-		opts.Missing = func(_ context.Context, ref *block.BlockRef) error {
+	if opts.Missing != nil {
+		copyOpts.Missing = func(_ context.Context, ref *block.BlockRef) error {
 			holes++
-			missing(ref)
+			opts.Missing(ref)
 			return nil
 		}
 	}
-	if err := block.CopyGraph(ctx, store, proofs.writes, head.GetRootRef(), opts); err != nil {
+	if err := block.CopyGraph(ctx, store, proofs.writes, head.GetRootRef(), copyOpts); err != nil {
 		return err
 	}
 	if err := proofs.flush(ctx); err != nil {
@@ -134,6 +159,10 @@ func storeRootBlock(ctx context.Context, so sobject.SharedObject, root *block.Bl
 // LocalProofKeyPrefix prefixes the completion proofs RetainWorld keeps in the
 // caller's local state store when the block store cannot hold them itself.
 const LocalProofKeyPrefix = "world-publication-v3/"
+
+// recheckReads is the number of block reads a recheck keeps in flight. A
+// recheck walks every block of a World on a device that is serving it.
+const recheckReads = 16
 
 // retainProofBatchEntries is the number of proofs, and of buffered block
 // writes, per durability fence.
@@ -234,6 +263,16 @@ func (p *retainProofs) known(ctx context.Context, refs []*block.BlockRef) ([]boo
 	}
 	for j, i := range provedIdx {
 		known[i] = exists[j]
+	}
+	return known, nil
+}
+
+// knownPending reports which refs have a proof this copy recorded and has not
+// yet flushed.
+func (p *retainProofs) knownPending(_ context.Context, refs []*block.BlockRef) ([]bool, error) {
+	known := make([]bool, len(refs))
+	for i, ref := range refs {
+		_, known[i] = p.pending[p.key(ref)]
 	}
 	return known, nil
 }
