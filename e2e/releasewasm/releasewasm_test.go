@@ -1754,9 +1754,10 @@ func TestQuickstartShellTabsComposedBrowserProof(t *testing.T) {
 	// and keeps the Shell inventory.
 	assertReattachedWithoutColdBoot(t, pageAttached, promotionGeneration)
 	waitForShellRecordCount(t, pageAttached, 6)
-	expectedInventory := browserShellRecordIDs(readBrowserShellTabsSnapshot(t, pageAttached))
-	if !sameStringSet(browserShellRecordIDs(readBrowserShellTabsSnapshot(t, pageB)), expectedInventory) {
-		t.Fatalf("Shell inventory did not survive host loss/promotion")
+	attachedSnapshot := readBrowserShellTabsSnapshot(t, pageAttached)
+	survivorSnapshot := readBrowserShellTabsSnapshot(t, pageB)
+	if !sameStringSet(browserShellRecordIDs(survivorSnapshot), browserShellRecordIDs(attachedSnapshot)) {
+		t.Fatalf("Shell inventory did not survive host loss/promotion: attached=%#v survivor=%#v", attachedSnapshot, survivorSnapshot)
 	}
 
 	// Check the promoted survivor is usable.
@@ -2611,14 +2612,31 @@ func resetShellTabsVisibly(t *testing.T, page playwright.Page) {
 		t.Fatalf("wait for Drive file browser before Shell reset: %v", err)
 	}
 
-	// Open the View menu and invoke the reset.
-	if err := page.Locator("button:visible:has-text('View')").First().Click(); err != nil {
-		t.Fatalf("open visible View menu: %v", err)
-	}
+	// Open the View menu and invoke the reset. A late route or Shell render can
+	// still close the menu and detach the item mid-click. A missed click leaves
+	// the inventory unchanged, so close the menu and try again.
+	view := page.Locator("button:visible:has-text('View')").First()
 	reset := page.Locator("[role='menuitem']:visible:has-text('Reset Shell Tabs')").First()
-	if err := reset.Click(); err != nil {
-		t.Fatalf("invoke visible Shell reset: %v", err)
+	var step string
+	var lastErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		if err := view.Click(playwright.LocatorClickOptions{
+			Timeout: playwright.Float(10000),
+		}); err != nil {
+			step, lastErr = "open visible View menu", err
+		} else if err := reset.Click(playwright.LocatorClickOptions{
+			Timeout: playwright.Float(10000),
+		}); err != nil {
+			step, lastErr = "invoke visible Shell reset", err
+		} else {
+			return
+		}
+		t.Logf("Shell reset attempt %d: %s: %v", attempt, step, lastErr)
+		if err := page.Keyboard().Press("Escape"); err != nil {
+			t.Logf("close View menu after failed Shell reset: %v", err)
+		}
 	}
+	t.Fatalf("%s: %v", step, lastErr)
 }
 
 func readComposedStartupMarks(t *testing.T, page playwright.Page) []composedStartupMark {
