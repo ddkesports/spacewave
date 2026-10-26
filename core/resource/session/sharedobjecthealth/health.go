@@ -9,21 +9,25 @@ import (
 
 // Sender sends SharedObject health snapshots.
 type Sender interface {
+	// SendHealth sends one health snapshot to the watcher.
 	SendHealth(*sobject.SharedObjectHealth) error
 }
 
-// StreamWatchable streams SharedObject health from a watchable.
+// StreamWatchable streams SharedObject health from a watchable. The first
+// message is the current health, or loading while the watchable is empty;
+// each later message is a change.
 func StreamWatchable(
 	ctx context.Context,
 	sender Sender,
 	healthCtr ccontainer.Watchable[*sobject.SharedObjectHealth],
 ) error {
-	if err := sender.SendHealth(Loading()); err != nil {
+	current := healthCtr.GetValue()
+	if err := sender.SendHealth(CloneOrLoading(current)); err != nil {
 		return err
 	}
 	return ccontainer.WatchChanges(
 		ctx,
-		nil,
+		current,
 		healthCtr,
 		func(health *sobject.SharedObjectHealth) error {
 			return sender.SendHealth(CloneOrLoading(health))
@@ -32,18 +36,20 @@ func StreamWatchable(
 	)
 }
 
-// StreamState streams ready/loading health derived from SharedObject state.
+// StreamState streams ready/loading health derived from SharedObject state,
+// starting with the health of the current state.
 func StreamState(
 	ctx context.Context,
 	sender Sender,
 	stateCtr ccontainer.Watchable[sobject.SharedObjectStateSnapshot],
 ) error {
-	if err := sender.SendHealth(Loading()); err != nil {
+	current := stateCtr.GetValue()
+	if err := sender.SendHealth(SnapshotState(stateCtr)); err != nil {
 		return err
 	}
 	return ccontainer.WatchChanges(
 		ctx,
-		nil,
+		current,
 		stateCtr,
 		func(snap sobject.SharedObjectStateSnapshot) error {
 			if snap == nil {
@@ -55,11 +61,8 @@ func StreamState(
 	)
 }
 
-// Wait sends loading, sends one health snapshot, and waits for cancellation.
+// Wait sends one health snapshot and waits for cancellation.
 func Wait(ctx context.Context, sender Sender, health *sobject.SharedObjectHealth) error {
-	if err := sender.SendHealth(Loading()); err != nil {
-		return err
-	}
 	if err := sender.SendHealth(health); err != nil {
 		return err
 	}

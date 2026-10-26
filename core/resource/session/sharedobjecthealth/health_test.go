@@ -109,7 +109,7 @@ func TestStreamWatchableSendsLoadingThenLifecycle(t *testing.T) {
 	}
 }
 
-func TestStreamWatchableSendsLoadingBeforeCurrentTypedHealth(t *testing.T) {
+func TestStreamWatchableSendsCurrentTypedHealthFirst(t *testing.T) {
 	// Run the preloaded typed-health test independently.
 	t.Parallel()
 
@@ -131,15 +131,8 @@ func TestStreamWatchableSendsLoadingBeforeCurrentTypedHealth(t *testing.T) {
 		errCh <- StreamWatchable(ctx, strm, healthCtr)
 	}()
 
-	// Receive the stream's loading state before its current value.
-	initial := recvHealth(t, strm.msgs)
-
-	// Assert that the watcher publishes loading first.
-	if initial.GetStatus() != sobject.SharedObjectHealthStatus_SHARED_OBJECT_HEALTH_STATUS_LOADING {
-		t.Fatalf("expected initial loading status, got %v", initial.GetStatus())
-	}
-
-	// Receive the current typed health state after loading.
+	// Receive the current typed health state as the first message, so a
+	// reader of one snapshot sees it instead of a loading placeholder.
 	current := recvHealth(t, strm.msgs)
 
 	// Assert that the current state preserves its closed status.
