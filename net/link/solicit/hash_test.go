@@ -2,6 +2,7 @@ package link_solicit
 
 import (
 	"bytes"
+	"encoding/hex"
 	"testing"
 
 	"github.com/s4wave/spacewave/net/peer"
@@ -162,5 +163,23 @@ func TestFindMatchingHashesEmpty(t *testing.T) {
 	matches = FindMatchingHashes(nil, h)
 	if len(matches) != 0 {
 		t.Fatalf("expected 0 matches, got %d", len(matches))
+	}
+}
+
+// TestComputeHashesKnownAnswers checks the hashes against values computed by
+// native Go. Both peers of a link must compute the same hashes, so a compiler
+// that hashes differently, as GoScript did for BLAKE3 inputs over 64 bytes,
+// fails here even though two peers it compiles still agree with each other.
+func TestComputeHashesKnownAnswers(t *testing.T) {
+	sid := ComputeSessionID(
+		peer.ID("12D3KooWNrAtf3h7dZisrUer4VPRw5djhq2DyipePVooXo3cW9Mn"),
+		peer.ID("12D3KooWSguLJqha8Lpt6qjMm85UiA7oFGzMgAaVqDzAtf78MDb8"),
+	)
+	if got, want := hex.EncodeToString(sid), "5fb4d834c723cc03265c034d59de74a20c41fcb74fc016fa34e24cddeeb217b4"; got != want {
+		t.Fatalf("session ID = %s, want %s", got, want)
+	}
+	h := ComputeProtocolHash(sid, protocol.ID("alpha/so-sync/2"), []byte("01m5x0nce0etbcxc9sr7t82m92"))
+	if got, want := hex.EncodeToString(h), "3fb9506638de97373bcc70874de3cd7229b71ba00bf125653b6f76823f4aa892"; got != want {
+		t.Fatalf("protocol hash = %s, want %s", got, want)
 	}
 }
