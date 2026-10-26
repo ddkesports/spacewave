@@ -3,6 +3,7 @@ package s4db
 import (
 	"cmp"
 	"encoding/binary"
+	"iter"
 	"math"
 	"slices"
 
@@ -733,10 +734,33 @@ func (s *space) usage() Usage {
 	return u
 }
 
+// clone returns a copy of s to change and encode apart from s, holding its
+// live counts in live's array. The copy's btrees share nodes with s's until
+// either changes them, so each may change without the other's lock.
+func (s *space) clone(live []uint16) *space {
+	// Copy the fields, then give the copy its own trees, counts, and queues.
+	c := *s
+	c.free, c.sizes, c.below = s.free.Copy(), s.sizes.Copy(), s.below.Copy()
+	c.live = append(live[:0], s.live...)
+	c.values, c.pages = slices.Clone(s.values), slices.Clone(s.pages)
+	c.chunks, c.reserved = slices.Clone(s.chunks), slices.Clone(s.reserved)
+	c.released, c.releasedPages, c.pendingAt = nil, 0, nil
+	return &c
+}
+
 // encode writes the space with the open extent closed.
 func (s *space) encode() []byte {
+	// Size the buffer for the runs: page numbers and lengths fit the varint
+	// of the file end, live byte counts two bytes, and tags any length.
+	var nlive int
+	for range s.liveRuns() {
+		nlive++
+	}
+	pw := len(binary.AppendUvarint(nil, s.end))
+	queued := len(s.values) + len(s.pages) + len(s.reserved)
+	b := make([]byte, 0, 8*binary.MaxVarintLen64+2*pw*(s.free.Len()+len(s.chunks))+(2*pw+2)*nlive+(binary.MaxVarintLen64+2*pw)*queued)
+
 	// Write the release marks, the file end, and the free runs.
-	var b []byte
 	u := func(v uint64) { b = binary.AppendUvarint(b, v) }
 	u(s.marks.seq)
 	u(s.marks.ckpt)
@@ -751,10 +775,9 @@ func (s *space) encode() []byte {
 	// Write the live value pages as runs of consecutive pages with equal
 	// live bytes, each starting at its gap from the previous run. Packed
 	// extents hold mostly full pages, so a filled file needs few runs.
-	runs := s.liveRuns()
-	u(uint64(len(runs)))
+	u(uint64(nlive)) // #nosec G115 -- counts are not negative.
 	var prev uint64
-	for _, r := range runs {
+	for r := range s.liveRuns() {
 		u(r.start - prev)
 		u(r.n)
 		u(uint64(r.bytes))
@@ -817,21 +840,32 @@ type liveRun struct {
 	bytes uint16
 }
 
-// liveRuns returns the live value pages as runs in page order.
-func (s *space) liveRuns() []liveRun {
-	var runs []liveRun
-	for i, b := range s.live {
-		if b == 0 {
-			continue
+// liveRuns yields the live value pages as runs in page order.
+func (s *space) liveRuns() iter.Seq[liveRun] {
+	return func(yield func(liveRun) bool) {
+		// Grow the current run while pages continue it, yielding it when
+		// one does not.
+		var cur liveRun
+		for i, b := range s.live {
+			if b == 0 {
+				continue
+			}
+			p := uint64(i) // #nosec G115 -- slice indexes are not negative.
+			if cur.n != 0 && cur.end() == p && cur.bytes == b {
+				cur.n++
+				continue
+			}
+			if cur.n != 0 && !yield(cur) {
+				return
+			}
+			cur = liveRun{run: run{start: p, n: 1}, bytes: b}
 		}
-		p := uint64(i)
-		if l := len(runs); l != 0 && runs[l-1].end() == p && runs[l-1].bytes == b {
-			runs[l-1].n++
-			continue
+
+		// Yield the last run.
+		if cur.n != 0 {
+			yield(cur)
 		}
-		runs = append(runs, liveRun{start: p, n: 1, bytes: b})
 	}
-	return runs
 }
 
 // decodeSpace reads an encoded space.

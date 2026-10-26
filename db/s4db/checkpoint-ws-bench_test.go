@@ -247,7 +247,7 @@ func BenchmarkCheckpointWorkingSet(b *testing.B) {
 		db.p.r = file
 		checkpointHeap(b, "built")
 		start = time.Now()
-		if err := db.w.saveTree(ctx, tree); err != nil {
+		if err := db.w.saveHeld(ctx, tree); err != nil {
 			b.Fatal(err)
 		}
 		saveTime += time.Since(start)

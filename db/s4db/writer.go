@@ -58,6 +58,9 @@ type writer struct {
 	// beforeBuild, when set by a test, runs as a background checkpoint
 	// starts building its tree.
 	beforeBuild func()
+	// beforeSave, when set by a test, runs with the tree as a background
+	// checkpoint releases the writer lock to encode its space copy.
+	beforeSave func(t *tree)
 	// buildLocked is set while this handle's background checkpoint holds
 	// a shared file's build lock. It is set under the writer lock.
 	buildLocked atomic.Bool
@@ -72,6 +75,13 @@ type writer struct {
 	// changed lists the commit records published since the state a
 	// background checkpoint builds.
 	changed []*record
+	// spaceLen is the length of the last space record before padding, which
+	// sizes the next one, or zero before the first.
+	spaceLen int
+	// saveLive is the live counts array of the last space copy a checkpoint
+	// encoded, reused by the next copy. A copy being encoded holds it, so a
+	// checkpoint that starts meanwhile allocates its own.
+	saveLive []uint16
 }
 
 // lock takes the writer lock and brings the writer up to date with records
@@ -646,6 +656,17 @@ func (w *writer) checkpoint(ctx context.Context) error {
 	if err := t.build(); err != nil {
 		return err
 	}
+	return w.saveHeld(ctx, t)
+}
+
+// saveHeld saves t without releasing the writer lock. The caller holds it.
+func (w *writer) saveHeld(ctx context.Context, t *tree) error {
+	if err := w.prepareTree(t); err != nil || t.save == nil {
+		return err
+	}
+	if err := t.encodeSpace(); err != nil {
+		return err
+	}
 	return w.saveTree(ctx, t)
 }
 
@@ -805,7 +826,26 @@ func (w *writer) runCheckpoint(st *state, stripe int) {
 		t.evict()
 		err = nil
 	} else if err == nil {
-		err = w.saveTree(ctx, t)
+		err = w.prepareTree(t)
+	}
+
+	// Encode the saved space without the writer lock, then take the lock
+	// again to save the tree. A failed lock leaves the space holding the
+	// record's pages, which the saved space does not name.
+	if err == nil && t.save != nil {
+		w.unlock(nil)
+		if w.beforeSave != nil {
+			w.beforeSave(t)
+		}
+		err = t.encodeSpace()
+		if lerr := w.lock(ctx); lerr != nil {
+			w.db.release(st, stripe)
+			w.unlockBuild()
+			return
+		}
+		if err == nil {
+			err = w.saveTree(ctx, t)
+		}
 	}
 	w.db.release(st, stripe)
 	if err == nil {
@@ -840,6 +880,29 @@ type tree struct {
 	carried *carried
 	// carriedSeq is the last record carried holds.
 	carriedSeq uint64
+	// save is the space record prepareTree began, nil when the tree was
+	// dropped.
+	save *spaceSave
+}
+
+// spaceSave is a space record a checkpoint encodes without the writer lock.
+type spaceSave struct {
+	// rec is the pages taken for the record.
+	rec run
+	// from is the space rec was taken from. A reloaded space does not hold
+	// it.
+	from *space
+	// seq is the last record the copied space includes.
+	seq uint64
+	// old is the space record the checkpoint replaces.
+	old extentRef
+	// sp is the copy of the space to encode, nil once encoded.
+	sp *space
+	// enc is the copy's encoding.
+	enc []byte
+	// live is the copy's live counts array, which saveTree hands back to
+	// the writer for the next copy once the encode is done with it.
+	live []uint16
 }
 
 // errDropped reports a tree abandoned while it built: either its space was
@@ -946,30 +1009,115 @@ func (t *tree) fold(changed []*record) {
 	}
 }
 
-// saveTree saves t and a superblock naming it, and publishes the state
-// moved onto it. Commits after t's state stay in the overlay, and the space
-// is saved as of the last of them. A tree built on a replaced checkpoint is
-// dropped. The caller holds the writer lock.
-func (w *writer) saveTree(ctx context.Context, t *tree) error {
-	// End the reservation. Drop a tree whose space was reloaded or whose
-	// checkpoint another replaced, freeing its pages at once and evicting
-	// them from the cache: no reader has seen them.
-	db, sp, b, st := w.db, w.sp, t.b, t.st
+// prepareTree begins saving t under the writer lock. It drops a tree whose
+// space was reloaded or whose checkpoint another replaced, freeing its pages
+// at once and evicting them from the cache: no reader has seen them.
+// Otherwise it closes the open value extent, takes pages for the space
+// record, and copies the space into t.save, so encodeSpace can encode it
+// without the lock. Taking the pages first lets the copy name them in use.
+func (w *writer) prepareTree(t *tree) error {
+	// Drop a tree that can no longer be saved.
+	db, sp, st := w.db, w.sp, t.st
 	cur := db.cur.Load()
 	if t.sp != nil && t.sp != sp {
 		t.evict()
 		return nil
 	}
-	out := b.out
-	sp.reserved = dropRuns(sp.reserved, out.runs)
 	if cur.gen != st.gen {
+		sp.reserved = dropRuns(sp.reserved, t.b.out.runs)
 		t.evict()
-		for _, r := range out.runs {
+		for _, r := range t.b.out.runs {
 			sp.addFree(r)
 		}
 		return nil
 	}
-	sp.addFree(out.unused())
+	if !slices.ContainsFunc(sp.chunks, func(c run) bool { return c.end()*pageSize == st.end }) {
+		return errors.Wrap(ErrCorrupt, "log chunk not in the space")
+	}
+
+	// Close the open value extent and take pages for the record, sized from
+	// the last record with room for the space to grow.
+	sp.closeOpen(cur.seq)
+	est := w.spaceLen
+	if est == 0 {
+		est = int(cur.sb.space.n)
+	}
+	rec := sp.alloc(pagesFor(est+est/8) + 1)
+
+	// Copy the space for encodeSpace, lending it the last copy's live counts.
+	cp := sp.clone(w.saveLive)
+	w.saveLive = nil
+	t.save = &spaceSave{rec: rec, from: sp, seq: cur.seq, old: cur.sb.space, sp: cp, live: cp.live}
+	return nil
+}
+
+// encodeSpace applies to the copied space what saving t frees and encodes
+// it. It reads only t and the copy, so it runs without the writer lock.
+func (t *tree) encodeSpace() error {
+	// Sort the replaced pages once for both spaces.
+	sv := t.save
+	slices.Sort(t.b.freed)
+	if err := sv.sp.retire(t, sv.old); err != nil {
+		return err
+	}
+	sv.enc, sv.sp = sv.sp.encode(), nil
+	return nil
+}
+
+// retire applies to s what saving t frees: its reservations end, the
+// reserved pages it left unused return free, and the pages it replaced,
+// the old space record, and the log chunks before the one holding the
+// tree's next record wait for release until no snapshot reads the previous
+// tree.
+func (s *space) retire(t *tree, old extentRef) error {
+	// End the reservation and return the unused pages.
+	out, st := t.b.out, t.st
+	s.reserved = dropRuns(s.reserved, out.runs)
+	s.addFree(out.unused())
+
+	// Queue the replaced pages, the old space record, and the old log
+	// chunks.
+	s.freePages(t.b.freed, st.seq)
+	s.pend(&s.pages, pending{run: run{start: old.off / pageSize, n: pagesFor(int(old.n))}, tag: st.seq})
+	keep := slices.IndexFunc(s.chunks, func(c run) bool { return c.end()*pageSize == st.end })
+	if keep < 0 {
+		return errors.Wrap(ErrCorrupt, "log chunk not in the space")
+	}
+	for _, c := range s.chunks[:keep] {
+		s.pend(&s.pages, pending{run: c, tag: st.seq})
+	}
+	s.chunks = s.chunks[keep:]
+	return nil
+}
+
+// saveTree saves t and a superblock naming it, and publishes the state
+// moved onto it. Commits after t's state stay in the overlay. The space is
+// saved as encodeSpace encoded it, as of the last commit before prepareTree,
+// when the encoding fits the pages prepareTree took; else as of the last
+// commit. A tree whose space was reloaded or whose checkpoint another
+// replaced since prepareTree is dropped. The caller holds the writer lock.
+func (w *writer) saveTree(ctx context.Context, t *tree) error {
+	// Take back the copy's live counts, and drop a tree that can no longer
+	// be saved, as prepareTree does, also returning the record's pages. A
+	// space reloaded since prepareTree holds neither the record's pages nor
+	// the tree's.
+	db, sp, b, st, sv := w.db, w.sp, t.b, t.st, t.save
+	cur := db.cur.Load()
+	w.saveLive = sv.live
+	if sv.from != sp {
+		t.evict()
+		return nil
+	}
+	out := b.out
+	if cur.gen != st.gen {
+		sp.reserved = dropRuns(sp.reserved, out.runs)
+		t.evict()
+		for _, r := range out.runs {
+			sp.addFree(r)
+		}
+		sp.addFree(sv.rec)
+		return nil
+	}
 
 	// The root is the new top page, or an existing page when nothing above
 	// it changed.
@@ -978,25 +1126,24 @@ func (w *writer) saveTree(ctx context.Context, t *tree) error {
 		root = t.top.page
 	}
 	fresh := out.count
-
-	// Free the replaced pages, the old space record, and the log chunks
-	// before the one holding the tree's next record once no snapshot reads
-	// the previous tree.
-	sp.freePages(b.freed, st.seq)
-	old := cur.sb.space
-	sp.freePages(pageRange(old.off/pageSize, pagesFor(int(old.n))), st.seq)
-	keep := slices.IndexFunc(sp.chunks, func(c run) bool { return c.end()*pageSize == st.end })
-	if keep < 0 {
-		return errors.Wrap(ErrCorrupt, "log chunk not in the space")
+	if err := sp.retire(t, sv.old); err != nil {
+		return err
 	}
-	for _, c := range sp.chunks[:keep] {
-		sp.freePages(pageRange(c.start, c.n), st.seq)
-	}
-	sp.chunks = sp.chunks[keep:]
 
-	// Close the open value extent and save the space.
-	sp.closeOpen(cur.seq)
-	ref, err := w.writeSpace(sp)
+	// Write the copy's encoding into the record's pages. When it outgrew
+	// them, return them and save the space as it is now.
+	var ref extentRef
+	var err error
+	spaceSeq := sv.seq
+	if pagesFor(len(sv.enc)) <= sv.rec.n {
+		ref, err = w.writeSpaceRecord(sv.rec, sv.enc)
+		w.spaceLen = len(sv.enc)
+	} else {
+		sp.addFree(sv.rec)
+		sp.closeOpen(cur.seq)
+		ref, err = w.writeSpace(sp)
+		spaceSeq, w.spaceLen = cur.seq, int(ref.n)
+	}
 	if err != nil {
 		return err
 	}
@@ -1022,7 +1169,7 @@ func (w *writer) saveTree(ctx context.Context, t *tree) error {
 		count:     uint64(st.count),                                        // #nosec G115 -- key counts are not negative.
 		treePages: cur.sb.treePages + uint64(fresh) - uint64(len(b.freed)), // #nosec G115 -- counts are not negative.
 		space:     ref,
-		spaceSeq:  cur.seq,
+		spaceSeq:  spaceSeq,
 		logPos:    st.pos,
 		logEnd:    st.end,
 		logCrc:    st.crc,
@@ -1059,6 +1206,13 @@ func pageRange(start, n uint64) []uint64 {
 // writeSpace saves sp in newly allocated pages.
 func (w *writer) writeSpace(sp *space) (extentRef, error) {
 	r, b := sp.allocRecord()
+	return w.writeSpaceRecord(r, b)
+}
+
+// writeSpaceRecord writes the space record b into r's pages, padded to fill
+// them.
+func (w *writer) writeSpaceRecord(r run, b []byte) (extentRef, error) {
+	b = append(b, make([]byte, pageOff(r.n)-int64(len(b)))...)
 	if _, err := w.db.s.WriteAt(b, pageOff(r.start)); err != nil {
 		return extentRef{}, err
 	}
