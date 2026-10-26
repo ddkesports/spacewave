@@ -172,9 +172,10 @@ func TestCaptureDaemonGoroutineProfileWritesProfile(t *testing.T) {
 	ctx := context.Background()
 	traceClient := newDebugTraceTestClient(t)
 	var out bytes.Buffer
-	release := make(chan struct{})
+	started, release := make(chan struct{}), make(chan struct{})
 	t.Cleanup(func() { close(release) })
-	go debugGoroutineProfileMarker(release)
+	go debugGoroutineProfileMarker(started, release)
+	<-started
 
 	// Capture the goroutine profile the way the CLI does.
 	byteCount, err := trace_capture.CaptureGoroutineProfile(ctx, traceClient, &out, trace_capture.GoroutineProfileArgs{})
@@ -208,9 +209,10 @@ func TestCaptureDaemonGoroutineProfileWritesProfile(t *testing.T) {
 	}
 }
 
-// debugGoroutineProfileMarker blocks until release closes so the goroutine
-// profile has a known stack to find.
-func debugGoroutineProfileMarker(release <-chan struct{}) {
+// debugGoroutineProfileMarker closes started once running, then blocks until
+// release closes so the goroutine profile has a known stack to find.
+func debugGoroutineProfileMarker(started chan<- struct{}, release <-chan struct{}) {
+	close(started)
 	<-release
 }
 
