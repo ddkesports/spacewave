@@ -314,7 +314,7 @@ func TestBlockPassRescuesAdoptedBlocks(t *testing.T) {
 	if err := rg.AddRef(ctx, "bucket", parent); err != nil {
 		t.Fatal(err)
 	}
-	rescued, err := rg.RescueAdopted(ctx, mark)
+	rescued, _, err := rg.RescueAdopted(ctx, mark, nil)
 	if err != nil || rescued != 2 || !mark.Live.Has(parent) || !mark.Live.Has(child) {
 		t.Fatalf("rescued %d err=%v", rescued, err)
 	}

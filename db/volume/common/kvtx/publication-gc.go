@@ -304,19 +304,29 @@ func (v *Volume) sweepUnreached(ctx context.Context, mark *block_gc.BlockMark, s
 		}
 		stats.RescuedNodes += caught
 
-		// Rescue the rest and sweep a budget of chunks under the writer.
+		// Rescue the rest and sweep a budget of chunks under the writer. The
+		// budget covers the rescue and the sweep together.
 		var batch []string
 		var commit <-chan struct{}
 		var held time.Time
+		var rescue time.Duration
 		err = v.withDirectAtomic(ctx, func(blocks block.StoreOps, rg *block_gc.RefGraph) error {
-			// Rescue the blocks adopted since the last transaction.
+			// Rescue the blocks adopted since the last transaction. A rescue
+			// the budget or a waiting writer stopped leaves the rest for the
+			// next catch-up and sweeps nothing: blocks are removed only in a
+			// transaction whose rescue walked everything.
 			held = time.Now()
-			rescued, err := rg.RescueAdopted(ctx, mark)
+			yield := func() bool { return time.Since(held) >= sweepBudget || v.writersWaiting() }
+			rescued, done, err := rg.RescueAdopted(ctx, mark, yield)
 			if err != nil {
 				return err
 			}
+			rescue = time.Since(held)
 			stats.RescuedNodes += rescued
-			stats.SweepLongestRescue = max(stats.SweepLongestRescue, time.Since(held))
+			stats.SweepLongestRescue = max(stats.SweepLongestRescue, rescue)
+			if !done {
+				return nil
+			}
 
 			// A block of unknown references may name any unreached block.
 			// Wait for a later commit to add the lists of the blocks the
@@ -332,7 +342,6 @@ func (v *Volume) sweepUnreached(ctx context.Context, mark *block_gc.BlockMark, s
 			}
 
 			// Sweep chunks until the budget runs out or a writer waits.
-			txStart := time.Now()
 			for len(nodes) != 0 {
 				chunkStart := time.Now()
 				chunk := nodes[:min(len(nodes), size)]
@@ -344,7 +353,7 @@ func (v *Volume) sweepUnreached(ctx context.Context, mark *block_gc.BlockMark, s
 				}
 				batch = append(batch, removed...)
 				size = nextChunkSize(size, time.Since(chunkStart))
-				if time.Since(txStart) >= sweepBudget || v.writersWaiting() {
+				if yield() {
 					break
 				}
 			}
@@ -354,8 +363,8 @@ func (v *Volume) sweepUnreached(ctx context.Context, mark *block_gc.BlockMark, s
 		// Time the transaction through its commit, forget the pending proofs
 		// of the blocks it may have removed, and count only the blocks of
 		// committed transactions.
-		if !held.IsZero() {
-			stats.SweepLongestTx = max(stats.SweepLongestTx, time.Since(held))
+		if took := time.Since(held); !held.IsZero() && took > stats.SweepLongestTx {
+			stats.SweepLongestTx, stats.SweepLongestTxRescue = took, rescue
 		}
 		v.forgetSweptProofs(batch)
 		if err != nil {

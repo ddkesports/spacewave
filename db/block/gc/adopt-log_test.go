@@ -81,7 +81,7 @@ func TestAdoptLogAppendsWithoutScans(t *testing.T) {
 
 	// A rescue consumes every record.
 	mark := &BlockMark{Live: NewNodeSet()}
-	rescued, err := rg.RescueAdopted(ctx, mark)
+	rescued, _, err := rg.RescueAdopted(ctx, mark, nil)
 	if err != nil || rescued != writes {
 		t.Fatalf("rescued %d err=%v, want %d", rescued, err, writes)
 	}
@@ -98,7 +98,7 @@ func TestAdoptLogAppendsWithoutScans(t *testing.T) {
 	if n := countKeys(t, store, adoptKey(writes)); n != 1 {
 		t.Fatalf("append after rescue wrote %d records at seq %d, want 1", n, writes)
 	}
-	rescued, err = rg.RescueAdopted(ctx, mark)
+	rescued, _, err = rg.RescueAdopted(ctx, mark, nil)
 	if err != nil || rescued != 1 || !mark.Live.Has(late) {
 		t.Fatalf("second rescue %d err=%v", rescued, err)
 	}
@@ -153,7 +153,7 @@ func TestAdoptLogLegacyPass(t *testing.T) {
 
 	// The rescue reads all four, and ending the pass deletes the rest.
 	mark := &BlockMark{Live: NewNodeSet()}
-	rescued, err := rg.RescueAdopted(ctx, mark)
+	rescued, _, err := rg.RescueAdopted(ctx, mark, nil)
 	if err != nil || rescued != 4 || !mark.Live.Has(old[0]) {
 		t.Fatalf("rescued %d err=%v, want 4", rescued, err)
 	}

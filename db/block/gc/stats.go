@@ -55,6 +55,9 @@ type Stats struct {
 	SweepLongestTx time.Duration
 	// SweepLongestRescue is the longest rescue inside a sweep transaction.
 	SweepLongestRescue time.Duration
+	// SweepLongestTxRescue is the rescue's share of SweepLongestTx; the rest
+	// swept blocks and committed.
+	SweepLongestTxRescue time.Duration
 	// LiveNodes is the number of nodes the last mark reached.
 	LiveNodes int
 	// UnreachedBlocks is the number of tracked blocks the last mark did not

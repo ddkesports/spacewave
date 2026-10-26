@@ -38,7 +38,8 @@ func (g *RefGraph) Reachable(ctx context.Context) (*NodeSet, error) {
 		}
 
 		// Walk from them.
-		return walkTx(ctx, tx, reached, stack, nil)
+		_, err = walkTx(ctx, tx, reached, stack, nil, nil)
+		return err
 	})
 	if err != nil {
 		return nil, err

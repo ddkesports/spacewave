@@ -51,6 +51,11 @@ type BlockMark struct {
 	awaiting []namedNode
 	// logSeen is the first adopt log record no rescue or catch-up walked.
 	logSeen uint64
+	// frontier lists the nodes in Live whose records no walk has read yet,
+	// left by a walk that stopped early. Adding a node to Live before its
+	// walk is always safe, since Live only keeps blocks, but a sweep may
+	// remove nothing until the frontier is empty.
+	frontier []namedNode
 }
 
 // namedNode is a reached node with the node whose record reached it.
@@ -120,8 +125,7 @@ func (g *RefGraph) MarkBlocks(ctx context.Context) (*BlockMark, error) {
 		}
 
 		// Walk the owned blocks, noting those of unknown references.
-		err = walkTx(ctx, tx, live, stack, mark.noteUnknown)
-		if err != nil {
+		if _, err := walkTx(ctx, tx, live, stack, mark.noteUnknown, nil); err != nil {
 			return err
 		}
 
@@ -185,8 +189,10 @@ func seedMarkTx(ctx context.Context, tx kvtx.Tx, mark *BlockMark, seed func(node
 // reached it. It pops chunks of nodes and loads the index pages of each
 // chunk's records together in key order, so a cold store costs a batch of
 // reads per chunk instead of one read per node, and the work list stays small
-// however wide the graph is.
-func walkTx(ctx context.Context, tx kvtx.Tx, reached *NodeSet, stack []namedNode, untracked func(namedNode)) error {
+// however wide the graph is. stop, when set, is checked after each chunk; once
+// it reports true, the walk returns the nodes it reached but did not walk.
+// Otherwise it walks until the stack is empty and returns nil.
+func walkTx(ctx context.Context, tx kvtx.Tx, reached *NodeSet, stack []namedNode, untracked func(namedNode), stop func() bool) ([]namedNode, error) {
 	// Stack each node on its first visit, with the node that reached it.
 	visit := func(node, namer string) {
 		if reached.Add(node) {
@@ -220,15 +226,20 @@ func walkTx(ctx context.Context, tx kvtx.Tx, reached *NodeSet, stack []namedNode
 			keys = append(keys, r.key)
 		}
 		if err := kvtx.Prefetch(ctx, tx, keys); err != nil {
-			return err
+			return nil, err
 		}
 		for _, r := range records {
 			if err := walkRecordsTx(ctx, tx, r, visit, untracked); err != nil {
-				return err
+				return nil, err
 			}
 		}
+
+		// Stop between chunks when asked.
+		if len(stack) != 0 && stop != nil && stop() {
+			return stack, nil
+		}
 	}
-	return nil
+	return nil, nil
 }
 
 // walkRecord is the key of the records of a node a walk reached.
@@ -346,9 +357,10 @@ func (g *RefGraph) EndBlockPass(ctx context.Context) error {
 	})
 }
 
-// CatchUpAdopted walks, like RescueAdopted, from the unknown blocks the mark
-// listed and from the blocks of the adopt log records no rescue or catch-up
-// walked yet, in read transactions of at most MarkReadBudget each, and
+// CatchUpAdopted walks, like RescueAdopted, from the frontier an earlier walk
+// left, from the unknown blocks the mark listed and from the blocks of the
+// adopt log records no rescue or catch-up walked yet, in read transactions of
+// at most about MarkReadBudget each, and
 // returns the number of nodes it added to mark.Live. It leaves the log for
 // RescueAdopted to consume, which then walks only the records written since,
 // so the walk a sweep transaction holds the writer for scales with the writes
@@ -357,31 +369,32 @@ func (g *RefGraph) EndBlockPass(ctx context.Context) error {
 // read logs its object.
 func (g *RefGraph) CatchUpAdopted(ctx context.Context, mark *BlockMark) (int, error) {
 	before := mark.Live.Len()
-	stack := mark.takeAwaiting()
+	mark.frontier = append(mark.frontier, mark.takeAwaiting()...)
 	for done := false; !done; {
 		err := g.transaction(ctx, false, func(ctx context.Context, tx kvtx.Tx) (err error) {
-			done, err = catchUpTx(ctx, tx, mark, stack, MarkReadBudget)
+			done, err = catchUpTx(ctx, tx, mark, MarkReadBudget)
 			return err
 		})
 		if err != nil {
 			return 0, err
 		}
-		stack = nil
 	}
 	return mark.Live.Len() - before, nil
 }
 
-// catchUpTx walks from stack, then from the blocks of the unwalked adopt log
-// records in order until budget, and reports whether it walked them all. A
-// legacy log has no order to resume in, so it leaves that to RescueAdopted.
-func catchUpTx(ctx context.Context, tx kvtx.Tx, mark *BlockMark, stack []namedNode, budget time.Duration) (bool, error) {
-	// Read the log's range, then walk from the blocks read again.
+// catchUpTx walks from the frontier, then from the blocks of the unwalked
+// adopt log records in order, until budget, and reports whether it walked
+// them all. It leaves what it did not walk in the frontier. A legacy log has
+// no order to resume in, so it leaves that to RescueAdopted.
+func catchUpTx(ctx context.Context, tx kvtx.Tx, mark *BlockMark, budget time.Duration) (bool, error) {
+	// Read the log's range, then walk the frontier.
 	start := time.Now()
+	stop := func() bool { return time.Since(start) >= budget }
 	r, open, err := readPassTx(ctx, tx)
 	if err != nil {
 		return false, err
 	}
-	if err := walkTx(ctx, tx, mark.Live, stack, mark.noteUnknown); err != nil {
+	if done, err := walkFrontierTx(ctx, tx, mark, nil, stop); err != nil || !done {
 		return false, err
 	}
 	if !open || r.legacy {
@@ -390,19 +403,33 @@ func catchUpTx(ctx context.Context, tx kvtx.Tx, mark *BlockMark, stack []namedNo
 
 	// Walk from each record's blocks until the budget runs out.
 	for seq := max(r.lo, mark.logSeen); seq < r.hi; seq++ {
-		if time.Since(start) >= budget {
+		if stop() {
 			return false, nil
 		}
 		blocks, err := readAdoptLogTx(ctx, tx, adoptRange{lo: seq, hi: seq + 1})
 		if err != nil {
 			return false, err
 		}
-		if err := walkTx(ctx, tx, mark.Live, adoptedStack(mark, blocks), mark.noteUnknown); err != nil {
+		mark.logSeen = seq + 1
+		if done, err := walkFrontierTx(ctx, tx, mark, blocks, stop); err != nil || !done {
 			return false, err
 		}
-		mark.logSeen = seq + 1
 	}
 	return true, nil
+}
+
+// walkFrontierTx adds the blocks to mark.Live and walks from them and the
+// frontier until stop, leaving what it did not walk in the frontier, and
+// reports whether the frontier is empty.
+func walkFrontierTx(ctx context.Context, tx kvtx.Tx, mark *BlockMark, blocks []string, stop func() bool) (bool, error) {
+	// Walk the frontier and the new blocks, keeping what the stop left.
+	stack := append(mark.frontier, adoptedStack(mark, blocks)...)
+	left, err := walkTx(ctx, tx, mark.Live, stack, mark.noteUnknown, stop)
+	if err != nil {
+		return false, err
+	}
+	mark.frontier = left
+	return len(left) == 0, nil
 }
 
 // adoptedStack adds the blocks to mark.Live and returns those it added, for a
@@ -418,15 +445,20 @@ func adoptedStack(mark *BlockMark, blocks []string) []namedNode {
 }
 
 // RescueAdopted consumes the adopt log, adding each block it names and every
-// node reachable from one to mark.Live, and returns the number of nodes added.
-// A sweep runs it first in each transaction that removes blocks, so no block
-// a committed write adopted is removed. It skips the records CatchUpAdopted
-// walked. It reads again the lists of the unknown blocks the mark listed and
-// walks those it finds. A reached block without a list counts in
-// mark.Unknown, and the sweep must remove nothing while any does. An empty
-// log is left unwritten, so a rescue that finds nothing new commits nothing.
-func (g *RefGraph) RescueAdopted(ctx context.Context, mark *BlockMark) (int, error) {
+// node reachable from one to mark.Live, and returns the number of nodes added
+// and whether it walked them all. A sweep runs it first in each transaction
+// that removes blocks, and removes blocks only when it walked them all in
+// that transaction, so no block a committed write adopted is removed. It
+// skips the records CatchUpAdopted walked. It reads again the lists of the
+// unknown blocks the mark listed and walks those it finds, with the frontier
+// an earlier walk left. stop, when set, ends the walk between chunks and
+// leaves the rest in the frontier for CatchUpAdopted to walk without the
+// writer. A reached block without a list counts in mark.Unknown, and the
+// sweep must remove nothing while any does. An empty log is left unwritten,
+// so a rescue that finds nothing new commits nothing.
+func (g *RefGraph) RescueAdopted(ctx context.Context, mark *BlockMark, stop func() bool) (int, bool, error) {
 	var rescued int
+	var done bool
 	err := g.transaction(ctx, true, func(ctx context.Context, tx kvtx.Tx) error {
 		// Consume the log and advance the pass past it.
 		r, open, err := readPassTx(ctx, tx)
@@ -449,15 +481,15 @@ func (g *RefGraph) RescueAdopted(ctx context.Context, mark *BlockMark) (int, err
 			mark.logSeen = next
 		}
 
-		// Walk from the listed unknown blocks and the logged blocks the mark
-		// and earlier rescues did not reach.
+		// Walk from the frontier, the listed unknown blocks and the logged
+		// blocks the mark and earlier rescues did not reach.
 		before := mark.Live.Len()
-		stack := append(mark.takeAwaiting(), adoptedStack(mark, blocks)...)
-		err = walkTx(ctx, tx, mark.Live, stack, mark.noteUnknown)
+		mark.frontier = append(mark.frontier, mark.takeAwaiting()...)
+		done, err = walkFrontierTx(ctx, tx, mark, blocks, stop)
 		rescued = mark.Live.Len() - before
 		return err
 	})
-	return rescued, err
+	return rescued, done, err
 }
 
 // readAdoptLogTx returns the blocks of every record in the adopt log r.

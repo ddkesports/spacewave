@@ -118,7 +118,7 @@ func testMarkScanAcrossWrites(t *testing.T, rnd *rand.Rand) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := rg.RescueAdopted(ctx, mark); err != nil {
+	if _, _, err := rg.RescueAdopted(ctx, mark, nil); err != nil {
 		t.Fatal(err)
 	}
 

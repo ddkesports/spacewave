@@ -30,6 +30,11 @@ type storageMaintainer interface {
 // before the collector backs off after passes that find little.
 const markIntervals = 15
 
+// slowSweepTx is the sweep transaction time past which a pass warns. A sweep
+// transaction holds the writer every World commit waits on, and its budget
+// keeps it near 50 ms.
+const slowSweepTx = 500 * time.Millisecond
+
 // runGCSweep runs the periodic GC sweep goroutine. It waits for the volume to
 // become ready, then collects its reference graph on each interval.
 func (c *Controller) runGCSweep(ctx context.Context) error {
@@ -136,6 +141,13 @@ func (c *Controller) runGCSweep(ctx context.Context) error {
 				WithField("more", stats.More).
 				WithField("duration", stats.Duration.String()).
 				Info("gc sweep completed")
+		}
+		if stats.SweepLongestTx >= slowSweepTx {
+			c.le.
+				WithField("tx", stats.SweepLongestTx.String()).
+				WithField("rescue", stats.SweepLongestTxRescue.String()).
+				WithField("sweep", (stats.SweepLongestTx - stats.SweepLongestTxRescue).String()).
+				Warn("slow sweep transaction")
 		}
 		if stats.UnknownBlocks != 0 {
 			c.le.

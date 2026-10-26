@@ -3,6 +3,7 @@ package block_gc
 import (
 	"context"
 	"slices"
+	"strconv"
 	"testing"
 
 	store_kvtx_inmem "github.com/s4wave/spacewave/db/store/kvtx/inmem"
@@ -38,7 +39,7 @@ func TestRescueAdoptedUntrackedParent(t *testing.T) {
 		t.Fatal(err)
 	}
 	deleteChildList(t, store, parent)
-	if _, err := rg.RescueAdopted(ctx, mark); err != nil {
+	if _, _, err := rg.RescueAdopted(ctx, mark, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -49,7 +50,7 @@ func TestRescueAdoptedUntrackedParent(t *testing.T) {
 		if mark.Unknown != 1 || !mark.Awaitable() || !slices.Equal(mark.UnknownSample, []string{parent}) {
 			t.Fatalf("unknown %d %v, want the parent", mark.Unknown, mark.UnknownSample)
 		}
-		if _, err := rg.RescueAdopted(ctx, mark); err != nil {
+		if _, _, err := rg.RescueAdopted(ctx, mark, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -68,7 +69,64 @@ func TestRescueAdoptedUntrackedParent(t *testing.T) {
 	}
 
 	// The rescue then consumes the log without walking it again.
-	if n, err := rg.RescueAdopted(ctx, mark); err != nil || n != 0 || mark.logSeen == 0 {
+	if n, _, err := rg.RescueAdopted(ctx, mark, nil); err != nil || n != 0 || mark.logSeen == 0 {
 		t.Fatalf("rescue after catch-up added %d, log seen %d, err=%v", n, mark.logSeen, err)
+	}
+}
+
+// TestRescueAdoptedStops checks that a rescue a stop ends after one chunk
+// reports the walk unfinished and leaves the rest in the frontier, so the
+// sweep removes nothing, and that a catch-up in read transactions walks the
+// rest, so the next rescue finishes without walking it under the writer.
+func TestRescueAdoptedStops(t *testing.T) {
+	// A parent with more children than one chunk walks, none of them owned.
+	ctx := context.Background()
+	store := store_kvtx_inmem.NewStore()
+	rg := NewRefGraph(store)
+	t.Cleanup(func() { rg.Close() })
+
+	// Record its references.
+	parent := BlockIRI(testBlockRef(t, "wide-parent"))
+	edges := []RefEdge{{Subject: NodeUnreferenced, Object: parent}}
+	children := make([]string, reachChunk+1)
+	for i := range children {
+		children[i] = BlockIRI(testBlockRef(t, "wide-child-"+strconv.Itoa(i)))
+		edges = append(edges, RefEdge{Subject: parent, Object: children[i]})
+	}
+	if err := rg.ApplyRefBatch(ctx, edges, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Open a pass and mark: the parent and its children are unreached.
+	if err := rg.BeginBlockPass(ctx); err != nil {
+		t.Fatal(err)
+	}
+	mark, err := rg.MarkBlocks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A bucket adopts the parent, and a rescue that stops at once walks only
+	// the parent's chunk.
+	if err := rg.AddRef(ctx, "bucket", parent); err != nil {
+		t.Fatal(err)
+	}
+	stop := func() bool { return true }
+	if _, done, err := rg.RescueAdopted(ctx, mark, stop); err != nil || done || len(mark.frontier) == 0 {
+		t.Fatalf("stopped rescue done=%v frontier=%d err=%v", done, len(mark.frontier), err)
+	}
+
+	// The catch-up walks the frontier, and the next rescue, even one that
+	// stops at once, has nothing left to walk.
+	if _, err := rg.CatchUpAdopted(ctx, mark); err != nil {
+		t.Fatal(err)
+	}
+	if _, done, err := rg.RescueAdopted(ctx, mark, stop); err != nil || !done || len(mark.frontier) != 0 {
+		t.Fatalf("rescue after catch-up done=%v frontier=%d err=%v", done, len(mark.frontier), err)
+	}
+	for _, child := range children {
+		if !mark.Live.Has(child) {
+			t.Fatalf("child %s not live", child)
+		}
 	}
 }
