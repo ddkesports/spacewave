@@ -17,8 +17,7 @@ import (
 // rejects a second acknowledgement.
 func TestAcknowledgeAlarmOp(t *testing.T) {
 	// Start a World holding a firing Alarm.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	tb := world_testbed.MustDefault(t, ctx)
 	key, now := "alarms/forge-down", time.UnixMilli(1_793_000_000_000)
 	fired := (*Alarm)(nil).Next(&Condition{Firing: true, Summary: "forge is down"}, 0, now)
@@ -62,8 +61,7 @@ func TestAcknowledgeAlarmOp(t *testing.T) {
 // another.
 func TestSetReads(t *testing.T) {
 	// Start a World holding an Alarm and three objects.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	tb := world_testbed.MustDefault(t, ctx)
 	key := "alarms/forge-down"
 	execOp(t, ctx, tb, func(ctx context.Context, tx world.WorldState) error {
