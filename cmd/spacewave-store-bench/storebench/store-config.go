@@ -14,8 +14,8 @@ type StoreConfig struct {
 	BodyType string
 	// EngineID is the World engine ID.
 	EngineID string
-	// CacheBytes is the index page cache of each s4db volume. Zero keeps
-	// s4db's default.
+	// CacheBytes is the index page cache of each s4db volume. Zero keeps the
+	// native storage's, which a server runs with.
 	CacheBytes int64
 	// CheckpointMaxBytes is the overlay size at which each s4db volume starts
 	// a checkpoint. Zero keeps s4db's default.
