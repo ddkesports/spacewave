@@ -191,7 +191,7 @@ func waitSOOwner(ctx context.Context, t *testing.T, object *provider_local.Share
 
 	// Wait for a config that names owner.
 	if _, err := states.WaitValueWithValidator(ctx, func(state *sobject.SOState) (bool, error) {
-		return slices.Contains(state.GetConfig().Owners(), owner), nil
+		return slices.Contains(state.GetConfig().SigningOwners(), owner), nil
 	}, nil); err != nil {
 		t.Fatalf("%s did not become an owner: %v", owner, err)
 	}

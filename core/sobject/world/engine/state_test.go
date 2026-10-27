@@ -272,6 +272,14 @@ func (s *testSharedObjectSnapshot) GetParticipantConfigForPeer(ctx context.Conte
 	return s.GetParticipantConfig(ctx)
 }
 
+func (s *testSharedObjectSnapshot) GetOwnership(ctx context.Context) (*sobject.SOOwnership, error) {
+	cfg, err := s.GetConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return sobject.DeriveSOOwnership(cfg, nil)
+}
+
 func (s *testSharedObjectSnapshot) GetTransformer(ctx context.Context) (*block_transform.Transformer, error) {
 	return nil, nil
 }

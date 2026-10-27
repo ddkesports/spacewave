@@ -33,13 +33,21 @@ func (e *soEngine) reach(ctx context.Context, snap sobject.SharedObjectStateSnap
 // So does a device with its own edits above the checkpoint, so it shows them
 // until a checkpoint covers them.
 func (e *soEngine) follows(ctx context.Context, snap sobject.SharedObjectStateSnapshot) (bool, error) {
-	// Follow only a leader, and only as a participant that does not own.
+	// Follow only a leader, and only as a participant that does not own. An
+	// owner handing over follows: it no longer checkpoints or judges.
 	cfg, err := snap.GetConfig(ctx)
 	if err != nil {
 		return false, err
 	}
+	if cfg.Leader() == "" {
+		return false, nil
+	}
+	own, err := e.ownershipOf(ctx, snap)
+	if err != nil {
+		return false, err
+	}
 	self := e.so.GetPeerID().String()
-	if cfg.Leader() == "" || slices.Contains(cfg.Owners(), self) {
+	if own.Owns(self) {
 		return false, nil
 	}
 

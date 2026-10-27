@@ -42,8 +42,7 @@ func (c *Controller) waitWorldInit(
 		}
 
 		// Replay the state. ErrNotParticipant ends the wait.
-		participant, err := snap.GetParticipantConfig(ctx)
-		if err != nil {
+		if _, err := snap.GetParticipantConfig(ctx); err != nil {
 			return nil, err
 		}
 		state, _, err := replay.sync(ctx, snap, nil)
@@ -58,8 +57,13 @@ func (c *Controller) waitWorldInit(
 			return state, nil
 		}
 
-		// Initialize the World once as an owner whose replay is complete.
-		if !queued && !stalled && sobject.IsOwner(participant.GetRole()) {
+		// Initialize the World once as an owner whose replay is complete. An
+		// owner handing over writes nothing more.
+		own, err := snap.GetOwnership(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if !queued && !stalled && own.Owns(so.GetPeerID().String()) {
 			opData, err := c.buildInitWorldOp()
 			if err != nil {
 				return nil, err

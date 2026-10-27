@@ -88,4 +88,8 @@ var (
 
 	// ErrSharedObjectRecoveryEntityMismatch is returned if recovery material does not match the current entity.
 	ErrSharedObjectRecoveryEntityMismatch = errors.New("shared object recovery entity mismatch")
+
+	// ErrHandingOver is returned when an owner that is handing over asks to
+	// leave again. Its successor commits the departure it already requested.
+	ErrHandingOver = errors.New("shared object owner is already handing over")
 )

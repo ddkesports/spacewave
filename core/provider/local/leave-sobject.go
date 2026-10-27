@@ -70,9 +70,18 @@ func (a *ProviderAccount) LeaveSharedObject(ctx context.Context, sessionKey cryp
 		return err
 	}
 
+	// An owner already handing over waits for its successor to commit the
+	// departure it requested; a second transfer would fork the config chain.
+	own, err := sobject.ReadSOOwnership(ctx, state.GetConfig(), local.soHost.ReadConfigEntry)
+	if err != nil {
+		return err
+	}
+	if own.Departing(local.localPid.String()) {
+		return sobject.ErrHandingOver
+	}
+
 	// A hosted object commits a final departure locally and hands others to a successor.
-	owners := state.GetConfig().Owners()
-	if slices.Contains(owners, local.localPid.String()) {
+	if own.Owns(local.localPid.String()) {
 		// Departing keys are a subset of the participants.
 		if len(participants) == len(departing) {
 			_, err := sobject.LeaveSOParticipants(ctx, local.soHost, local.localPriv, request)
@@ -85,7 +94,7 @@ func (a *ProviderAccount) LeaveSharedObject(ctx context.Context, sessionKey cryp
 	}
 
 	// A joined object asks one linked owner to commit the departure.
-	ownerID, err := a.waitLinkedOwner(ctx, owners)
+	ownerID, err := a.waitLinkedOwner(ctx, own.Owners())
 	if err != nil {
 		return err
 	}

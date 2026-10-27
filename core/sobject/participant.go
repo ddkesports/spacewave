@@ -87,8 +87,10 @@ func IsOwner(role SOParticipantRole) bool {
 	return role == SOParticipantRole_SOParticipantRole_OWNER
 }
 
-// Owners returns the peer IDs of the owners in c, in participant order.
-func (c *SharedObjectConfig) Owners() []string {
+// SigningOwners returns the peer IDs of the owners whose signatures c
+// accepts, in participant order. During a handover they include the departing
+// owner, so a caller asking who owns reads SOOwnership instead.
+func (c *SharedObjectConfig) SigningOwners() []string {
 	var owners []string
 	for _, p := range c.GetParticipants() {
 		if IsOwner(p.GetRole()) {
@@ -188,6 +190,12 @@ func (s *SOStateParticipantHandle) GetParticipantConfigForPeer(_ context.Context
 // GetConfig returns the accepted config.
 func (s *SOStateParticipantHandle) GetConfig(context.Context) (*SharedObjectConfig, error) {
 	return s.state.GetConfig(), nil
+}
+
+// GetOwnership returns the ownership of the accepted config, reading the head
+// change from the config history; without history it reads settled.
+func (s *SOStateParticipantHandle) GetOwnership(ctx context.Context) (*SOOwnership, error) {
+	return ReadSOOwnership(ctx, s.state.GetConfig(), s.configEntry)
 }
 
 // GetConfigByHash returns the current config or a retained earlier one.

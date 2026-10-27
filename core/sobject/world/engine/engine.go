@@ -221,6 +221,10 @@ type soEngine struct {
 	// unordered is the count of unplaced operations last reported, guarded by
 	// the controller's writer lock.
 	unordered uint32
+	// ownership is the ownership derived for the config head ownershipHead,
+	// guarded by the controller's writer lock, so a stable head is read once.
+	ownership     *sobject.SOOwnership
+	ownershipHead []byte
 	// control is the local voter in the group's decisions, or nil when the
 	// shared object is not hosted here. Set before the engine is published.
 	control *sobject.Control
@@ -449,7 +453,7 @@ func (e *soEngine) lockReplayed(ctx context.Context, clock *commitClock) (func()
 		// Replay and install the World of the current operation set.
 		snapshot, err := e.admittedState(ctx)
 		if err == nil {
-			err = checkWritesOps(ctx, snapshot)
+			err = e.checkWritesOps(ctx, snapshot)
 		}
 		if err == nil {
 			_, err = e.install(ctx, snapshot, nil, false)
@@ -473,13 +477,25 @@ func (e *soEngine) lockReplayed(ctx context.Context, clock *commitClock) (func()
 }
 
 // checkWritesOps returns tx.ErrNotWrite when the config of snap does not let
-// this participant write operations.
-func checkWritesOps(ctx context.Context, snap sobject.SharedObjectStateSnapshot) error {
+// this participant write operations, or when it is an owner handing over: it
+// still signs as owner in the config until its successor commits the
+// departure, but never signs again. The caller holds the writer lock.
+func (e *soEngine) checkWritesOps(ctx context.Context, snap sobject.SharedObjectStateSnapshot) error {
+	// The role must let the participant write.
 	participant, err := snap.GetParticipantConfig(ctx)
 	if err != nil {
 		return err
 	}
 	if !sobject.CanWriteOps(participant.GetRole()) {
+		return tx.ErrNotWrite
+	}
+
+	// A departing owner writes nothing more.
+	own, err := e.ownershipOf(ctx, snap)
+	if err != nil {
+		return err
+	}
+	if own.Departing(e.so.GetPeerID().String()) {
 		return tx.ErrNotWrite
 	}
 	return nil

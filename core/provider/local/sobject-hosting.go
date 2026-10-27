@@ -83,12 +83,12 @@ func (a *ProviderAccount) reconcileSOHosting(ctx context.Context, soID string, s
 		return err
 	}
 	config := state.GetConfig()
-	departing, err := sobject.ReadSODepartingPeers(ctx, so.soHost, config.GetConfigChainHash())
+	own, err := sobject.ReadSOOwnership(ctx, config, so.soHost.ReadConfigEntry)
 	if err != nil {
 		return err
 	}
-	owners := config.Owners()
-	if st != nil && len(departing) == 0 && !config.IsGroupControl() && slices.Contains(owners, so.localPid.String()) {
+	owners := own.SigningOwners()
+	if st != nil && own.Settled() && !config.IsGroupControl() && own.Owns(so.localPid.String()) {
 		if err := a.enrollSOSession(ctx, soID, so, st.GetPeerID(), owners); err != nil {
 			return err
 		}

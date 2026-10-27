@@ -85,7 +85,7 @@ func TestNativeSpaceLeave(t *testing.T) {
 		t.Fatal(err)
 	}
 	owners := []string{object.GetPeerID().String(), ownerSession.GetPeerId().String()}
-	remaining := after.GetConfig().Owners()
+	remaining := after.GetConfig().SigningOwners()
 	slices.Sort(owners)
 	slices.Sort(remaining)
 	if len(after.GetConfig().GetParticipants()) != 2 || !slices.Equal(owners, remaining) {

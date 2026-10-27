@@ -524,6 +524,11 @@ func (s *SOHost) ApplyConfigChange(ctx context.Context, entry *SOConfigChange, f
 	}
 	entry = entry.CloneVT()
 
+	// An owner handing over signs nothing more on the transfer head.
+	if err := s.refuseDepartingSigners(ctx, entry); err != nil {
+		return err
+	}
+
 	// Hold the provider lock through verification and persistence.
 	lk, err := s.lockFn(ctx, s.sharedObjectID)
 	if err != nil {

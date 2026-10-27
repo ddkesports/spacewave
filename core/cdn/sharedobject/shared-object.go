@@ -267,6 +267,12 @@ func (s *cdnStateSnapshot) GetConfig(_ context.Context) (*sobject.SharedObjectCo
 	return &sobject.SharedObjectConfig{}, nil
 }
 
+// GetOwnership returns settled ownership with no owners, as the empty config
+// the CDN mount holds names none.
+func (s *cdnStateSnapshot) GetOwnership(_ context.Context) (*sobject.SOOwnership, error) {
+	return sobject.DeriveSOOwnership(&sobject.SharedObjectConfig{}, nil)
+}
+
 // GetConfigByHash returns ErrConfigHistoryUnavailable because the CDN mount
 // holds no config history.
 func (s *cdnStateSnapshot) GetConfigByHash(_ context.Context, _ []byte) (*sobject.SharedObjectConfig, error) {

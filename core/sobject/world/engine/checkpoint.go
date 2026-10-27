@@ -216,6 +216,16 @@ func (e *soEngine) prepareStableCheckpoint(ctx context.Context, snap sobject.Sha
 		return nil, nil
 	}
 
+	// An owner handing over never signs again; its successor checkpoints once
+	// it commits the departure.
+	own, err := e.ownershipOf(ctx, snap)
+	if err != nil {
+		return nil, err
+	}
+	if own.Departing(self) {
+		return nil, nil
+	}
+
 	// Skip while an admission waits for its receipt: the checkpoint writes
 	// the state directly, and the update after the last receipt settles
 	// checkpoints again.

@@ -112,9 +112,9 @@ func (c *Controller) notifyWrite() {
 
 // reclaimStorage drops the blocks the local store no longer holds from the
 // Space's storage backend. Only the checkpointer runs a pass, since its fence
-// waits on the stable point. Returns the time the next pass comes due without
-// further changes, or zero. A failed pass is logged, and the next change or
-// due time schedules another.
+// waits on the stable point, and not while it hands over. Returns the time the
+// next pass comes due without further changes, or zero. A failed pass is
+// logged, and the next change or due time schedules another.
 func (e *soEngine) reclaimStorage(ctx context.Context) (time.Time, error) {
 	// Only the checkpointer reclaims.
 	snap, err := getAdmittedState(ctx, e.so)
@@ -125,7 +125,18 @@ func (e *soEngine) reclaimStorage(ctx context.Context) (time.Time, error) {
 	if err != nil {
 		return time.Time{}, err
 	}
-	if cfg.Checkpointer() != e.so.GetPeerID().String() {
+	self := e.so.GetPeerID().String()
+	if cfg.Checkpointer() != self {
+		return time.Time{}, nil
+	}
+
+	// An owner handing over keeps every block: it serves them to its
+	// successor, which reclaims once it commits the departure.
+	own, err := snap.GetOwnership(ctx)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if own.Departing(self) {
 		return time.Time{}, nil
 	}
 

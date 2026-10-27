@@ -27,6 +27,8 @@ type SharedObjectStateSnapshot interface {
 	// GetConfigByHash returns the config with the given config chain hash.
 	// Returns ErrConfigHistoryUnavailable when the config is not retained.
 	GetConfigByHash(ctx context.Context, hash []byte) (*SharedObjectConfig, error)
+	// GetOwnership returns the ownership of the accepted config.
+	GetOwnership(ctx context.Context) (*SOOwnership, error)
 
 	// GetTransformer returns the transformer of the current key epoch, which
 	// encrypts new operations and checkpoints.
