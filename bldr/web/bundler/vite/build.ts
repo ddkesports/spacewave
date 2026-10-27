@@ -510,17 +510,18 @@ export async function buildAndAnalyze(
 
   const allGlobalCssFiles = new Set<string>()
   analysis.globalCssFiles?.forEach((file) => allGlobalCssFiles.add(file))
+  // Record every file the build wrote, including the Vite manifest, which
+  // plugin backends read at runtime. A build cache replay restores only these.
   const outputFiles = new Set<string>()
   for (const output of outputChunks) {
-    if (
-      output.fileName === '.vite/manifest.json' ||
-      output.fileName === 'manifest.json'
-    ) {
-      continue
-    }
     outputFiles.add(output.fileName)
     if (output.type === 'chunk' && output.sourcemapFileName) {
       outputFiles.add(output.sourcemapFileName)
+    }
+  }
+  for (const manifestFile of ['.vite/manifest.json', 'manifest.json']) {
+    if (existsSync(path.join(outDir, manifestFile))) {
+      outputFiles.add(manifestFile)
     }
   }
 

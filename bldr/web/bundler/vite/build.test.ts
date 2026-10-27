@@ -584,6 +584,7 @@ describe('Vite build input tracking', () => {
           build: {
             ...config.build,
             outDir: path.join(root, 'dist'),
+            manifest: true,
             lib: { entry, formats: ['es'] },
           },
         },
@@ -598,6 +599,13 @@ describe('Vite build input tracking', () => {
         'shared.ts',
         'vite.config.mjs',
       ])
+
+      // A build cache replay restores only the recorded outputs, so the Vite
+      // manifest that plugin backends read must be one of them.
+      expect(result.outputFiles).toContain('.vite/manifest.json')
+      for (const file of result.outputFiles) {
+        await fs.access(path.join(root, 'dist', file))
+      }
     } finally {
       await fs.rm(root, { recursive: true, force: true })
     }

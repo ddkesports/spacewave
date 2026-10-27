@@ -16,7 +16,7 @@ import (
 )
 
 // buildCacheVersion changes when the cached result or its key changes shape.
-const buildCacheVersion = "bldr vite build v1"
+const buildCacheVersion = "bldr vite build v2"
 
 // BuildFunc runs one Vite build.
 type BuildFunc func(ctx context.Context, req *BuildRequest) (*BuildResponse, error)
