@@ -20,6 +20,20 @@ message ReplicaSpec {
   string desired_owner_peer_id = 2;
 }
 
+// Config runs one replica node on the Device it is placed on.
+message Config {
+  // Spec is the node's ReplicaSpec.
+  ReplicaSpec spec = 1;
+  // ProviderId is the ID of the local provider holding the SharedObject.
+  string provider_id = 2;
+  // LocalPeerId is the peer ID of the Device running the node.
+  string local_peer_id = 3;
+  // RemotePeerId is the peer ID of the Device running the other replica node.
+  string remote_peer_id = 4;
+  // ProtocolId is the protocol of the peer stream the two nodes share.
+  string protocol_id = 5;
+}
+
 // SOReplicaProof states that a Device's store held every block of a
 // SharedObject's World at one state, checked by a recheck that trusted no
 // earlier proof.

@@ -16,6 +16,7 @@ import (
 	resource_listener "github.com/s4wave/spacewave/core/resource/listener"
 	yield_policy "github.com/s4wave/spacewave/core/resource/listener/yieldpolicy"
 	resource_root_controller "github.com/s4wave/spacewave/core/resource/root/controller"
+	sobject_replica_controller "github.com/s4wave/spacewave/core/sobject/replica/controller"
 	space_world_optypes "github.com/s4wave/spacewave/core/space/world/optypes"
 	terminal_remoteshell "github.com/s4wave/spacewave/core/terminal/remoteshell"
 	"github.com/s4wave/spacewave/core/transport"
@@ -32,9 +33,11 @@ func composeNative(composition *compose.Composition) {
 	status := resource_listener.NewStatusBroker()
 	composition.NativeAction = openDesktop
 
-	// Every provider installs the remote shell factory on each Session's bus.
+	// Every provider installs the remote shell and replica factories on each
+	// Session's bus.
 	transportOptions := []transport.SessionTransportOption{transport.WithChildFactories(
 		func(b bus.Bus) controller.Factory { return terminal_remoteshell.NewFactory(b) },
+		func(b bus.Bus) controller.Factory { return sobject_replica_controller.NewFactory(b) },
 	)}
 	composition.Factories = append(composition.Factories, func(b bus.Bus) []controller.Factory {
 		return []controller.Factory{

@@ -22,9 +22,10 @@ func NextStep(obs *Observation) ReplicaStep {
 // nextDesiredOwnerStep returns the step of the Device that should own: join,
 // copy and prove the copy, then complete the transfer.
 func nextDesiredOwnerStep(obs *Observation) ReplicaStep {
-	// Without a copy, join with the owner's invite.
+	// Without a copy, join with the owner's invite. A departed owner keeps
+	// its copy listed but is no longer a participant, so it joins again.
 	own := obs.Ownership
-	if own == nil {
+	if own == nil || obs.Departing() {
 		if obs.InviteReceived {
 			return ReplicaStep_REPLICA_STEP_JOIN
 		}
@@ -32,7 +33,7 @@ func nextDesiredOwnerStep(obs *Observation) ReplicaStep {
 	}
 
 	// An owner commits a pending departure, and is otherwise done.
-	if own.Owns(obs.LocalPeerID) {
+	if obs.Owns() {
 		if !own.Settled() {
 			return ReplicaStep_REPLICA_STEP_COMPLETE_TRANSFER
 		}
@@ -55,11 +56,11 @@ func nextOtherStep(obs *Observation) ReplicaStep {
 	if own == nil {
 		return ReplicaStep_REPLICA_STEP_NONE
 	}
-	if own.Departing(obs.LocalPeerID) {
+	if obs.Departing() {
 		return ReplicaStep_REPLICA_STEP_FOLLOW
 	}
 	desired := obs.Spec.GetDesiredOwnerPeerId()
-	if !own.Owns(obs.LocalPeerID) || !own.Settled() || own.Owns(desired) {
+	if !obs.Owns() || !own.Settled() || own.Owns(desired) {
 		return ReplicaStep_REPLICA_STEP_NONE
 	}
 

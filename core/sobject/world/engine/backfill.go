@@ -58,6 +58,10 @@ type BackfillEngine interface {
 	// the blocks under it from every other copy. It returns once the
 	// recheck starts; GetBackfillState reports its outcome.
 	RecheckBackfill(ctx context.Context) error
+	// GetHead returns the installed World root and its seqno, read once the
+	// installed World is durable. A copy that covers the same root and seqno
+	// holds the same World.
+	GetHead(ctx context.Context) (*block.BlockRef, uint64, error)
 }
 
 // IsComplete reports whether the local store held every block of the covered
@@ -272,6 +276,15 @@ func (e *soEngine) backfillRoots(ctx context.Context) ([]*block.BlockRef, uint64
 		roots = append(roots, root.GetRootRef())
 	}
 	return roots, seqno, nil
+}
+
+// GetHead returns the installed World root and its seqno.
+func (e *soEngine) GetHead(ctx context.Context) (*block.BlockRef, uint64, error) {
+	roots, seqno, err := e.backfillRoots(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	return roots[0], seqno, nil
 }
 
 // _ is a type assertion

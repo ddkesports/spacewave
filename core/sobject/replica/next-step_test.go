@@ -16,7 +16,9 @@ func TestNextStep(t *testing.T) {
 	// Name two Devices and the agreed spec of a move from a to b.
 	keyA, a := testPeer(t)
 	_, b := testPeer(t)
+	_, aSession := testPeer(t)
 	spec := &ReplicaSpec{SharedObjectId: "so", DesiredOwnerPeerId: b}
+	back := &ReplicaSpec{SharedObjectId: "so", DesiredOwnerPeerId: a}
 
 	// Derive the states of ownership the move passes through, and the recheck
 	// outcomes.
@@ -30,33 +32,40 @@ func TestNextStep(t *testing.T) {
 	// Each row is one Device's observation and its step.
 	cases := []struct {
 		name string
+		spec *ReplicaSpec
 		obs  Observation
 		want ReplicaStep
 	}{
-		{"no peer spec", Observation{LocalPeerID: a, Ownership: aOwns}, ReplicaStep_REPLICA_STEP_WAIT_PEER},
-		{"specs disagree", Observation{LocalPeerID: a, Ownership: aOwns, PeerSpec: &ReplicaSpec{SharedObjectId: "so", DesiredOwnerPeerId: a}}, ReplicaStep_REPLICA_STEP_CONFLICT},
-		{"desired owner waits for an invite", Observation{LocalPeerID: b}, ReplicaStep_REPLICA_STEP_WAIT_INVITE},
-		{"desired owner joins", Observation{LocalPeerID: b, InviteReceived: true}, ReplicaStep_REPLICA_STEP_JOIN},
-		{"owner invites", Observation{LocalPeerID: a, Ownership: aOwns}, ReplicaStep_REPLICA_STEP_INVITE},
-		{"desired owner backfills", Observation{LocalPeerID: b, Ownership: aOwnsBJoined}, ReplicaStep_REPLICA_STEP_BACKFILL},
-		{"desired owner backfills holes", Observation{LocalPeerID: b, Ownership: aOwnsBJoined, Backfill: holes}, ReplicaStep_REPLICA_STEP_BACKFILL},
-		{"desired owner serves its proof", Observation{LocalPeerID: b, Ownership: aOwnsBJoined, Backfill: complete}, ReplicaStep_REPLICA_STEP_SERVE_PROOF},
-		{"owner waits for the proof", Observation{LocalPeerID: a, Ownership: aOwnsBJoined, DesiredOwnerParticipates: true}, ReplicaStep_REPLICA_STEP_WAIT_PROOF},
-		{"owner transfers", Observation{LocalPeerID: a, Ownership: aOwnsBJoined, DesiredOwnerParticipates: true, ProofAccepted: true}, ReplicaStep_REPLICA_STEP_TRANSFER},
-		{"successor completes", Observation{LocalPeerID: b, Ownership: handingOver, Backfill: complete}, ReplicaStep_REPLICA_STEP_COMPLETE_TRANSFER},
-		{"departing owner follows", Observation{LocalPeerID: a, Ownership: handingOver, DesiredOwnerParticipates: true, ProofAccepted: true}, ReplicaStep_REPLICA_STEP_FOLLOW},
-		{"new owner matches", Observation{LocalPeerID: b, Ownership: bOwns}, ReplicaStep_REPLICA_STEP_NONE},
-		{"old owner matches", Observation{LocalPeerID: a, Ownership: bOwns, DesiredOwnerParticipates: true}, ReplicaStep_REPLICA_STEP_NONE},
-		{"co-owner beside the desired owner", Observation{LocalPeerID: a, Ownership: settled(t, owner(a), owner(b)), DesiredOwnerParticipates: true}, ReplicaStep_REPLICA_STEP_NONE},
-		{"no copy and not desired", Observation{LocalPeerID: a}, ReplicaStep_REPLICA_STEP_NONE},
+		{"no peer spec", nil, Observation{LocalPeerID: a, Ownership: aOwns}, ReplicaStep_REPLICA_STEP_WAIT_PEER},
+		{"specs disagree", nil, Observation{LocalPeerID: a, Ownership: aOwns, PeerSpec: &ReplicaSpec{SharedObjectId: "so", DesiredOwnerPeerId: a}}, ReplicaStep_REPLICA_STEP_CONFLICT},
+		{"desired owner waits for an invite", nil, Observation{LocalPeerID: b}, ReplicaStep_REPLICA_STEP_WAIT_INVITE},
+		{"desired owner joins", nil, Observation{LocalPeerID: b, InviteReceived: true}, ReplicaStep_REPLICA_STEP_JOIN},
+		{"owner invites", nil, Observation{LocalPeerID: a, Ownership: aOwns}, ReplicaStep_REPLICA_STEP_INVITE},
+		{"desired owner backfills", nil, Observation{LocalPeerID: b, Ownership: aOwnsBJoined}, ReplicaStep_REPLICA_STEP_BACKFILL},
+		{"desired owner backfills holes", nil, Observation{LocalPeerID: b, Ownership: aOwnsBJoined, Backfill: holes}, ReplicaStep_REPLICA_STEP_BACKFILL},
+		{"desired owner serves its proof", nil, Observation{LocalPeerID: b, Ownership: aOwnsBJoined, Backfill: complete}, ReplicaStep_REPLICA_STEP_SERVE_PROOF},
+		{"owner waits for the proof", nil, Observation{LocalPeerID: a, Ownership: aOwnsBJoined, DesiredOwnerParticipates: true}, ReplicaStep_REPLICA_STEP_WAIT_PROOF},
+		{"owner transfers", nil, Observation{LocalPeerID: a, Ownership: aOwnsBJoined, DesiredOwnerParticipates: true, ProofAccepted: true}, ReplicaStep_REPLICA_STEP_TRANSFER},
+		{"successor completes", nil, Observation{LocalPeerID: b, Ownership: handingOver, Backfill: complete}, ReplicaStep_REPLICA_STEP_COMPLETE_TRANSFER},
+		{"departing owner follows", nil, Observation{LocalPeerID: a, Ownership: handingOver, DesiredOwnerParticipates: true, ProofAccepted: true}, ReplicaStep_REPLICA_STEP_FOLLOW},
+		{"new owner matches", nil, Observation{LocalPeerID: b, Ownership: bOwns}, ReplicaStep_REPLICA_STEP_NONE},
+		{"old owner matches", nil, Observation{LocalPeerID: a, Ownership: bOwns, DesiredOwnerParticipates: true}, ReplicaStep_REPLICA_STEP_NONE},
+		{"co-owner beside the desired owner", nil, Observation{LocalPeerID: a, Ownership: settled(t, owner(a), owner(b)), DesiredOwnerParticipates: true}, ReplicaStep_REPLICA_STEP_NONE},
+		{"no copy and not desired", nil, Observation{LocalPeerID: a}, ReplicaStep_REPLICA_STEP_NONE},
+		{"creator owns as its storage peer", nil, Observation{LocalPeerID: aSession, StoragePeerID: a, Ownership: aOwns}, ReplicaStep_REPLICA_STEP_INVITE},
+		{"departed owner waits for an invite", back, Observation{LocalPeerID: a, Ownership: handingOver}, ReplicaStep_REPLICA_STEP_WAIT_INVITE},
+		{"departed owner rejoins", back, Observation{LocalPeerID: a, Ownership: handingOver, InviteReceived: true}, ReplicaStep_REPLICA_STEP_JOIN},
 	}
 
 	// Check each row with the agreed spec unless the row sets its own.
 	for _, tc := range cases {
 		obs := tc.obs
 		obs.Spec = spec
+		if tc.spec != nil {
+			obs.Spec = tc.spec
+		}
 		if obs.PeerSpec == nil && tc.want != ReplicaStep_REPLICA_STEP_WAIT_PEER {
-			obs.PeerSpec = spec.CloneVT()
+			obs.PeerSpec = obs.Spec.CloneVT()
 		}
 		if got := NextStep(&obs); got != tc.want {
 			t.Errorf("%s: step %v, want %v", tc.name, got, tc.want)

@@ -132,6 +132,62 @@ func (x *ReplicaSpec) GetDesiredOwnerPeerId() string {
 	return ""
 }
 
+// Config runs one replica node on the Device it is placed on.
+type Config struct {
+	unknownFields []byte
+	// Spec is the node's ReplicaSpec.
+	Spec *ReplicaSpec `protobuf:"bytes,1,opt,name=spec,proto3" json:"spec,omitempty"`
+	// ProviderId is the ID of the local provider holding the SharedObject.
+	ProviderId string `protobuf:"bytes,2,opt,name=provider_id,json=providerId,proto3" json:"providerId,omitempty"`
+	// LocalPeerId is the peer ID of the Device running the node.
+	LocalPeerId string `protobuf:"bytes,3,opt,name=local_peer_id,json=localPeerId,proto3" json:"localPeerId,omitempty"`
+	// RemotePeerId is the peer ID of the Device running the other replica node.
+	RemotePeerId string `protobuf:"bytes,4,opt,name=remote_peer_id,json=remotePeerId,proto3" json:"remotePeerId,omitempty"`
+	// ProtocolId is the protocol of the peer stream the two nodes share.
+	ProtocolId string `protobuf:"bytes,5,opt,name=protocol_id,json=protocolId,proto3" json:"protocolId,omitempty"`
+}
+
+func (x *Config) Reset() {
+	*x = Config{}
+}
+
+func (*Config) ProtoMessage() {}
+
+func (x *Config) GetSpec() *ReplicaSpec {
+	if x != nil {
+		return x.Spec
+	}
+	return nil
+}
+
+func (x *Config) GetProviderId() string {
+	if x != nil {
+		return x.ProviderId
+	}
+	return ""
+}
+
+func (x *Config) GetLocalPeerId() string {
+	if x != nil {
+		return x.LocalPeerId
+	}
+	return ""
+}
+
+func (x *Config) GetRemotePeerId() string {
+	if x != nil {
+		return x.RemotePeerId
+	}
+	return ""
+}
+
+func (x *Config) GetProtocolId() string {
+	if x != nil {
+		return x.ProtocolId
+	}
+	return ""
+}
+
 // SOReplicaProof states that a Device's store held every block of a
 // SharedObject's World at one state, checked by a recheck that trusted no
 // earlier proof.
@@ -287,6 +343,26 @@ func (m *ReplicaSpec) CloneMessageVT() protobuf_go_lite.CloneMessage {
 	return m.CloneVT()
 }
 
+func (m *Config) CloneVT() *Config {
+	if m == nil {
+		return (*Config)(nil)
+	}
+	r := new(Config)
+	r.ProviderId = m.ProviderId
+	r.LocalPeerId = m.LocalPeerId
+	r.RemotePeerId = m.RemotePeerId
+	r.ProtocolId = m.ProtocolId
+	r.Spec = protobuf_go_lite.CloneVTValue(m.Spec)
+	if len(m.unknownFields) > 0 {
+		r.unknownFields = slices.Clone(m.unknownFields)
+	}
+	return r
+}
+
+func (m *Config) CloneMessageVT() protobuf_go_lite.CloneMessage {
+	return m.CloneVT()
+}
+
 func (m *SOReplicaProof) CloneVT() *SOReplicaProof {
 	if m == nil {
 		return (*SOReplicaProof)(nil)
@@ -374,6 +450,37 @@ func (this *ReplicaSpec) EqualVT(that *ReplicaSpec) bool {
 
 func (this *ReplicaSpec) EqualMessageVT(thatMsg any) bool {
 	that, ok := thatMsg.(*ReplicaSpec)
+	if !ok {
+		return false
+	}
+	return this.EqualVT(that)
+}
+func (this *Config) EqualVT(that *Config) bool {
+	if this == that {
+		return true
+	} else if this == nil || that == nil {
+		return false
+	}
+	if !protobuf_go_lite.IsEqualVT(this.Spec, that.Spec) {
+		return false
+	}
+	if this.ProviderId != that.ProviderId {
+		return false
+	}
+	if this.LocalPeerId != that.LocalPeerId {
+		return false
+	}
+	if this.RemotePeerId != that.RemotePeerId {
+		return false
+	}
+	if this.ProtocolId != that.ProtocolId {
+		return false
+	}
+	return string(this.unknownFields) == string(that.unknownFields)
+}
+
+func (this *Config) EqualMessageVT(thatMsg any) bool {
+	that, ok := thatMsg.(*Config)
 	if !ok {
 		return false
 	}
@@ -561,6 +668,84 @@ func (x *ReplicaSpec) UnmarshalProtoJSON(s *json.UnmarshalState) {
 
 // UnmarshalJSON unmarshals the ReplicaSpec from JSON.
 func (x *ReplicaSpec) UnmarshalJSON(b []byte) error {
+	return json.DefaultUnmarshalerConfig.Unmarshal(b, x)
+}
+
+// MarshalProtoJSON marshals the Config message to JSON.
+func (x *Config) MarshalProtoJSON(s *json.MarshalState) {
+	if x == nil {
+		s.WriteNil()
+		return
+	}
+	s.WriteObjectStart()
+	var wroteField bool
+	if x.Spec != nil || s.HasField("spec") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("spec")
+		x.Spec.MarshalProtoJSON(s.WithField("spec"))
+	}
+	if x.ProviderId != "" || s.HasField("providerId") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("providerId")
+		s.WriteString(x.ProviderId)
+	}
+	if x.LocalPeerId != "" || s.HasField("localPeerId") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("localPeerId")
+		s.WriteString(x.LocalPeerId)
+	}
+	if x.RemotePeerId != "" || s.HasField("remotePeerId") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("remotePeerId")
+		s.WriteString(x.RemotePeerId)
+	}
+	if x.ProtocolId != "" || s.HasField("protocolId") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("protocolId")
+		s.WriteString(x.ProtocolId)
+	}
+	s.WriteObjectEnd()
+}
+
+// MarshalJSON marshals the Config to JSON.
+func (x *Config) MarshalJSON() ([]byte, error) {
+	return json.DefaultMarshalerConfig.Marshal(x)
+}
+
+// UnmarshalProtoJSON unmarshals the Config message from JSON.
+func (x *Config) UnmarshalProtoJSON(s *json.UnmarshalState) {
+	if s.ReadNil() {
+		return
+	}
+	s.ReadObject(func(key string) {
+		switch key {
+		default:
+			s.Skip() // ignore unknown field
+		case "spec":
+			if s.ReadNil() {
+				x.Spec = nil
+				return
+			}
+			x.Spec = &ReplicaSpec{}
+			x.Spec.UnmarshalProtoJSON(s.WithField("spec", true))
+		case "provider_id", "providerId":
+			s.AddField("provider_id")
+			x.ProviderId = s.ReadString()
+		case "local_peer_id", "localPeerId":
+			s.AddField("local_peer_id")
+			x.LocalPeerId = s.ReadString()
+		case "remote_peer_id", "remotePeerId":
+			s.AddField("remote_peer_id")
+			x.RemotePeerId = s.ReadString()
+		case "protocol_id", "protocolId":
+			s.AddField("protocol_id")
+			x.ProtocolId = s.ReadString()
+		}
+	})
+}
+
+// UnmarshalJSON unmarshals the Config from JSON.
+func (x *Config) UnmarshalJSON(b []byte) error {
 	return json.DefaultUnmarshalerConfig.Unmarshal(b, x)
 }
 
@@ -842,6 +1027,68 @@ func (m *ReplicaSpec) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
+func (m *Config) MarshalVT() (dAtA []byte, err error) {
+	if m == nil {
+		return nil, nil
+	}
+	size := m.SizeVT()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBufferVT(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *Config) MarshalToVT(dAtA []byte) (int, error) {
+	size := m.SizeVT()
+	return m.MarshalToSizedBufferVT(dAtA[:size])
+}
+
+func (m *Config) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
+	if m == nil {
+		return 0, nil
+	}
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.unknownFields != nil {
+		i = protobuf_go_lite.EncodeRawBytes(dAtA, i, m.unknownFields)
+	}
+	if len(m.ProtocolId) > 0 {
+		i = protobuf_go_lite.EncodeString(dAtA, i, m.ProtocolId)
+		i--
+		dAtA[i] = 0x2a
+	}
+	if len(m.RemotePeerId) > 0 {
+		i = protobuf_go_lite.EncodeString(dAtA, i, m.RemotePeerId)
+		i--
+		dAtA[i] = 0x22
+	}
+	if len(m.LocalPeerId) > 0 {
+		i = protobuf_go_lite.EncodeString(dAtA, i, m.LocalPeerId)
+		i--
+		dAtA[i] = 0x1a
+	}
+	if len(m.ProviderId) > 0 {
+		i = protobuf_go_lite.EncodeString(dAtA, i, m.ProviderId)
+		i--
+		dAtA[i] = 0x12
+	}
+	if m.Spec != nil {
+		size, err := m.Spec.MarshalToSizedBufferVT(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(size))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
 func (m *SOReplicaProof) MarshalVT() (dAtA []byte, err error) {
 	if m == nil {
 		return nil, nil
@@ -1062,6 +1309,24 @@ func (m *ReplicaSpec) SizeVT() (n int) {
 	return n
 }
 
+func (m *Config) SizeVT() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.Spec != nil {
+		l = m.Spec.SizeVT()
+		n += protobuf_go_lite.SizeMessage(1, l)
+	}
+	n += protobuf_go_lite.SizeStringNonEmpty(1, m.ProviderId)
+	n += protobuf_go_lite.SizeStringNonEmpty(1, m.LocalPeerId)
+	n += protobuf_go_lite.SizeStringNonEmpty(1, m.RemotePeerId)
+	n += protobuf_go_lite.SizeStringNonEmpty(1, m.ProtocolId)
+	n += len(m.unknownFields)
+	return n
+}
+
 func (m *SOReplicaProof) SizeVT() (n int) {
 	if m == nil {
 		return 0
@@ -1148,6 +1413,35 @@ func (x *ReplicaSpec) MarshalProtoText() string {
 }
 
 func (x *ReplicaSpec) String() string {
+	return x.MarshalProtoText()
+}
+func (x *Config) MarshalProtoText() string {
+	var sb protobuf_go_lite.TextBuilder
+	initialLen := protobuf_go_lite.TextStartMessage(&sb, "Config")
+	if x.Spec != nil {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "spec")
+		protobuf_go_lite.TextWriteTextMarshaler(&sb, x.Spec)
+	}
+	if x.ProviderId != "" {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "provider_id")
+		protobuf_go_lite.TextWriteString(&sb, x.ProviderId)
+	}
+	if x.LocalPeerId != "" {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "local_peer_id")
+		protobuf_go_lite.TextWriteString(&sb, x.LocalPeerId)
+	}
+	if x.RemotePeerId != "" {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "remote_peer_id")
+		protobuf_go_lite.TextWriteString(&sb, x.RemotePeerId)
+	}
+	if x.ProtocolId != "" {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "protocol_id")
+		protobuf_go_lite.TextWriteString(&sb, x.ProtocolId)
+	}
+	return protobuf_go_lite.TextFinishMessage(&sb)
+}
+
+func (x *Config) String() string {
 	return x.MarshalProtoText()
 }
 func (x *SOReplicaProof) MarshalProtoText() string {
@@ -1266,6 +1560,103 @@ func (m *ReplicaSpec) UnmarshalVT(dAtA []byte) error {
 				return err
 			}
 			m.DesiredOwnerPeerId = v
+		default:
+			iNdEx = preIndex
+			skippy, err := protobuf_go_lite.Skip(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return protobuf_go_lite.ErrInvalidLength
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.unknownFields = append(m.unknownFields, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *Config) UnmarshalVT(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	var err error
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		wire, iNdEx, err = protobuf_go_lite.DecodeVarint(dAtA, iNdEx)
+		if err != nil {
+			return err
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: Config: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: Config: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Spec", wireType)
+			}
+			msgStart, postIndex, err := protobuf_go_lite.DecodeLengthDelimited(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			if m.Spec == nil {
+				m.Spec = &ReplicaSpec{}
+			}
+			if err := m.Spec.UnmarshalVT(dAtA[msgStart:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ProviderId", wireType)
+			}
+			var v string
+			v, iNdEx, err = protobuf_go_lite.DecodeString(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			m.ProviderId = v
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field LocalPeerId", wireType)
+			}
+			var v string
+			v, iNdEx, err = protobuf_go_lite.DecodeString(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			m.LocalPeerId = v
+		case 4:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RemotePeerId", wireType)
+			}
+			var v string
+			v, iNdEx, err = protobuf_go_lite.DecodeString(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			m.RemotePeerId = v
+		case 5:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ProtocolId", wireType)
+			}
+			var v string
+			v, iNdEx, err = protobuf_go_lite.DecodeString(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			m.ProtocolId = v
 		default:
 			iNdEx = preIndex
 			skippy, err := protobuf_go_lite.Skip(dAtA[iNdEx:])

@@ -131,6 +131,43 @@ export const ReplicaSpec: MessageType<ReplicaSpec> =
   )
 
 /**
+ * Config runs one replica node on the Device it is placed on.
+ *
+ * @generated from message sobject.replica.Config
+ */
+export interface Config {
+  /**
+   * Spec is the node's ReplicaSpec.
+   */
+  spec?: ReplicaSpec
+  /**
+   * ProviderId is the ID of the local provider holding the SharedObject.
+   */
+  providerId?: string
+  /**
+   * LocalPeerId is the peer ID of the Device running the node.
+   */
+  localPeerId?: string
+  /**
+   * RemotePeerId is the peer ID of the Device running the other replica node.
+   */
+  remotePeerId?: string
+  /**
+   * ProtocolId is the protocol of the peer stream the two nodes share.
+   */
+  protocolId?: string
+}
+
+export const Config: MessageType<Config> =
+  /* @__PURE__ */ createMessageType<Config>('sobject.replica.Config', () => [
+    [1, 'spec', 11, 0, ReplicaSpec.codec],
+    [2, 'provider_id', 9],
+    [3, 'local_peer_id', 9],
+    [4, 'remote_peer_id', 9],
+    [5, 'protocol_id', 9],
+  ])
+
+/**
  * SOReplicaProof states that a Device's store held every block of a
  * SharedObject's World at one state, checked by a recheck that trusted no
  * earlier proof.
