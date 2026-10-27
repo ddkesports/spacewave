@@ -2,6 +2,7 @@ package block
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -177,5 +178,27 @@ func TestSetSharedDecodedBlockCacheMaxCost(t *testing.T) {
 	}
 	if got := cache.Snapshot().MaxCost; got != 1<<30 {
 		t.Fatalf("snapshot max cost %d, want %d", got, 1<<30)
+	}
+}
+
+// TestDecodedBlockCacheKeyExactLength checks that a pool key length-prefixes
+// each part, including parts whose lengths cross a digit, and that building
+// one allocates only the key.
+func TestDecodedBlockCacheKeyExactLength(t *testing.T) {
+	// Encode parts of 0, 9, 10 and 100 bytes.
+	c := &DecodedBlockCache{scope: "s/"}
+	key := decodedBlockCacheKey{
+		ref:       strings.Repeat("r", 9),
+		blockType: strings.Repeat("b", 10),
+		transform: strings.Repeat("x", 100),
+	}
+	want := "s/9:" + key.ref + "10:" + key.blockType + "100:" + key.transform + "0:"
+	if got := c.cacheKey(key); got != want {
+		t.Fatalf("cache key %q, want %q", got, want)
+	}
+
+	// Building the key allocates it once.
+	if allocs := testing.AllocsPerRun(100, func() { _ = c.cacheKey(key) }); allocs != 1 {
+		t.Fatalf("building a cache key allocates %v times, want 1", allocs)
 	}
 }

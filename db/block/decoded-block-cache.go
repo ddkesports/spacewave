@@ -434,20 +434,20 @@ func (c *DecodedBlockCache) epochs(refKey string) decodedBlockCacheEpochs {
 // cacheKey returns the pool key for key in this scope: the scope, then the
 // reference, block type, transform, and trust identities, each length-prefixed
 // so no part can be confused with a neighbor. Every lookup builds one, so it
-// allocates once.
+// allocates once, at the key's exact length.
 func (c *DecodedBlockCache) cacheKey(key decodedBlockCacheKey) string {
-	// Reserve the scope plus each part with its longest decimal length prefix.
+	// Size the scope plus each part with its decimal length prefix.
 	parts := [...]string{key.ref, key.blockType, key.transform, key.trust}
 	size := len(c.scope)
 	for _, part := range parts {
-		size += len(part) + decodedBlockCacheKeyPrefixLen
+		size += decimalLen(len(part)) + 1 + len(part)
 	}
 
 	// Encode the scope and the length-prefixed parts.
 	var b strings.Builder
 	b.Grow(size)
 	b.WriteString(c.scope)
-	var prefix [decodedBlockCacheKeyPrefixLen]byte
+	var prefix [20]byte
 	for _, part := range parts {
 		b.Write(strconv.AppendInt(prefix[:0], int64(len(part)), 10))
 		b.WriteByte(':')
@@ -456,9 +456,15 @@ func (c *DecodedBlockCache) cacheKey(key decodedBlockCacheKey) string {
 	return b.String()
 }
 
-// decodedBlockCacheKeyPrefixLen bounds one part's length prefix: the decimal
-// digits of an int64 and the separator.
-const decodedBlockCacheKeyPrefixLen = 20
+// decimalLen returns the number of decimal digits of n, which is not
+// negative.
+func decimalLen(n int) int {
+	digits := 1
+	for ; n >= 10; n /= 10 {
+		digits++
+	}
+	return digits
+}
 
 // storeToken captures the current epochs for refKey.
 func (c *DecodedBlockCache) storeToken(refKey string) decodedBlockCacheStoreToken {
