@@ -3145,7 +3145,7 @@ func waitForDriveFrameReady(page playwright.Page, timeoutMS float64) error {
 		}
 		return false
 	}`, nil, playwright.PageWaitForFunctionOptions{
-		Timeout: playwright.Float(timeoutMS),
+		Timeout: new(timeoutMS),
 	})
 	if err != nil {
 		return err
