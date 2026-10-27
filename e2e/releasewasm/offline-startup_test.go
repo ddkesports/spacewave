@@ -45,9 +45,7 @@ func TestGoScriptOfflineStartup(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForLiveApp(t, page)
-	if err := page.Locator("[data-testid='unixfs-browser']:visible").First().WaitFor(playwright.LocatorWaitForOptions{
-		Timeout: playwright.Float(browserWaitMS),
-	}); err != nil {
+	if err := waitForDriveFrameReady(page, browserWaitMS); err != nil {
 		dumpPageState(t, page)
 		t.Fatal(err)
 	}
@@ -102,9 +100,7 @@ func TestGoScriptOfflineStartup(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForLiveApp(t, page)
-	if err := page.Locator("[data-testid='unixfs-browser']:visible").First().WaitFor(playwright.LocatorWaitForOptions{
-		Timeout: playwright.Float(browserWaitMS),
-	}); err != nil {
+	if err := waitForDriveFrameReady(page, browserWaitMS); err != nil {
 		dumpPageState(t, page)
 		t.Fatalf("restart Drive offline after terminating its runtime: %v", err)
 	}

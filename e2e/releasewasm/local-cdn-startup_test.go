@@ -3,15 +3,18 @@
 package releasewasm
 
 import (
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	playwright "github.com/mxschmitt/playwright-go"
 	"github.com/s4wave/spacewave/core/cdn"
+	"github.com/s4wave/spacewave/e2e/drivebench"
 )
 
 // TestLocalCDNDriveStartup measures the production landing-to-Drive operation
@@ -89,8 +92,10 @@ func TestLocalCDNDriveStartup(t *testing.T) {
 	logQuickstartTiming(t, page)
 
 	// Mixed-platform publication must not replace an admitted startup worker.
+	marks := readBundledStartupMarks(t, page)
+	writeStartupMarks(t, page)
 	starts := make(map[string]int)
-	for _, mark := range readBundledStartupMarks(t, page) {
+	for _, mark := range marks {
 		if mark.Label == "worker.construct-start" {
 			starts[workerPlugin(composedString(mark.Detail["workerId"]))]++
 		}
@@ -128,6 +133,32 @@ func TestLocalCDNDriveStartup(t *testing.T) {
 	if distribution == 0 || root == 0 || ranges == 0 {
 		t.Error("startup did not exercise distribution, CDN root, and pack loading")
 	}
+}
+
+// writeStartupMarks saves the sample's startup-mark timeline beside the other
+// release-WASM artifacts so slow or failed samples can be attributed later.
+func writeStartupMarks(t *testing.T, page playwright.Page) {
+	// Serialize the marks in the page, as the bench reads them.
+	t.Helper()
+	raw, err := page.Evaluate(`() => JSON.stringify((` + drivebench.StartupMarksScript + `)(), null, 2)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, ok := raw.(string)
+	if !ok {
+		t.Fatalf("startup marks: unexpected %T", raw)
+	}
+
+	// Write one file per sample, named by browser and time.
+	if err := os.MkdirAll(testHarness.artifactDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	name := fmt.Sprintf("local-cdn-startup-%s-%d.marks.json", testHarness.browserName, time.Now().UnixMilli())
+	path := filepath.Join(testHarness.artifactDir, name)
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("startup marks: %s", path)
 }
 
 // workerPlugin returns the plugin ID of a plugin worker ID, which has the form

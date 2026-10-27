@@ -172,16 +172,14 @@ func runBundledDriveBenchCell(t *testing.T, page playwright.Page, in bundledDriv
 
 	// The first-run intro overlays the already-mounted viewer; the benchmark
 	// observes readiness without adding an interaction to the startup interval.
-	if err := page.Locator("[data-testid='unixfs-browser']:visible").First().WaitFor(
-		playwright.LocatorWaitForOptions{Timeout: playwright.Float(browserWaitMS)},
-	); err != nil {
+	if err := waitForDriveFrameReady(page, browserWaitMS); err != nil {
 		dumpPageState(t, page)
 		t.Fatalf("wait for quickstart frame-ready (%s): %v", in.cell, err)
 	}
 	unixfsVisibleMs := browserNowMs(t, page)
 	contentReadyMs, contentReadyErr := waitForQuickstartDriveContentReady(t, page)
 	if contentReadyErr != "" {
-		t.Logf("quickstart content-ready not reached (%s): %s", in.cell, contentReadyErr)
+		t.Errorf("quickstart content-ready not reached (%s): %s", in.cell, contentReadyErr)
 	}
 	logQuickstartTiming(t, page)
 	stopCPUProfile()

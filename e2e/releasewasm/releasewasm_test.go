@@ -294,9 +294,7 @@ func TestGoScriptServiceWorkerPluginDistModuleIntegrity(t *testing.T) {
 	t.Log("drive gate: complete intro if present")
 	completeQuickstartDriveIntroIfPresent(t, page)
 	t.Log("drive gate: wait for unixfs browser frame")
-	err = page.Locator("[data-testid='unixfs-browser']:visible").First().WaitFor(
-		playwright.LocatorWaitForOptions{Timeout: playwright.Float(browserWaitMS)},
-	)
+	err = waitForDriveFrameReady(page, browserWaitMS)
 	if err != nil {
 		dumpPageState(t, page)
 		t.Fatalf("wait for quickstart drive frame: %v", err)
@@ -597,9 +595,7 @@ func TestBrowserReleaseLazyPluginRemoteSupplyAndDurableRestart(t *testing.T) {
 	waitForLiveApp(t, freshPage)
 	waitForQuickstartAppRoute(t, freshPage)
 	completeQuickstartDriveIntroIfPresent(t, freshPage)
-	if err := freshPage.Locator("[data-testid='unixfs-browser']:visible").First().WaitFor(
-		playwright.LocatorWaitForOptions{Timeout: playwright.Float(browserWaitMS)},
-	); err != nil {
+	if err := waitForDriveFrameReady(freshPage, browserWaitMS); err != nil {
 		dumpPageState(t, freshPage)
 		t.Fatalf("wait for fresh quickstart frame-ready: %v", err)
 	}
@@ -1351,23 +1347,22 @@ func TestQuickstartPrerenderAutoBootsProductionWasmBundle(t *testing.T) {
 	waitForLiveApp(t, page)
 	waitForQuickstartAppRoute(t, page)
 	completeQuickstartDriveIntroIfPresent(t, page)
-	err = page.Locator("[data-testid='unixfs-browser']:visible").First().WaitFor(
-		playwright.LocatorWaitForOptions{Timeout: playwright.Float(browserWaitMS)},
-	)
+	err = waitForDriveFrameReady(page, browserWaitMS)
 	if err != nil {
 		dumpPageState(t, page)
 		t.Fatalf("wait for quickstart frame-ready: %v", err)
 	}
 
-	// Record Drive content and invitation readiness.
+	// Require Drive content and the golden path. The failure is recorded
+	// without stopping, so the smoke artifact still captures the state.
 	driveFrameReadyMs := browserNowMs(t, page)
 	driveContentReadyMs, driveContentReadyError := waitForQuickstartDriveContentReady(t, page)
 	if driveContentReadyError != "" {
-		t.Logf("quickstart content-ready not reached: %s", driveContentReadyError)
+		t.Errorf("quickstart content-ready not reached: %s", driveContentReadyError)
 	}
 	driveGoldenPathReadyMs, driveGoldenPathError := exerciseQuickstartDriveGoldenPath(t, page)
 	if driveGoldenPathError != "" {
-		t.Logf("quickstart golden path not reached: %s", driveGoldenPathError)
+		t.Errorf("quickstart golden path not reached: %s", driveGoldenPathError)
 	}
 
 	// Measure the post-load workload and foreground resume, then stop tracing.
@@ -1403,9 +1398,7 @@ func TestQuickstartSecondTabReusesRuntimeAndCloseKeepsFirstTab(t *testing.T) {
 	waitForLiveApp(t, pageA)
 	waitForQuickstartAppRoute(t, pageA)
 	completeQuickstartDriveIntroIfPresent(t, pageA)
-	if err := pageA.Locator("[data-testid='unixfs-browser']:visible").First().WaitFor(
-		playwright.LocatorWaitForOptions{Timeout: playwright.Float(browserWaitMS)},
-	); err != nil {
+	if err := waitForDriveFrameReady(pageA, browserWaitMS); err != nil {
 		dumpPageState(t, pageA)
 		t.Fatalf("wait for first quickstart frame-ready: %v", err)
 	}
@@ -1450,9 +1443,7 @@ func TestQuickstartSecondTabReusesRuntimeAndCloseKeepsFirstTab(t *testing.T) {
 	waitForLiveApp(t, pageB)
 	waitForQuickstartAppRoute(t, pageB)
 	completeQuickstartDriveIntroIfPresent(t, pageB)
-	if err := pageB.Locator("[data-testid='unixfs-browser']:visible").First().WaitFor(
-		playwright.LocatorWaitForOptions{Timeout: playwright.Float(browserWaitMS)},
-	); err != nil {
+	if err := waitForDriveFrameReady(pageB, browserWaitMS); err != nil {
 		dumpPageState(t, pageB)
 		t.Fatalf("wait for second quickstart frame-ready: %v", err)
 	}
@@ -1764,9 +1755,7 @@ func TestQuickstartShellTabsComposedBrowserProof(t *testing.T) {
 	if err := pageB.BringToFront(); err != nil {
 		t.Fatalf("bring survivor document to front: %v", err)
 	}
-	if err := pageB.Locator("[data-testid='unixfs-browser']:visible").First().WaitFor(
-		playwright.LocatorWaitForOptions{Timeout: playwright.Float(browserWaitMS)},
-	); err != nil {
+	if err := waitForDriveFrameReady(pageB, browserWaitMS); err != nil {
 		t.Fatalf("wait for promoted survivor usability: %v", err)
 	}
 
@@ -2091,9 +2080,7 @@ func openQuickstartReleasePage(t *testing.T, page playwright.Page, targetURL str
 		strings.Contains(targetURL, "#/quickstart/drive") {
 		waitForQuickstartAppRoute(t, page)
 		completeQuickstartDriveIntroIfPresent(t, page)
-		if err := page.Locator("[data-testid='unixfs-browser']:visible").First().WaitFor(
-			playwright.LocatorWaitForOptions{Timeout: playwright.Float(browserWaitMS)},
-		); err != nil {
+		if err := waitForDriveFrameReady(page, browserWaitMS); err != nil {
 			dumpPageState(t, page)
 			t.Fatalf("wait for composed quickstart frame: %v", err)
 		}
@@ -2606,9 +2593,7 @@ func resetShellTabsVisibly(t *testing.T, page playwright.Page) {
 
 	// Wait for the quickstart to settle on the Drive file browser. Its route
 	// change closes an open menu, detaching the item before the click.
-	if err := page.Locator("[data-testid='unixfs-browser']:visible").First().WaitFor(
-		playwright.LocatorWaitForOptions{Timeout: playwright.Float(browserWaitMS)},
-	); err != nil {
+	if err := waitForDriveFrameReady(page, browserWaitMS); err != nil {
 		t.Fatalf("wait for Drive file browser before Shell reset: %v", err)
 	}
 
@@ -2979,9 +2964,7 @@ func TestGoScriptQuickstartReturnVisitorMountsBodyRoute(t *testing.T) {
 	waitForLiveApp(t, pageA)
 	waitForQuickstartAppRoute(t, pageA)
 	completeQuickstartDriveIntroIfPresent(t, pageA)
-	if err := pageA.Locator("[data-testid='unixfs-browser']:visible").First().WaitFor(
-		playwright.LocatorWaitForOptions{Timeout: playwright.Float(browserWaitMS)},
-	); err != nil {
+	if err := waitForDriveFrameReady(pageA, browserWaitMS); err != nil {
 		dumpPageState(t, pageA)
 		t.Fatalf("wait for quickstart frame-ready: %v", err)
 	}
@@ -3008,9 +2991,7 @@ func TestGoScriptQuickstartReturnVisitorMountsBodyRoute(t *testing.T) {
 	waitForBootFunction(t, pageB)
 	waitForLiveApp(t, pageB)
 	waitForQuickstartAppRoute(t, pageB)
-	if err := pageB.Locator("[data-testid='unixfs-browser']:visible").First().WaitFor(
-		playwright.LocatorWaitForOptions{Timeout: playwright.Float(browserWaitMS)},
-	); err != nil {
+	if err := waitForDriveFrameReady(pageB, browserWaitMS); err != nil {
 		dumpPageState(t, pageB)
 		t.Fatalf("wait for return visitor direct route frame-ready: %v", err)
 	}
@@ -3129,6 +3110,58 @@ func waitForQuickstartAppRoute(t *testing.T, page playwright.Page) {
 		dumpPageState(t, page)
 		t.Fatalf("wait for quickstart app route: %v", err)
 	}
+}
+
+// bootFailureProbeJS returns the page's terminal startup failure text, or
+// null. The boot shell's error state and the loading screen's failure are
+// terminal; a module error the boundary is still retrying is not.
+const bootFailureProbeJS = `() => {
+	const status = globalThis.__swBootStatus
+	if (status?.state === 'error') {
+		return 'boot status error: ' + (status.error || status.detail || status.phase || '')
+	}
+	const text = document.body?.innerText || ''
+	if (text.includes('Unable to open Spacewave')) {
+		return text.slice(0, 2000)
+	}
+	if (/Failed to load module/.test(text) && !text.includes('Retrying in')) {
+		return text.slice(0, 2000)
+	}
+	return null
+}`
+
+// waitForDriveFrameReady waits for the visible Drive file browser and returns
+// early with the failure when startup reaches a terminal error, so a failed
+// boot does not wait out the full browser deadline.
+func waitForDriveFrameReady(page playwright.Page, timeoutMS float64) error {
+	// Poll until the file browser is visible or startup reports a failure.
+	raw, err := page.WaitForFunction(`() => {
+		const failure = (`+bootFailureProbeJS+`)()
+		if (failure) return { failure }
+		for (const el of document.querySelectorAll("[data-testid='unixfs-browser']")) {
+			if (el.checkVisibility ? el.checkVisibility() : el.getClientRects().length > 0) {
+				return { ready: true }
+			}
+		}
+		return false
+	}`, nil, playwright.PageWaitForFunctionOptions{
+		Timeout: playwright.Float(timeoutMS),
+	})
+	if err != nil {
+		return err
+	}
+
+	// Return the startup failure the probe found, if any.
+	value, err := raw.JSONValue()
+	if err != nil {
+		return err
+	}
+	if result, ok := value.(map[string]any); ok {
+		if failure, ok := result["failure"].(string); ok {
+			return errors.New("startup failed: " + failure)
+		}
+	}
+	return nil
 }
 
 func waitForLiveApp(t *testing.T, page playwright.Page) {
