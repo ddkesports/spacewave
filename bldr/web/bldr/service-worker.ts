@@ -2054,7 +2054,55 @@ export async function swFetch(
       fetchFromRuntime(ev, req, source),
     )
   }
+  if (source.sameOrigin && requestPath.startsWith(pluginWebPkgPathPrefix)) {
+    return fetchWebPkgFromRuntime(ev, request, source, matchPrefixes)
+  }
   return fetchFromRuntime(ev, request, source)
+}
+
+// fetchWebPkgFromRuntime serves a shared web package file under the URL the
+// page requested. The runtime redirects /b/pkg/ to the files a release pins.
+// A browser keys a module by its request URL but resolves the module's
+// relative imports against the redirected URL, so a package reached through
+// both a bare and a relative import would load twice. Following the redirect
+// here keeps one instance per module when the page has no pinned import map
+// for the package, as in Firefox, which ignores every import map after the
+// document's first.
+async function fetchWebPkgFromRuntime(
+  ev: FetchEvent,
+  request: Request,
+  source: BrowserFetchSource,
+  matchPrefixes: readonly string[],
+): Promise<Response> {
+  const response = await fetchFromRuntime(ev, request, source)
+  const location = response.headers.get('Location')
+  if (!isRedirectStatus(response.status) || !location) {
+    return response
+  }
+  const target = new URL(location, request.url)
+  if (
+    !isSwOrigin(target.origin) ||
+    target.pathname.startsWith(pluginWebPkgPathPrefix)
+  ) {
+    return response
+  }
+  await response.body?.cancel()
+  const pinnedRequest = new Request(target, {
+    method: request.method,
+    headers: request.headers,
+    signal: request.signal,
+  })
+  const pinned = await fetchFromRuntime(
+    ev,
+    pinnedRequest,
+    classifyBrowserFetchSource(pinnedRequest, matchPrefixes),
+  )
+  // A fresh response carries no URL, so the browser keeps the request URL.
+  return new Response(pinned.body, {
+    status: pinned.status,
+    statusText: pinned.statusText,
+    headers: pinned.headers,
+  })
 }
 
 // fetchFromRuntime forwards a same-origin Bldr request to the runtime.

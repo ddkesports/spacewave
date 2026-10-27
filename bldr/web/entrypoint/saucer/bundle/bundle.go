@@ -139,7 +139,7 @@ func generateBootstrapHtml(importMap web_entrypoint_index.ImportMap) string {
 <body>
   <div id="bldr-root"></div>
   <script type="importmap">
-` + importMap.String() + `
+` + importMap.WithWebPkgFallback().String() + `
   </script>
   <script type="module" src="/entrypoint.mjs"></script>
 </body>

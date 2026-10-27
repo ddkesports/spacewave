@@ -3,10 +3,12 @@ package web_entrypoint_index
 import (
 	"errors"
 	"html"
+	"maps"
 	"slices"
 	"strings"
 
 	"github.com/aperturerobotics/fastjson"
+	web_pkg "github.com/s4wave/spacewave/bldr/web/pkg"
 
 	// _ enables embed
 	_ "embed"
@@ -46,6 +48,28 @@ func (m ImportMap) String() string {
 	return string(obj.MarshalTo(nil))
 }
 
+// WebPkgFallbackPath serves shared web packages through the service worker,
+// which redirects each package to the files its release pins.
+const WebPkgFallbackPath = "/b/pkg/"
+
+// WithWebPkgFallback returns a copy of the map that binds the shared web
+// package prefix to WebPkgFallbackPath unless the map already binds it.
+//
+// Firefox ignores every import map after the document's first, so the
+// document's own map must resolve the bare package specifiers bundles emit.
+// Web views add more specific per-package prefixes where the browser accepts
+// additional maps; the longest matching prefix wins.
+func (m ImportMap) WithWebPkgFallback() ImportMap {
+	imports := maps.Clone(m.Imports)
+	if imports == nil {
+		imports = make(map[string]string, 1)
+	}
+	if _, ok := imports[web_pkg.ImportSpecifierPrefix]; !ok {
+		imports[web_pkg.ImportSpecifierPrefix] = WebPkgFallbackPath
+	}
+	return ImportMap{Imports: imports}
+}
+
 // RenderIndexHTML renders the embedded browser index shell with the provided data.
 func RenderIndexHTML(data IndexData) (string, error) {
 	// Define the template markers that receive caller-provided index data.
@@ -62,7 +86,7 @@ func RenderIndexHTML(data IndexData) (string, error) {
 	}
 
 	// Escape embedded JSON for script content and the entrypoint for HTML.
-	rendered := strings.ReplaceAll(indexHTML, importMapToken, escapeScriptJSON(data.ImportMap.String()))
+	rendered := strings.ReplaceAll(indexHTML, importMapToken, escapeScriptJSON(data.ImportMap.WithWebPkgFallback().String()))
 	rendered = strings.ReplaceAll(rendered, entrypointToken, html.EscapeString(data.EntrypointPath))
 	return rendered, nil
 }

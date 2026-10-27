@@ -20,6 +20,24 @@ func TestImportMapString(t *testing.T) {
 	}
 }
 
+func TestImportMapWithWebPkgFallback(t *testing.T) {
+	// A map without the shared prefix gains the service worker fallback.
+	im := ImportMap{Imports: map[string]string{"test": "./test.mjs"}}
+	got := im.WithWebPkgFallback()
+	if got.Imports["bldr-web-pkg/"] != "/b/pkg/" {
+		t.Errorf("fallback binding = %q, want /b/pkg/", got.Imports["bldr-web-pkg/"])
+	}
+	if _, ok := im.Imports["bldr-web-pkg/"]; ok {
+		t.Error("WithWebPkgFallback() modified the receiver")
+	}
+
+	// An explicit binding, such as a pinned package base, is kept.
+	pinned := ImportMap{Imports: map[string]string{"bldr-web-pkg/": "/b/pa/web/manifest/root/pkgs/"}}
+	if got := pinned.WithWebPkgFallback().Imports["bldr-web-pkg/"]; got != "/b/pa/web/manifest/root/pkgs/" {
+		t.Errorf("explicit binding = %q, want the pinned base", got)
+	}
+}
+
 func TestRenderIndexHTML(t *testing.T) {
 	// Prepare valid index data containing one import and an entrypoint.
 	data := IndexData{
@@ -40,6 +58,9 @@ func TestRenderIndexHTML(t *testing.T) {
 	// Check if result contains the expected content
 	if !strings.Contains(result, `"test":"./test.mjs"`) {
 		t.Error("RenderIndexHTML() result doesn't contain expected import map")
+	}
+	if !strings.Contains(result, `"bldr-web-pkg/":"/b/pkg/"`) {
+		t.Error("RenderIndexHTML() result doesn't bind the shared web package prefix")
 	}
 	if !strings.Contains(result, "./test/entry.mjs") {
 		t.Error("RenderIndexHTML() result doesn't contain expected entrypoint path")

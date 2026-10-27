@@ -1315,10 +1315,43 @@ describe('service worker fetch release cache routing', () => {
     )
   })
 
-  it('passes a runtime redirect to a pinned path through to the browser', async () => {
+  it('serves a redirected web package file under the requested URL', async () => {
     const pinned = '/b/pa/spacewave-core/manifest/root/bldr-web-pkgs/index.mjs'
+    const body = 'export const toast = "sonner"\n'
+    vi.mocked(proxyFetch)
+      .mockResolvedValueOnce(
+        new Response(null, { status: 307, headers: { Location: pinned } }),
+      )
+      .mockResolvedValueOnce(
+        new Response(body, {
+          status: 200,
+          headers: { 'Content-Type': 'application/javascript' },
+        }),
+      )
+
+    const response = await swFetch(
+      buildFetchOnlyEvent(
+        '/b/pkg/sonner/dist/index.mjs',
+        undefined,
+        'client-a',
+      ),
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.url).toBe('')
+    expect(response.headers.get('X-Bldr-Fetch-Source')).toBe('plugin-assets')
+    expect(await response.text()).toBe(body)
+    const requests = vi.mocked(proxyFetch).mock.calls.map((call) => call[1])
+    expect(requests.map((req) => new URL(req.url).pathname)).toEqual([
+      '/b/pkg/sonner/dist/index.mjs',
+      pinned,
+    ])
+  })
+
+  it('passes a web package redirect to another package path through', async () => {
+    const target = '/b/pkg/sonner/dist/other.mjs'
     vi.mocked(proxyFetch).mockResolvedValue(
-      new Response(null, { status: 307, headers: { Location: pinned } }),
+      new Response(null, { status: 307, headers: { Location: target } }),
     )
 
     const response = await swFetch(
@@ -1330,7 +1363,7 @@ describe('service worker fetch release cache routing', () => {
     )
 
     expect(response.status).toBe(307)
-    expect(response.headers.get('Location')).toBe(pinned)
+    expect(response.headers.get('Location')).toBe(target)
     expect(response.headers.get('X-Bldr-Runtime-Fetch-Error')).toBeNull()
   })
 
