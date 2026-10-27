@@ -60,21 +60,24 @@ func TestNativeOwnerHandoverRestart(t *testing.T) {
 	}
 
 	// The owner restarts the object before the successor commits.
+	left, err := object.GetSOHostState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 	releaseObject()
 	object, _ = mountOwned(ctx, t, owner, ref)
 
 	// It reads handing over, with itself departing and the successor owning.
-	snap, err := object.GetSharedObjectState(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// The state snapshot is published after the host state it follows, so a
+	// read right after the remount can still hold the config before the leave.
+	snap := waitSnapshotSeqno(ctx, t, object, left.GetConfig().GetConfigChainSeqno())
 	own, err := snap.GetOwnership(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	self := object.GetPeerID().String()
 	if own.State() != sobject.SOOwnershipHandingOver || !own.Departing(self) || own.Owns(self) || !own.Owns(successor) {
-		t.Fatalf("restarted owner reads ownership %+v", own)
+		t.Fatalf("restarted owner %s reads ownership %+v; want handing over to %s", self, own, successor)
 	}
 	if !slices.Contains(own.Owners(), successor) || !slices.Contains(own.SigningOwners(), self) {
 		t.Fatalf("restarted owner reads owners %v signing %v", own.Owners(), own.SigningOwners())
@@ -96,6 +99,31 @@ func TestNativeOwnerHandoverRestart(t *testing.T) {
 	if after.GetConfig().GetConfigChainSeqno() != before.GetConfig().GetConfigChainSeqno() {
 		t.Fatal("refused leave changed the config")
 	}
+}
+
+// waitSnapshotSeqno waits for the state snapshot of object whose config is at
+// seqno or later.
+func waitSnapshotSeqno(ctx context.Context, t *testing.T, object *provider_local.SharedObject, seqno uint64) sobject.SharedObjectStateSnapshot {
+	// Watch the state snapshots.
+	t.Helper()
+	snaps, release, err := object.AccessSharedObjectState(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	// Wait for one at seqno.
+	snap, err := snaps.WaitValueWithValidator(ctx, func(snap sobject.SharedObjectStateSnapshot) (bool, error) {
+		if snap == nil {
+			return false, nil
+		}
+		config, err := snap.GetConfig(ctx)
+		return err == nil && config.GetConfigChainSeqno() >= seqno, err
+	}, nil)
+	if err != nil {
+		t.Fatalf("state snapshot did not reach config %d: %v", seqno, err)
+	}
+	return snap
 }
 
 // mountOwned mounts ref on account and returns the object and a release that
