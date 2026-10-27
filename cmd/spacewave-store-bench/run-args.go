@@ -44,6 +44,7 @@ func (a *RunArgs) BuildFlags() []cli.Flag {
 		&cli.DurationFlag{Name: "stall-threshold", Usage: "how long a write runs before it counts as stalled", Destination: &a.Load.StallThreshold, Value: 500 * time.Millisecond},
 		&cli.BoolFlag{Name: "stall-stacks", Usage: "also dump goroutine stacks at each stall, which stops the world", Destination: &a.Load.StallStacks},
 		&cli.BoolFlag{Name: "gc-mark", Usage: "run block GC passes back to back through the measured window", Destination: &a.Load.GCMark},
+		&cli.BoolFlag{Name: "gc-minor", Usage: "with --gc-mark, run one block pass and then minor passes back to back", Destination: &a.Load.GCMinor},
 		&cli.StringFlag{Name: "report", Usage: "write the JSON report here instead of printing it", Destination: &a.ReportPath},
 	)
 }

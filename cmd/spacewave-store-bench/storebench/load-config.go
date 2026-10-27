@@ -56,4 +56,7 @@ type LoadConfig struct {
 	// GCMark runs block GC passes on the account volume back to back through
 	// the measured window.
 	GCMark bool
+	// GCMinor, with GCMark, runs one block pass and then minor passes, which
+	// mark only the blocks written since the last pass, back to back.
+	GCMinor bool
 }
