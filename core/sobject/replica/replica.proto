@@ -1,0 +1,102 @@
+syntax = "proto3";
+package sobject.replica;
+
+import "github.com/s4wave/spacewave/core/sobject/sobject.proto";
+import "github.com/s4wave/spacewave/db/block/block.proto";
+import "github.com/s4wave/spacewave/net/peer/peer.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/s4wave/spacewave/core/sobject/replica;sobject_replica";
+
+// ReplicaSpec is what one replica node of a SharedObject wants: the object and
+// which Device should own it. Both nodes of a pair hold one, and the pair takes
+// no step while the two disagree.
+message ReplicaSpec {
+  // SharedObjectId is the ID of the replicated SharedObject.
+  string shared_object_id = 1;
+  // DesiredOwnerPeerId is the peer ID of the Device that should own the
+  // SharedObject. The node type resolves it from the graph-local node ID the
+  // Flowgraph names.
+  string desired_owner_peer_id = 2;
+}
+
+// SOReplicaProof states that a Device's store held every block of a
+// SharedObject's World at one state, checked by a recheck that trusted no
+// earlier proof.
+message SOReplicaProof {
+  // SharedObjectId is the ID of the checked SharedObject.
+  string shared_object_id = 1;
+  // PeerId is the peer ID of the Device whose store was checked.
+  string peer_id = 2;
+  // Seqno is the World seqno of the checked state.
+  uint64 seqno = 3;
+  // Root is the World root of the checked state.
+  .block.BlockRef root = 4;
+  // CheckedAt is when the recheck finished.
+  .google.protobuf.Timestamp checked_at = 5;
+}
+
+// SignedSOReplicaProof is an SOReplicaProof signed by the Device it names.
+message SignedSOReplicaProof {
+  // Proof is the encoded SOReplicaProof.
+  bytes proof = 1;
+  // Signature is the Device's signature of Proof.
+  .peer.Signature signature = 2;
+}
+
+// SOReplica is the service each replica node serves to the other on the peer
+// stream of their connection.
+service SOReplica {
+  // WatchReplica streams the serving node's ReplicaState, once at start and
+  // again on each change.
+  rpc WatchReplica(WatchReplicaRequest) returns (stream ReplicaState);
+}
+
+// WatchReplicaRequest asks for the serving node's ReplicaState.
+message WatchReplicaRequest {}
+
+// ReplicaState is what one replica node tells the other.
+message ReplicaState {
+  // Spec is the node's ReplicaSpec.
+  ReplicaSpec spec = 1;
+  // Proof is the node's latest proof of a complete copy, set by a desired
+  // owner whose recheck found no holes.
+  SignedSOReplicaProof proof = 2;
+  // Invite is the invite an owner prepared for the other node's Device, set
+  // while that Device is not a participant.
+  .sobject.SOInviteMessage invite = 3;
+}
+
+// ReplicaStep is the one step a replica node takes to close the gap between
+// its spec and what it observes.
+enum ReplicaStep {
+  // REPLICA_STEP_NONE takes no step: the replica matches the spec.
+  REPLICA_STEP_NONE = 0;
+  // REPLICA_STEP_WAIT_PEER waits for the other replica node's spec.
+  REPLICA_STEP_WAIT_PEER = 1;
+  // REPLICA_STEP_CONFLICT takes no step because the two nodes' specs
+  // disagree.
+  REPLICA_STEP_CONFLICT = 2;
+  // REPLICA_STEP_WAIT_INVITE waits for the owner's invite.
+  REPLICA_STEP_WAIT_INVITE = 3;
+  // REPLICA_STEP_JOIN joins the SharedObject with the received invite.
+  REPLICA_STEP_JOIN = 4;
+  // REPLICA_STEP_INVITE invites the desired owner, which holds no copy.
+  REPLICA_STEP_INVITE = 5;
+  // REPLICA_STEP_BACKFILL copies every block and rechecks the copy.
+  REPLICA_STEP_BACKFILL = 6;
+  // REPLICA_STEP_SERVE_PROOF serves the signed proof of a complete copy and
+  // waits for the owner to transfer.
+  REPLICA_STEP_SERVE_PROOF = 7;
+  // REPLICA_STEP_WAIT_PROOF waits for the desired owner's proof of a complete
+  // copy.
+  REPLICA_STEP_WAIT_PROOF = 8;
+  // REPLICA_STEP_TRANSFER signs the transfer of ownership to the desired
+  // owner.
+  REPLICA_STEP_TRANSFER = 9;
+  // REPLICA_STEP_COMPLETE_TRANSFER commits the departure of the previous
+  // owner.
+  REPLICA_STEP_COMPLETE_TRANSFER = 10;
+  // REPLICA_STEP_FOLLOW follows the successor and serves it blocks.
+  REPLICA_STEP_FOLLOW = 11;
+}
