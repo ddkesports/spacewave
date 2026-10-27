@@ -103,6 +103,7 @@ func (c *Controller) runGCSweep(ctx context.Context) error {
 	defer timer.Stop()
 	hw, _ := vol.(volume.HealthWatcher)
 	reserve := &reserveWatch{hw: hw}
+	var youngFull bool
 	for {
 		// Pull the block pass in when the volume entered the reserve.
 		entered, healthCh := reserve.entered()
@@ -169,6 +170,16 @@ func (c *Controller) runGCSweep(ctx context.Context) error {
 				WithField("more", stats.More).
 				WithField("duration", stats.Duration.String()).
 				Info("gc sweep completed")
+		}
+		// Warn once when minor passes stop for a full young log, and once
+		// when they resume.
+		if stats.YoungLogFull != youngFull && (stats.YoungLogFull || stats.MinorPasses != 0) {
+			youngFull = stats.YoungLogFull
+			if youngFull {
+				c.le.Warn("gc young log full, minor passes wait for a block pass to promote")
+			} else {
+				c.le.Info("gc young log promoted, minor passes resume")
+			}
 		}
 		if stats.SweepLongestTx >= slowSweepTx {
 			c.le.
