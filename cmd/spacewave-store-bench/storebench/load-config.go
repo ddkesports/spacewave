@@ -41,6 +41,10 @@ type LoadConfig struct {
 	// ProfilePath is where the CPU profile of the measured load is written.
 	// Empty skips writing it; the report still attributes the CPU.
 	ProfilePath string
+	// AllocProfilePath is where the heap allocation profile is written at the
+	// end of the window, beside one taken at its start (with a .start suffix)
+	// for pprof -base. Empty skips both.
+	AllocProfilePath string
 	// StallDumpDir is where goroutine dumps of stalled writes are written.
 	// Empty turns the dumps off.
 	StallDumpDir string

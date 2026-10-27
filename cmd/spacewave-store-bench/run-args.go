@@ -39,6 +39,7 @@ func (a *RunArgs) BuildFlags() []cli.Flag {
 		&cli.DurationFlag{Name: "duration", Usage: "measured load", Destination: &a.Load.Duration, Value: 2 * time.Minute},
 		&cli.Uint64Flag{Name: "seed", Usage: "seeds the key sampling", Destination: &a.Load.Seed, Value: 1},
 		&cli.StringFlag{Name: "cpu-profile", Usage: "write the measured CPU profile here", Destination: &a.Load.ProfilePath},
+		&cli.StringFlag{Name: "alloc-profile", Usage: "write heap allocation profiles of the window's start and end here", Destination: &a.Load.AllocProfilePath},
 		&cli.StringFlag{Name: "stall-dump-dir", Usage: "write an execution trace of the first stalled write here", Destination: &a.Load.StallDumpDir},
 		&cli.DurationFlag{Name: "stall-threshold", Usage: "how long a write runs before it counts as stalled", Destination: &a.Load.StallThreshold, Value: 500 * time.Millisecond},
 		&cli.BoolFlag{Name: "stall-stacks", Usage: "also dump goroutine stacks at each stall, which stops the world", Destination: &a.Load.StallStacks},

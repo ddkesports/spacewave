@@ -118,14 +118,33 @@ func RunLoad(ctx context.Context, le *logrus.Entry, st *Store, conf *LoadConfig)
 	return report, err
 }
 
+// writeAllocProfile writes the heap allocation profile to path plus suffix,
+// or nothing for an empty path.
+func writeAllocProfile(path, suffix string) error {
+	// Skip the profile unless asked for one.
+	if path == "" {
+		return nil
+	}
+
+	// Write the profile as of the last GC.
+	var buf bytes.Buffer
+	if err := pprof.Lookup("allocs").WriteTo(&buf, 0); err != nil {
+		return errors.Wrap(err, "write alloc profile")
+	}
+	return errors.Wrap(os.WriteFile(path+suffix, buf.Bytes(), 0o644), "write alloc profile")
+}
+
 // measure runs the measured window and builds its report.
 func (l *load) measure(ctx context.Context) (*Report, error) {
-	// Record the counters at the start of the window.
+	// Record the counters and allocations at the start of the window.
 	cache := block.NewDecodedBlockCache()
 	cache0 := cache.Snapshot()
 	var mem0 runtime.MemStats
 	runtime.ReadMemStats(&mem0)
 	pub0 := l.publicationStats()
+	if err := writeAllocProfile(l.conf.AllocProfilePath, ".start"); err != nil {
+		return nil, err
+	}
 
 	// Profile the CPU and start counting the window's writes and views.
 	var prof bytes.Buffer
@@ -145,13 +164,16 @@ func (l *load) measure(ctx context.Context) (*Report, error) {
 	elapsed := time.Since(start)
 	pprof.StopCPUProfile()
 
-	// Read the counters at the end of the window.
+	// Read the counters and allocations at the end of the window.
 	cache1 := cache.Snapshot()
 	var mem1 runtime.MemStats
 	runtime.ReadMemStats(&mem1)
 	pub1 := l.publicationStats()
 	if werr != nil {
 		return nil, werr
+	}
+	if err := writeAllocProfile(l.conf.AllocProfilePath, ""); err != nil {
+		return nil, err
 	}
 
 	// Keep the raw profile and attribute its CPU.
