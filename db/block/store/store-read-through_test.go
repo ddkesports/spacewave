@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/s4wave/spacewave/db/block"
 	block_store "github.com/s4wave/spacewave/db/block/store"
@@ -92,7 +93,7 @@ func TestStoreReadThroughWritebackUsesWritablePrimary(t *testing.T) {
 		t.Fatalf("primary before read found=%v err=%v, want absent", found, err)
 	}
 
-	// Open a read-through scope with synchronous writeback enabled.
+	// Open a read-through scope with writeback enabled.
 	var lowerSource block.StoreOps = lower
 	store := block_store.NewStoreReadThrough(
 		func() block.StoreOps { return primary },
@@ -111,9 +112,17 @@ func TestStoreReadThroughWritebackUsesWritablePrimary(t *testing.T) {
 		t.Fatalf("scoped lower read = %q/%v/%v", got, found, err)
 	}
 
-	// Verify that writeback preserves the block bytes and refs without the lower source.
+	// Wait for the background fill, then verify that writeback preserves the
+	// block bytes and refs without the lower source.
 	lowerSource = nil
-	got, found, err = primary.GetBlock(ctx, ref)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		got, found, err = primary.GetBlock(ctx, ref)
+		if err != nil || found || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
 	if err != nil || !found || string(got) != string(data) {
 		t.Fatalf("primary writeback = %q/%v/%v", got, found, err)
 	}

@@ -28,7 +28,7 @@ func CacheFill(ctx context.Context, primary block.StoreOps, ref *block.BlockRef,
 }
 
 // StoreReadThrough reads from a primary source, then an optional lower source.
-// With a fill, lower hits are synchronously written to primary.
+// With a fill, lower hits are written to primary in the background.
 //
 // StoreReadThrough is separate from block.StoreOverlay because StoreOverlay
 // readback is asynchronous.
@@ -137,8 +137,8 @@ func (*StoreReadThrough) RmBlock(context.Context, *block.BlockRef) error {
 func (*StoreReadThrough) Sync(context.Context) (bool, error) { return true, nil }
 
 // GetBlock reads the primary source, then the current lower source. With a
-// fill, a lower hit with known refs is synchronously inserted into primary
-// with its refs. A lower hit with unknown refs is served without the fill.
+// fill, a lower hit with known refs is inserted into primary in the
+// background with its refs. A lower hit with unknown refs is served without the fill.
 func (s *StoreReadThrough) GetBlock(ctx context.Context, ref *block.BlockRef) ([]byte, bool, error) {
 	// Serve the block from the primary store when it is available there.
 	primary := s.source(s.primary)
@@ -168,8 +168,8 @@ func (s *StoreReadThrough) GetBlock(ctx context.Context, ref *block.BlockRef) ([
 
 // GetStoredBlock reads the block and its refs from the primary source, then
 // the current lower source. The refs come from the source that answered. With
-// a fill, a lower hit with known refs is synchronously inserted into primary
-// with its refs.
+// a fill, a lower hit with known refs is inserted into primary in the
+// background with its refs.
 func (s *StoreReadThrough) GetStoredBlock(ctx context.Context, ref *block.BlockRef) (*block.StoredBlock, error) {
 	// Serve the stored block and its refs from the primary store when present.
 	primary := s.source(s.primary)
