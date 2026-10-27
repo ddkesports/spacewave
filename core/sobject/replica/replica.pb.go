@@ -6,15 +6,16 @@ package sobject_replica
 
 import (
 	fmt "fmt"
+	io "io"
+	slices "slices"
+	strconv "strconv"
+
 	protobuf_go_lite "github.com/aperturerobotics/protobuf-go-lite"
 	json "github.com/aperturerobotics/protobuf-go-lite/json"
 	timestamppb "github.com/aperturerobotics/protobuf-go-lite/types/known/timestamppb"
 	sobject "github.com/s4wave/spacewave/core/sobject"
 	block "github.com/s4wave/spacewave/db/block"
 	peer "github.com/s4wave/spacewave/net/peer"
-	io "io"
-	slices "slices"
-	strconv "strconv"
 )
 
 // ReplicaStep is the one step a replica node takes to close the gap between
@@ -455,6 +456,7 @@ func (this *ReplicaSpec) EqualMessageVT(thatMsg any) bool {
 	}
 	return this.EqualVT(that)
 }
+
 func (this *Config) EqualVT(that *Config) bool {
 	if this == that {
 		return true
@@ -486,6 +488,7 @@ func (this *Config) EqualMessageVT(thatMsg any) bool {
 	}
 	return this.EqualVT(that)
 }
+
 func (this *SOReplicaProof) EqualVT(that *SOReplicaProof) bool {
 	if this == that {
 		return true
@@ -517,6 +520,7 @@ func (this *SOReplicaProof) EqualMessageVT(thatMsg any) bool {
 	}
 	return this.EqualVT(that)
 }
+
 func (this *SignedSOReplicaProof) EqualVT(that *SignedSOReplicaProof) bool {
 	if this == that {
 		return true
@@ -539,6 +543,7 @@ func (this *SignedSOReplicaProof) EqualMessageVT(thatMsg any) bool {
 	}
 	return this.EqualVT(that)
 }
+
 func (this *WatchReplicaRequest) EqualVT(that *WatchReplicaRequest) bool {
 	if this == that {
 		return true
@@ -555,6 +560,7 @@ func (this *WatchReplicaRequest) EqualMessageVT(thatMsg any) bool {
 	}
 	return this.EqualVT(that)
 }
+
 func (this *ReplicaState) EqualVT(that *ReplicaState) bool {
 	if this == that {
 		return true
@@ -1398,6 +1404,7 @@ func (m *ReplicaState) SizeVT() (n int) {
 func (x ReplicaStep) MarshalProtoText() string {
 	return x.String()
 }
+
 func (x *ReplicaSpec) MarshalProtoText() string {
 	var sb protobuf_go_lite.TextBuilder
 	initialLen := protobuf_go_lite.TextStartMessage(&sb, "ReplicaSpec")
@@ -1415,6 +1422,7 @@ func (x *ReplicaSpec) MarshalProtoText() string {
 func (x *ReplicaSpec) String() string {
 	return x.MarshalProtoText()
 }
+
 func (x *Config) MarshalProtoText() string {
 	var sb protobuf_go_lite.TextBuilder
 	initialLen := protobuf_go_lite.TextStartMessage(&sb, "Config")
@@ -1444,6 +1452,7 @@ func (x *Config) MarshalProtoText() string {
 func (x *Config) String() string {
 	return x.MarshalProtoText()
 }
+
 func (x *SOReplicaProof) MarshalProtoText() string {
 	var sb protobuf_go_lite.TextBuilder
 	initialLen := protobuf_go_lite.TextStartMessage(&sb, "SOReplicaProof")
@@ -1473,6 +1482,7 @@ func (x *SOReplicaProof) MarshalProtoText() string {
 func (x *SOReplicaProof) String() string {
 	return x.MarshalProtoText()
 }
+
 func (x *SignedSOReplicaProof) MarshalProtoText() string {
 	var sb protobuf_go_lite.TextBuilder
 	initialLen := protobuf_go_lite.TextStartMessage(&sb, "SignedSOReplicaProof")
@@ -1490,6 +1500,7 @@ func (x *SignedSOReplicaProof) MarshalProtoText() string {
 func (x *SignedSOReplicaProof) String() string {
 	return x.MarshalProtoText()
 }
+
 func (x *WatchReplicaRequest) MarshalProtoText() string {
 	var sb protobuf_go_lite.TextBuilder
 	protobuf_go_lite.TextStartMessage(&sb, "WatchReplicaRequest")
@@ -1499,6 +1510,7 @@ func (x *WatchReplicaRequest) MarshalProtoText() string {
 func (x *WatchReplicaRequest) String() string {
 	return x.MarshalProtoText()
 }
+
 func (x *ReplicaState) MarshalProtoText() string {
 	var sb protobuf_go_lite.TextBuilder
 	initialLen := protobuf_go_lite.TextStartMessage(&sb, "ReplicaState")
@@ -1520,6 +1532,7 @@ func (x *ReplicaState) MarshalProtoText() string {
 func (x *ReplicaState) String() string {
 	return x.MarshalProtoText()
 }
+
 func (m *ReplicaSpec) UnmarshalVT(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
@@ -1582,6 +1595,7 @@ func (m *ReplicaSpec) UnmarshalVT(dAtA []byte) error {
 	}
 	return nil
 }
+
 func (m *Config) UnmarshalVT(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
@@ -1679,6 +1693,7 @@ func (m *Config) UnmarshalVT(dAtA []byte) error {
 	}
 	return nil
 }
+
 func (m *SOReplicaProof) UnmarshalVT(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
@@ -1780,6 +1795,7 @@ func (m *SOReplicaProof) UnmarshalVT(dAtA []byte) error {
 	}
 	return nil
 }
+
 func (m *SignedSOReplicaProof) UnmarshalVT(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
@@ -1845,6 +1861,7 @@ func (m *SignedSOReplicaProof) UnmarshalVT(dAtA []byte) error {
 	}
 	return nil
 }
+
 func (m *WatchReplicaRequest) UnmarshalVT(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
@@ -1887,6 +1904,7 @@ func (m *WatchReplicaRequest) UnmarshalVT(dAtA []byte) error {
 	}
 	return nil
 }
+
 func (m *ReplicaState) UnmarshalVT(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0

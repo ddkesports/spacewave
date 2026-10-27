@@ -2,11 +2,10 @@
 // @generated from file github.com/s4wave/spacewave/db/volume/health.proto (package volume, syntax proto3)
 /* eslint-disable */
 
-import { createEnumType } from "@aptre/protobuf-es-lite/enum";
-import type { MessageType } from "@aptre/protobuf-es-lite/message";
-import { createMessageType } from "@aptre/protobuf-es-lite/message";
-import { Timestamp } from "@aptre/protobuf-es-lite/google/protobuf/timestamp";
-
+import { createEnumType } from '@aptre/protobuf-es-lite/enum'
+import type { MessageType } from '@aptre/protobuf-es-lite/message'
+import { createMessageType } from '@aptre/protobuf-es-lite/message'
+import { Timestamp } from '@aptre/protobuf-es-lite/google/protobuf/timestamp'
 
 /**
  * VolumeGCPhase is the step of block collection a volume is in.
@@ -52,7 +51,18 @@ export enum VolumeGCPhase {
   VOLUME_GC_PHASE_MAINTENANCE = 6,
 }
 
-export const VolumeGCPhase_Enum = /* @__PURE__ */ createEnumType("volume.VolumeGCPhase", [[0, "VOLUME_GC_PHASE_UNKNOWN"], [1, "VOLUME_GC_PHASE_IDLE"], [2, "VOLUME_GC_PHASE_NODES"], [3, "VOLUME_GC_PHASE_MARK"], [4, "VOLUME_GC_PHASE_SWEEP"], [5, "VOLUME_GC_PHASE_PROMOTE"], [6, "VOLUME_GC_PHASE_MAINTENANCE"]]);
+export const VolumeGCPhase_Enum = /* @__PURE__ */ createEnumType(
+  'volume.VolumeGCPhase',
+  [
+    [0, 'VOLUME_GC_PHASE_UNKNOWN'],
+    [1, 'VOLUME_GC_PHASE_IDLE'],
+    [2, 'VOLUME_GC_PHASE_NODES'],
+    [3, 'VOLUME_GC_PHASE_MARK'],
+    [4, 'VOLUME_GC_PHASE_SWEEP'],
+    [5, 'VOLUME_GC_PHASE_PROMOTE'],
+    [6, 'VOLUME_GC_PHASE_MAINTENANCE'],
+  ],
+)
 
 /**
  * VolumeWriteState is whether a volume admits new writes.
@@ -77,7 +87,14 @@ export enum VolumeWriteState {
   RESERVE = 2,
 }
 
-export const VolumeWriteState_Enum = /* @__PURE__ */ createEnumType("volume.VolumeWriteState", [[0, "VOLUME_WRITE_STATE_UNKNOWN"], [1, "VOLUME_WRITE_STATE_WRITABLE"], [2, "VOLUME_WRITE_STATE_RESERVE"]]);
+export const VolumeWriteState_Enum = /* @__PURE__ */ createEnumType(
+  'volume.VolumeWriteState',
+  [
+    [0, 'VOLUME_WRITE_STATE_UNKNOWN'],
+    [1, 'VOLUME_WRITE_STATE_WRITABLE'],
+    [2, 'VOLUME_WRITE_STATE_RESERVE'],
+  ],
+)
 
 /**
  * VolumeHealth is the observed state of a volume's storage and collection.
@@ -88,67 +105,67 @@ export interface VolumeHealth {
   /**
    * VolumeId is the volume ID.
    */
-  volumeId?: string;
+  volumeId?: string
   /**
    * GcPhase is the collection step the volume is in.
    */
-  gcPhase?: VolumeGCPhase;
+  gcPhase?: VolumeGCPhase
   /**
    * GcPhaseStart is when the volume entered GcPhase.
    */
-  gcPhaseStart?: Date;
+  gcPhaseStart?: Date
   /**
    * FileBytes is the length of the storage files.
    */
-  fileBytes?: bigint;
+  fileBytes?: bigint
   /**
    * LiveValueBytes is the length of the live values the storage holds.
    */
-  liveValueBytes?: bigint;
+  liveValueBytes?: bigint
   /**
    * FreeDiskBytes is the space free to this process on the storage's file
    * system. Zero when the storage cannot tell, which SizesKnown reports.
    */
-  freeDiskBytes?: bigint;
+  freeDiskBytes?: bigint
   /**
    * SizesKnown reports that the storage measured the sizes above.
    */
-  sizesKnown?: boolean;
+  sizesKnown?: boolean
   /**
    * SizesAt is when the storage last measured the sizes.
    */
-  sizesAt?: Date;
+  sizesAt?: Date
   /**
    * PublicationPending is the number of publications queued for the writer.
    */
-  publicationPending?: number;
+  publicationPending?: number
   /**
    * PublicationPendingBytes is the admission cost of the queued publications.
    */
-  publicationPendingBytes?: bigint;
+  publicationPendingBytes?: bigint
   /**
    * WriteState is whether the volume admits new writes.
    */
-  writeState?: VolumeWriteState;
+  writeState?: VolumeWriteState
   /**
    * ReserveBytes is the free disk below which the volume refuses new writes,
    * as of SizesAt. Zero when the volume keeps no reserve.
    */
-  reserveBytes?: bigint;
+  reserveBytes?: bigint
 }
 
-export const VolumeHealth: MessageType<VolumeHealth> = /* @__PURE__ */ createMessageType<VolumeHealth>("volume.VolumeHealth", () => [
-  [1, "volume_id", 9],
-  [2, "gc_phase", 14, 0, VolumeGCPhase_Enum],
-  [3, "gc_phase_start", 11, 0, Timestamp.codec],
-  [4, "file_bytes", 4],
-  [5, "live_value_bytes", 4],
-  [6, "free_disk_bytes", 4],
-  [7, "sizes_known", 8],
-  [8, "sizes_at", 11, 0, Timestamp.codec],
-  [9, "publication_pending", 13],
-  [10, "publication_pending_bytes", 4],
-  [11, "write_state", 14, 0, VolumeWriteState_Enum],
-  [12, "reserve_bytes", 4],
-]);
-
+export const VolumeHealth: MessageType<VolumeHealth> =
+  /* @__PURE__ */ createMessageType<VolumeHealth>('volume.VolumeHealth', () => [
+    [1, 'volume_id', 9],
+    [2, 'gc_phase', 14, 0, VolumeGCPhase_Enum],
+    [3, 'gc_phase_start', 11, 0, Timestamp.codec],
+    [4, 'file_bytes', 4],
+    [5, 'live_value_bytes', 4],
+    [6, 'free_disk_bytes', 4],
+    [7, 'sizes_known', 8],
+    [8, 'sizes_at', 11, 0, Timestamp.codec],
+    [9, 'publication_pending', 13],
+    [10, 'publication_pending_bytes', 4],
+    [11, 'write_state', 14, 0, VolumeWriteState_Enum],
+    [12, 'reserve_bytes', 4],
+  ])

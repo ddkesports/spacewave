@@ -6,12 +6,13 @@ package volume
 
 import (
 	fmt "fmt"
-	protobuf_go_lite "github.com/aperturerobotics/protobuf-go-lite"
-	json "github.com/aperturerobotics/protobuf-go-lite/json"
-	timestamppb "github.com/aperturerobotics/protobuf-go-lite/types/known/timestamppb"
 	io "io"
 	slices "slices"
 	strconv "strconv"
+
+	protobuf_go_lite "github.com/aperturerobotics/protobuf-go-lite"
+	json "github.com/aperturerobotics/protobuf-go-lite/json"
+	timestamppb "github.com/aperturerobotics/protobuf-go-lite/types/known/timestamppb"
 )
 
 // VolumeGCPhase is the step of block collection a volume is in.
@@ -665,9 +666,11 @@ func (m *VolumeHealth) SizeVT() (n int) {
 func (x VolumeGCPhase) MarshalProtoText() string {
 	return x.String()
 }
+
 func (x VolumeWriteState) MarshalProtoText() string {
 	return x.String()
 }
+
 func (x *VolumeHealth) MarshalProtoText() string {
 	var sb protobuf_go_lite.TextBuilder
 	initialLen := protobuf_go_lite.TextStartMessage(&sb, "VolumeHealth")
@@ -725,6 +728,7 @@ func (x *VolumeHealth) MarshalProtoText() string {
 func (x *VolumeHealth) String() string {
 	return x.MarshalProtoText()
 }
+
 func (m *VolumeHealth) UnmarshalVT(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0

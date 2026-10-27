@@ -1473,7 +1473,7 @@
       ]
     },
     "github.com/s4wave/spacewave/core/sobject/replica": {
-      "hash": "a0ee1d41f64b062d8cfc55ba7e974a6077f7a29b005440d78049f9abc1c850cc",
+      "hash": "39188786ae6e2bd8b922f63b52a3b0d4ed4bda232a42f75589f5e6d199464350",
       "generatedFiles": [
         "core/sobject/replica/replica.pb.go",
         "core/sobject/replica/replica.pb.ts",
@@ -2452,14 +2452,14 @@
     "github.com/s4wave/spacewave/db/volume": {
       "hash": "027800f5b04b2432a5c6d1799aa08c3b15e2579fcf675601247da87acf756169",
       "generatedFiles": [
-        "db/volume/volume.pb.go",
-        "db/volume/volume.pb.ts",
         "db/volume/health.pb.go",
-        "db/volume/health.pb.ts"
+        "db/volume/health.pb.ts",
+        "db/volume/volume.pb.go",
+        "db/volume/volume.pb.ts"
       ],
       "protoFiles": [
-        "db/volume/volume.proto",
-        "db/volume/health.proto"
+        "db/volume/health.proto",
+        "db/volume/volume.proto"
       ]
     },
     "github.com/s4wave/spacewave/db/volume/block": {
