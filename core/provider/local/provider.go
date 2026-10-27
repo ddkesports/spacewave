@@ -6,6 +6,7 @@ import (
 
 	"github.com/aperturerobotics/controllerbus/bus"
 	"github.com/aperturerobotics/util/backoff"
+	"github.com/aperturerobotics/util/broadcast"
 	csync "github.com/aperturerobotics/util/csync"
 	"github.com/aperturerobotics/util/keyed"
 	"github.com/aperturerobotics/util/ulid"
@@ -47,6 +48,9 @@ type Provider struct {
 
 	// accountRc is the keyed refcount for accounts.
 	accountRc *keyed.KeyedRefCount[string, *providerAccountTracker]
+	// sessionBcast is broadcast each time an account or its Session transport
+	// starts or stops.
+	sessionBcast broadcast.Broadcast
 	// peer is the peer instance
 	peer peer.Peer
 	// handler is the provider handler

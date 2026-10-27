@@ -26,9 +26,9 @@ var Version = controller.MustParseVersion("0.0.1")
 // ControllerID is the ID of the controller.
 const ControllerID = "sobject/replica"
 
-// pollInterval is how often a node observes again with no wake. The
-// SharedObject state and the backfill outcome change without waking it.
-const pollInterval = 250 * time.Millisecond
+// retryDelay is how long a node waits to observe again after a failed step
+// when no change wakes it first.
+const retryDelay = time.Second
 
 // Controller runs one replica node. It serves its ReplicaState to the other
 // node, watches the other node's, and takes the step NextStep picks.
@@ -45,7 +45,8 @@ type Controller struct {
 	remote peer.ID
 
 	// bcast guards state and peerState, and wakes the reconcile loop and the
-	// watchers of state.
+	// watchers of state. The watches of the Space and the copy broadcast it
+	// too.
 	bcast broadcast.Broadcast
 	// state is what this node tells the other.
 	state *sobject_replica.ReplicaState
@@ -121,18 +122,19 @@ func (c *Controller) resolveAccount(ctx context.Context) (*provider_local.Provid
 	}
 
 	// Wait for the account whose transport runs as the Device.
-	for {
-		acc, release := local.AccessSessionAccount(c.local)
-		if acc != nil {
-			return acc, func() { release(); provRef.Release() }, nil
-		}
-		select {
-		case <-ctx.Done():
-			provRef.Release()
-			return nil, nil, context.Cause(ctx)
-		case <-time.After(pollInterval):
-		}
+	acc, release, err := local.WaitSessionAccount(ctx, c.local)
+	if err != nil {
+		provRef.Release()
+		return nil, nil, err
 	}
+	return acc, func() { release(); provRef.Release() }, nil
+}
+
+// wake wakes the reconcile loop after a change it observes.
+func (c *Controller) wake() {
+	c.bcast.HoldLock(func(broadcast func(), _ func() <-chan struct{}) {
+		broadcast()
+	})
 }
 
 // getPeerState returns what the other node last told, or nil.

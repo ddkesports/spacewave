@@ -197,6 +197,7 @@ func (t *providerAccountTracker) executeProviderAccountTracker(rctx context.Cont
 		lifecycleCtx: ctx,
 	}
 
+	// Build the block store, shared object and session trackers.
 	providerAcc.bstores = keyed.NewKeyedRefCountWithLogger(
 		providerAcc.buildBlockStoreTracker,
 		t.p.le,
@@ -212,6 +213,8 @@ func (t *providerAccountTracker) executeProviderAccountTracker(rctx context.Cont
 		t.p.le,
 		keyed.WithRetry[string, *sessionTracker](providerBackoff),
 	)
+
+	// Build the cloud settings sync and linked account discovery routines.
 	providerAcc.accountSettingsCloudSync = routine.NewStateRoutineContainerWithLogger[string](
 		func(v1, v2 string) bool { return v1 == v2 },
 		le.WithField("routine", "account-settings-cloud-sync"),
@@ -223,6 +226,8 @@ func (t *providerAccountTracker) executeProviderAccountTracker(rctx context.Cont
 		routine.WithRetry(providerBackoff),
 	)
 	providerAcc.linkedCloudAccountDiscovery.SetRoutine(providerAcc.runLinkedCloudAccountDiscovery)
+
+	// Build the envelope rewrap and placed upload routines.
 	providerAcc.envelopeRewrapWatcher = routine.NewRoutineContainerWithLogger(
 		le.WithField("routine", "envelope-rewrap-watcher"),
 		routine.WithRetry(providerBackoff),
@@ -233,6 +238,8 @@ func (t *providerAccountTracker) executeProviderAccountTracker(rctx context.Cont
 		routine.WithRetry(providerBackoff),
 	)
 	providerAcc.placedUploads.SetRoutine(providerAcc.runPlacedUploads)
+
+	// Build the GC cleanup routine.
 	providerAcc.gcCleanupRunner = providerAcc.newGCCleanupRunner()
 	providerAcc.gcCleanup = routine.NewRoutineContainerWithLogger(
 		le.WithField("routine", "gc-cleanup-runner"),
@@ -271,14 +278,20 @@ func (t *providerAccountTracker) executeProviderAccountTracker(rctx context.Cont
 	defer providerAcc.StopSessionTransport()
 	defer providerAcc.StopP2PSync()
 
-	// Startup complete
+	// Publish the account and wake the Session account waiters, and again
+	// once it is withdrawn.
 	t.accCtr.SetValue(providerAcc)
+	t.p.wakeSessionWaiters()
+	defer t.p.wakeSessionWaiters()
 	defer t.accCtr.SetValue(nil)
 
+	// Start the cloud account discovery and settings sync.
 	providerAcc.linkedCloudAccountDiscovery.SetContext(ctx, true)
 	defer providerAcc.linkedCloudAccountDiscovery.ClearContext()
 	providerAcc.accountSettingsCloudSync.SetContext(ctx, true)
 	defer providerAcc.accountSettingsCloudSync.ClearContext()
+
+	// Start the envelope rewrap, placed upload and GC cleanup routines.
 	providerAcc.envelopeRewrapWatcher.SetContext(ctx, true)
 	defer providerAcc.envelopeRewrapWatcher.ClearContext()
 	providerAcc.placedUploads.SetContext(ctx, true)
@@ -286,6 +299,7 @@ func (t *providerAccountTracker) executeProviderAccountTracker(rctx context.Cont
 	providerAcc.gcCleanup.SetContext(ctx, true)
 	defer providerAcc.gcCleanup.ClearContext()
 
+	// Run until the account stops.
 	<-ctx.Done()
 	return context.Canceled
 }

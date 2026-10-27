@@ -2,6 +2,7 @@ package sobject_replica_controller
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/aperturerobotics/util/ccontainer"
@@ -40,7 +41,7 @@ func newReconciler(c *Controller, acc *provider_local.ProviderAccount, key crypt
 	return &reconciler{c: c, acc: acc, key: key, step: -1}
 }
 
-// run observes and acts after each wake or poll until ctx ends.
+// run observes and acts after each wake until ctx ends.
 func (r *reconciler) run(ctx context.Context) error {
 	// Watch the account's SharedObjects.
 	list, releaseList, err := r.acc.AccessSharedObjectList(ctx, nil)
@@ -50,21 +51,30 @@ func (r *reconciler) run(ctx context.Context) error {
 	defer releaseList()
 	r.list = list
 
-	// Take the next step after each change of either node's state, or each
-	// poll.
+	// Wake on each change of the list until run returns.
+	listCtx, stopList := context.WithCancel(ctx)
+	var wg sync.WaitGroup
+	initial := list.GetValue()
+	wg.Go(func() { wakeOnChange(listCtx, list, initial, r.c.wake) })
+	defer func() { stopList(); wg.Wait() }()
+
+	// Take the next step after each change of either node's state, the list,
+	// the Space or the copy, retrying a failed step after retryDelay.
 	for {
 		var waitCh <-chan struct{}
 		r.c.bcast.HoldLock(func(_ func(), getWaitCh func() <-chan struct{}) {
 			waitCh = getWaitCh()
 		})
+		var retry <-chan time.Time
 		if err := r.pass(ctx); err != nil && ctx.Err() == nil {
 			r.c.le.WithError(err).WithField("step", r.step.String()).Warn("replica step failed")
+			retry = time.After(retryDelay)
 		}
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-waitCh:
-		case <-time.After(pollInterval):
+		case <-retry:
 		}
 	}
 }

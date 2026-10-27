@@ -275,6 +275,7 @@ func (a *ProviderAccount) startSessionTransportLocked(
 					bcast()
 				}
 			})
+			a.wakeSessionWaiters()
 			sts.setExited(err)
 		}),
 	)
@@ -297,6 +298,7 @@ func (a *ProviderAccount) startSessionTransportLocked(
 		a.sessionTransport = sts
 		bcast()
 	})
+	a.wakeSessionWaiters()
 	return sts, nil
 }
 
@@ -552,7 +554,17 @@ func (a *ProviderAccount) stopSessionTransportStateLocked(ctx context.Context, s
 			bcast()
 		}
 	})
+	a.wakeSessionWaiters()
 	return nil
+}
+
+// wakeSessionWaiters wakes the provider's Session account waiters after this
+// account's Session transport starts or stops. An account built without a
+// tracker, as in a package test, has none.
+func (a *ProviderAccount) wakeSessionWaiters() {
+	if a.t != nil {
+		a.t.p.wakeSessionWaiters()
+	}
 }
 
 // fallbackSignalingEndpoint returns the configured trusted cloud signaling
