@@ -1,3 +1,5 @@
+//go:build !js
+
 package storebench
 
 // SeedConfig shapes the synthetic World Seed writes.

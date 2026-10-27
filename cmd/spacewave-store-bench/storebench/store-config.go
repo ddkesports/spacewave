@@ -1,3 +1,5 @@
+//go:build !js
+
 package storebench
 
 // StoreConfig locates the World in a stopped server store.
