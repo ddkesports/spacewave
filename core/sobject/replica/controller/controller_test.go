@@ -248,12 +248,13 @@ func commit(ctx context.Context, t *testing.T, engine world.Engine, fn func(tx w
 func waitOwner(ctx context.Context, t *testing.T, acc *provider_local.ProviderAccount, id, owner, departed string) {
 	// Mount the listed SharedObject.
 	t.Helper()
-	so := mountListed(ctx, t, acc, id)
-	states, release, err := so.GetSOHost().GetSOStateCtr(ctx, nil)
+	so, release := mountListed(ctx, t, acc, id)
+	defer release()
+	states, releaseStates, err := so.GetSOHost().GetSOStateCtr(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer release()
+	defer releaseStates()
 
 	// Wait for the config that moved the ownership.
 	if _, err := states.WaitValueWithValidator(ctx, func(state *sobject.SOState) (bool, error) {
@@ -267,8 +268,8 @@ func waitOwner(ctx context.Context, t *testing.T, acc *provider_local.ProviderAc
 	}
 }
 
-// mountListed waits until acc lists id and mounts it for the rest of the test.
-func mountListed(ctx context.Context, t *testing.T, acc *provider_local.ProviderAccount, id string) *provider_local.SharedObject {
+// mountListed waits until acc lists id and mounts it until release.
+func mountListed(ctx context.Context, t *testing.T, acc *provider_local.ProviderAccount, id string) (*provider_local.SharedObject, func()) {
 	// Wait for the entry.
 	t.Helper()
 	list, err := acc.GetSOListCtr().WaitValueWithValidator(ctx, func(list *sobject.SharedObjectList) (bool, error) {
@@ -283,8 +284,7 @@ func mountListed(ctx context.Context, t *testing.T, acc *provider_local.Provider
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(release)
-	return mounted.(*provider_local.SharedObject)
+	return mounted.(*provider_local.SharedObject), release
 }
 
 // listedRef returns the reference of id in list, or nil.
