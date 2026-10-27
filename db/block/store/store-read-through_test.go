@@ -2,6 +2,7 @@ package block_store_test
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 
@@ -153,5 +154,44 @@ func TestStoreReadThroughByteOnlySourceSkipsFill(t *testing.T) {
 	// Verify that the byte-only lower hit leaves the primary store empty.
 	if _, found, err := primary.GetBlock(ctx, ref); err != nil || found {
 		t.Fatalf("primary after byte-only read found=%v err=%v, want absent", found, err)
+	}
+}
+
+// TestStoreReadThroughAbsentLowerIsUnavailable tests that a primary miss while
+// the lower source resolves to nil reports the block unavailable to a read
+// that may not wait for a peer, recording it, and a miss to any other read.
+func TestStoreReadThroughAbsentLowerIsUnavailable(t *testing.T) {
+	// A pipeline whose lower source is down, reading a block the primary
+	// lacks.
+	ctx := t.Context()
+	primary := newRefsTestStore()
+	store := block_store.NewStoreReadThrough(
+		func() block.StoreOps { return primary },
+		func() block.StoreOps { return nil },
+		block_store.CacheFill,
+	)
+	ref, err := block.BuildBlockRef([]byte("held by a peer"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A read that may wait reports a miss, as before.
+	if _, found, err := store.GetBlock(ctx, ref); err != nil || found {
+		t.Fatalf("GetBlock found=%v err=%v, want a miss", found, err)
+	}
+	if stored, err := store.GetStoredBlock(ctx, ref); err != nil || stored != nil {
+		t.Fatalf("GetStoredBlock = %v/%v, want a miss", stored, err)
+	}
+
+	// A read that may not wait reports the block unavailable and records it.
+	noWait, peerWait := block.WithoutPeerWait(ctx)
+	if _, _, err := store.GetBlock(noWait, ref); !errors.Is(err, block.ErrUnavailable) {
+		t.Fatalf("GetBlock err=%v, want ErrUnavailable", err)
+	}
+	if _, err := store.GetStoredBlock(noWait, ref); !errors.Is(err, block.ErrUnavailable) {
+		t.Fatalf("GetStoredBlock err=%v, want ErrUnavailable", err)
+	}
+	if !peerWait.GetRef().EqualsRef(ref) {
+		t.Fatalf("recorded %v, want %v", peerWait.GetRef(), ref)
 	}
 }

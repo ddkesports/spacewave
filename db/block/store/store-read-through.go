@@ -3,6 +3,7 @@ package block_store
 import (
 	"context"
 
+	"github.com/pkg/errors"
 	"github.com/s4wave/spacewave/db/block"
 	"github.com/s4wave/spacewave/net/hash"
 )
@@ -151,7 +152,7 @@ func (s *StoreReadThrough) GetBlock(ctx context.Context, ref *block.BlockRef) ([
 	// Resolve the lower store and serve directly without a fill.
 	lower := s.source(s.lower)
 	if lower == nil {
-		return nil, false, nil
+		return nil, false, s.lowerUnavailable(ctx, ref)
 	}
 	if s.fill == nil || primary == nil {
 		return lower.GetBlock(ctx, ref)
@@ -182,9 +183,22 @@ func (s *StoreReadThrough) GetStoredBlock(ctx context.Context, ref *block.BlockR
 	// Resolve the lower store for the stored block lookup.
 	lower := s.source(s.lower)
 	if lower == nil {
-		return nil, nil
+		return nil, s.lowerUnavailable(ctx, ref)
 	}
 	return s.readLower(ctx, primary, lower, ref)
+}
+
+// lowerUnavailable returns the outcome of a primary miss while the lower
+// source resolves to nil. A read that may not wait for a peer records the
+// block and reports it unavailable, since the source may hold it once it is
+// back; any other read, or a pipeline without a lower source, reports a miss.
+func (s *StoreReadThrough) lowerUnavailable(ctx context.Context, ref *block.BlockRef) error {
+	peerWait := block.GetPeerWait(ctx)
+	if s.lower == nil || peerWait == nil {
+		return nil
+	}
+	peerWait.Skip(ref)
+	return errors.Wrapf(block.ErrUnavailable, "lower store unavailable for block %s", ref.MarshalString())
 }
 
 // source resolves an optional store source.
