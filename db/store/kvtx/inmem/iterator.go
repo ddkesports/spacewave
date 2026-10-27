@@ -133,9 +133,20 @@ func (it *Iterator) Err() error {
 	return nil
 }
 
-// Valid returns if the iterator points to a valid entry.
+// Valid returns if the iterator points to a valid entry. The context is
+// checked when the iterator moves, not here, so an entry Next or Seek reached
+// stays readable until the next move.
 func (it *Iterator) Valid() bool {
-	return it.Err() == nil && it.pos >= 0 && it.pos < len(it.items)
+	return it.err == nil && !it.isReleased() && it.pos >= 0 && it.pos < len(it.items)
+}
+
+// checkMove records a canceled context as the iterator error before a move,
+// and returns the iterator error.
+func (it *Iterator) checkMove() error {
+	if it.err == nil && it.ctx.Err() != nil {
+		it.err = context.Canceled
+	}
+	return it.Err()
 }
 
 // Key returns the current entry key.
@@ -176,7 +187,7 @@ func (it *Iterator) ValueCopy(dst []byte) ([]byte, error) {
 
 // Next advances to the next entry.
 func (it *Iterator) Next() bool {
-	if it.Err() != nil {
+	if it.checkMove() != nil {
 		return false
 	}
 	if it.reverse {
@@ -190,7 +201,7 @@ func (it *Iterator) Next() bool {
 // Seek moves the iterator to the first key >= the provided key (or <= in reverse mode).
 func (it *Iterator) Seek(k []byte) error {
 	// Stop seeking when the iterator has an error.
-	if err := it.Err(); err != nil {
+	if err := it.checkMove(); err != nil {
 		return err
 	}
 

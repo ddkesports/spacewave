@@ -91,6 +91,50 @@ func TestWriteIteratorSortsAddedKeys(t *testing.T) {
 	}
 }
 
+// TestIteratorKeepsEntryAcrossCancel tests that a canceled context ends
+// iteration at the next move, not under the entry Next reached: a reader that
+// saw Next return true reads that entry's key.
+func TestIteratorKeepsEntryAcrossCancel(t *testing.T) {
+	// Store one key.
+	store := NewStore()
+	wtx, err := store.NewTransaction(t.Context(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := wtx.Set(t.Context(), []byte("a"), []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	if err := wtx.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Iterate it in a read transaction under a context canceled after Next
+	// reaches the key.
+	ctx, cancel := context.WithCancel(t.Context())
+	tx, err := store.NewTransaction(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Discard()
+	iter := tx.Iterate(ctx, nil, true, false)
+	defer iter.Close()
+	if !iter.Next() {
+		t.Fatalf("Next found no key: %v", iter.Err())
+	}
+	cancel()
+
+	// The entry stays readable, and the next move ends with the cancel.
+	if key := iter.Key(); !bytes.Equal(key, []byte("a")) {
+		t.Fatalf("key after cancel = %q, want %q", key, "a")
+	}
+	if iter.Next() || iter.Valid() {
+		t.Fatal("iterator moved under a canceled context")
+	}
+	if err := iter.Err(); err != context.Canceled {
+		t.Fatalf("Err = %v, want context.Canceled", err)
+	}
+}
+
 // TestWriteWaiterCancelReleasesReaders proves a write tx cancelled mid-wait
 // releases its reader-admission block: subsequent readers and writers proceed.
 // A leaked writeWaiting registration would starve them, which synctest detects
