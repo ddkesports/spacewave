@@ -53,4 +53,7 @@ type LoadConfig struct {
 	// StallStacks also writes every goroutine's stack at each stall. Each
 	// dump stops the world, which lengthens the stall it records.
 	StallStacks bool
+	// GCMark runs block GC passes on the account volume back to back through
+	// the measured window.
+	GCMark bool
 }

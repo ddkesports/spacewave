@@ -107,14 +107,24 @@ func RunLoad(ctx context.Context, le *logrus.Entry, st *Store, conf *LoadConfig)
 	}
 	wg.Go(func() { l.schedule(ctx, queue) })
 
-	// Warm the caches, then measure the window under a CPU profile.
+	// Warm the caches.
 	le.WithField("warmup", conf.Warmup).Info("warming up")
 	if err := sleepCtx(ctx, conf.Warmup); err != nil {
 		return nil, err
 	}
+
+	// Measure the window under a CPU profile, with GC passes running through
+	// it when asked.
+	var gcErr error
+	if conf.GCMark {
+		wg.Go(func() { gcErr = l.collectLoop(ctx) })
+	}
 	report, err := l.measure(ctx)
 	cancel()
 	wg.Wait()
+	if err == nil {
+		err = gcErr
+	}
 	return report, err
 }
 
