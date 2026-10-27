@@ -41,18 +41,33 @@ export interface LoadWebViewScriptModuleOptions<T> {
   importDeadlineMillis?: number
 }
 
-// Root-asset fetches and dynamic imports have no built-in timeout. When an
-// engine wedges one (the fetch or import promise never settles), the boot
-// ladder would wait forever behind a frozen progress bar. These deadlines
-// convert a wedged load into a terminal boot-download failure instead.
+// Root-asset fetches and dynamic imports have no built-in timeout. The fetch
+// deadline bounds the diagnostic probe. The import deadline reports a stall:
+// the browser keeps loading the module, so a retry waits on the same import,
+// and the web view's reveal deadline remains the terminal bound.
 const rootAssetFetchDeadlineMillis = 45_000
 const moduleImportDeadlineMillis = 45_000
+
+// maxModuleImportStalls is how many deadlines one import may miss before the
+// next attempt starts a fresh import, for an engine that wedged the original.
+const maxModuleImportStalls = 2
 
 const rootPluginAssetPrefix = '/b/pa/'
 export const webViewRootAssetStatusEvent = 'bldr:webview-root-asset-status'
 export const webViewModuleImportErrorEvent = 'bldr:webview-module-import-error'
 const moduleImportRetryNonceByScriptPath = new Map<string, number>()
 const moduleLoadPromiseByImportPath = new Map<string, Promise<unknown>>()
+
+// InflightModuleImport is a browser module import that has not settled.
+interface InflightModuleImport {
+  promise: Promise<unknown>
+  // stalls counts the deadlines this import missed.
+  stalls: number
+}
+
+// inflightImportByImportPath holds imports that outlived a deadline, so a
+// retry waits on the browser's existing fetch instead of starting another.
+const inflightImportByImportPath = new Map<string, InflightModuleImport>()
 
 // webViewDownloadLabel derives a readable plugin name from a root asset path
 // such as "/b/pa/spacewave-app/v/b/fe/module.mjs" -> "spacewave-app".
@@ -195,6 +210,26 @@ export class WebViewRootAssetLoadError extends Error {
   }
 }
 
+// WebViewModuleImportStallError reports an import still loading at its
+// deadline. It is recoverable: retrying waits on the same import.
+export class WebViewModuleImportStallError extends Error {
+  public readonly scriptPath: string
+
+  constructor(scriptPath: string, deadlineMillis: number) {
+    super(
+      `module import ${scriptPath}: still loading after ${deadlineMillis}ms`,
+    )
+    this.name = 'WebViewModuleImportStallError'
+    this.scriptPath = scriptPath
+  }
+}
+
+export function getWebViewModuleImportStallError(
+  error: unknown,
+): WebViewModuleImportStallError | undefined {
+  return error instanceof WebViewModuleImportStallError ? error : undefined
+}
+
 export function getWebViewRootAssetLoadError(
   error: unknown,
 ): WebViewRootAssetLoadError | undefined {
@@ -280,6 +315,46 @@ async function withDeadline<T>(
   }
 }
 
+// settleWithin resolves with the promise's value, or undefined when the
+// deadline passes first. A rejection propagates.
+async function settleWithin<T>(
+  promise: Promise<T>,
+  deadlineMillis: number,
+): Promise<{ value: T } | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const deadline = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), deadlineMillis)
+  })
+  try {
+    return await Promise.race([promise.then((value) => ({ value })), deadline])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
+// startModuleImport returns the import in flight for the path or starts one.
+function startModuleImport<T>(
+  moduleImportPath: string,
+  importModule: WebViewModuleImporter<T>,
+): InflightModuleImport {
+  const existing = inflightImportByImportPath.get(moduleImportPath)
+  if (existing) {
+    return existing
+  }
+  const inflight: InflightModuleImport = {
+    promise: importModule(moduleImportPath),
+    stalls: 0,
+  }
+  inflightImportByImportPath.set(moduleImportPath, inflight)
+  const release = () => {
+    if (inflightImportByImportPath.get(moduleImportPath) === inflight) {
+      inflightImportByImportPath.delete(moduleImportPath)
+    }
+  }
+  void inflight.promise.then(release, release)
+  return inflight
+}
+
 function buildModuleImportPath(scriptPath: string): string {
   const retryNonce = moduleImportRetryNonceByScriptPath.get(scriptPath) ?? 0
   if (retryNonce === 0) {
@@ -346,56 +421,94 @@ async function loadWebViewScriptModuleUncached<T>(
   const deadlineMillis =
     options.importDeadlineMillis ?? moduleImportDeadlineMillis
   const startedAt = performance.now()
+  const inflight = startModuleImport(moduleImportPath, importModule)
+  let settled: { value: unknown } | undefined
   try {
-    const module = await withDeadline(
-      importModule(moduleImportPath),
-      deadlineMillis,
-      `module import ${moduleImportPath}`,
-    )
-    recordModuleImportSuccess(scriptPath)
-    if (isRootPluginAsset) {
-      // Import completion proves usability without inventing an HTTP response.
-      recordWebViewRootAssetResult({
-        scriptPath,
-        status: 0,
-        ok: true,
-        classification: 'imported',
-      })
-      completeBootDownload(scriptPath)
-    }
-    return module
+    settled = await settleWithin(inflight.promise, deadlineMillis)
   } catch (error) {
-    let failure = error
-    let rootAsset: WebViewRootAssetResult | undefined
-    if (isRootPluginAsset) {
-      failBootDownload(scriptPath, serializeImportError(failure).message)
-      // Diagnostics share the import deadline rather than extending a failed load.
-      const remaining = deadlineMillis - (performance.now() - startedAt)
-      if (remaining > 0) {
-        try {
-          rootAsset = await fetchWebViewRootAssetResult(
-            scriptPath,
-            options.fetchRootAsset,
-            Math.min(
-              options.fetchDeadlineMillis ?? rootAssetFetchDeadlineMillis,
-              remaining,
-            ),
-          )
-          if (!rootAsset.ok || rootAsset.classification !== 'live') {
-            failure = new WebViewRootAssetLoadError(rootAsset)
-          }
-        } catch {
-          // A failed diagnostic probe must preserve the original import error.
-        }
-      }
-      failBootDownload(scriptPath, serializeImportError(failure).message)
+    return failModuleImport(scriptPath, isRootPluginAsset, error, {
+      startedAt,
+      deadlineMillis,
+      options,
+    })
+  }
+
+  if (!settled) {
+    // The browser is still loading the module: report a recoverable stall and
+    // leave the boot download active for the retry to finish.
+    inflight.stalls++
+    if (inflight.stalls >= maxModuleImportStalls) {
+      inflightImportByImportPath.delete(moduleImportPath)
+      recordModuleImportFailure(scriptPath)
     }
-    recordModuleImportFailure(scriptPath)
+    const stall = new WebViewModuleImportStallError(
+      moduleImportPath,
+      deadlineMillis,
+    )
     recordWebViewModuleImportError({
       scriptPath,
-      ...serializeImportError(failure),
-      rootAsset,
+      ...serializeImportError(stall),
     })
-    throw failure
+    throw stall
   }
+
+  recordModuleImportSuccess(scriptPath)
+  if (isRootPluginAsset) {
+    // Import completion proves usability without inventing an HTTP response.
+    recordWebViewRootAssetResult({
+      scriptPath,
+      status: 0,
+      ok: true,
+      classification: 'imported',
+    })
+    completeBootDownload(scriptPath)
+  }
+  return settled.value as T
+}
+
+// failModuleImport probes a failed root plugin asset, records the failure, and
+// throws the most specific error.
+async function failModuleImport<T>(
+  scriptPath: string,
+  isRootPluginAsset: boolean,
+  error: unknown,
+  probe: {
+    startedAt: number
+    deadlineMillis: number
+    options: LoadWebViewScriptModuleOptions<T>
+  },
+): Promise<never> {
+  const { startedAt, deadlineMillis, options } = probe
+  let failure = error
+  let rootAsset: WebViewRootAssetResult | undefined
+  if (isRootPluginAsset) {
+    failBootDownload(scriptPath, serializeImportError(failure).message)
+    // Diagnostics share the import deadline rather than extending a failed load.
+    const remaining = deadlineMillis - (performance.now() - startedAt)
+    if (remaining > 0) {
+      try {
+        rootAsset = await fetchWebViewRootAssetResult(
+          scriptPath,
+          options.fetchRootAsset,
+          Math.min(
+            options.fetchDeadlineMillis ?? rootAssetFetchDeadlineMillis,
+            remaining,
+          ),
+        )
+        if (!rootAsset.ok || rootAsset.classification !== 'live') {
+          failure = new WebViewRootAssetLoadError(rootAsset)
+        }
+      } catch {
+        // A failed diagnostic probe must preserve the original import error.
+      }
+    }
+    failBootDownload(scriptPath, serializeImportError(failure).message)
+  }
+  recordModuleImportFailure(scriptPath)
+  recordWebViewModuleImportError({
+    scriptPath,
+    ...serializeImportError(failure),
+    rootAsset,
+  })
+  throw failure
 }

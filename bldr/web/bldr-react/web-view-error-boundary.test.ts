@@ -3,7 +3,10 @@ import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { WebViewErrorBoundary } from './web-view-error-boundary.js'
-import { WebViewRootAssetLoadError } from './web-view-module-loader.js'
+import {
+  WebViewModuleImportStallError,
+  WebViewRootAssetLoadError,
+} from './web-view-module-loader.js'
 
 function ThrowError({ error }: { error: Error }): React.ReactElement | null {
   throw error
@@ -137,5 +140,26 @@ describe('WebViewErrorBoundary module load diagnostics', () => {
     })
     expect(onRecoverableRetry).toHaveBeenCalledOnce()
     expect(rendered.container.textContent).toContain('Retrying in 4s…')
+  })
+
+  it('retries a stalled module import instead of failing', () => {
+    vi.useFakeTimers()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    const error = new WebViewModuleImportStallError(
+      '/b/pa/spacewave-app/v/app/App.mjs',
+      45_000,
+    )
+    const rendered = render(
+      React.createElement(
+        WebViewErrorBoundary,
+        {},
+        React.createElement(ThrowError, { error }),
+      ),
+    )
+
+    expect(rendered.container.textContent).toContain('Still loading module')
+    expect(rendered.container.textContent).toContain('Retrying in 2s')
   })
 })

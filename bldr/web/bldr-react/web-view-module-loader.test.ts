@@ -4,6 +4,7 @@ import {
   fetchWebViewRootAssetResult,
   isWebViewRootPluginAssetPath,
   loadWebViewScriptModule,
+  WebViewModuleImportStallError,
   WebViewRootAssetLoadError,
   webViewModuleImportErrorEvent,
   webViewRootAssetStatusEvent,
@@ -49,8 +50,10 @@ describe('WebView boot deadlines', () => {
       loadWebViewScriptModule('/b/pa/spacewave-app/v/app/App.mjs', {
         fetchRootAsset,
         importModule,
+        // The probe shares what remains of the import deadline; a long import
+        // deadline keeps the probe's own 10ms bound in effect on slow hosts.
         fetchDeadlineMillis: 10,
-        importDeadlineMillis: 10,
+        importDeadlineMillis: 60_000,
       }),
     ).rejects.toBe(importFailure)
 
@@ -64,29 +67,70 @@ describe('WebView boot deadlines', () => {
     )
   })
 
-  it('fails the boot download when the module import never settles', async () => {
-    const fetchRootAsset = vi.fn(async () =>
-      pluginAssetResponse(200, '', {
-        'X-Bldr-Fetch-Source': 'plugin-assets',
-        'X-Bldr-Plugin-Asset-Fetch-Result': 'live',
-      }),
-    )
+  it('reports a recoverable stall and keeps the download active', async () => {
+    const fetchRootAsset = vi.fn<typeof fetch>()
     const importModule = vi.fn(() => new Promise<unknown>(() => undefined))
+    const scriptPath = '/b/pa/spacewave-app/v/app/Stalled.mjs'
 
     await expect(
-      loadWebViewScriptModule('/b/pa/spacewave-app/v/app/App.mjs', {
+      loadWebViewScriptModule(scriptPath, {
         fetchRootAsset,
         importModule,
         importDeadlineMillis: 10,
       }),
-    ).rejects.toThrow('module import')
+    ).rejects.toBeInstanceOf(WebViewModuleImportStallError)
 
-    const downloads = readBootDownloads()
-    const failed = downloads.find((download) => download.state === 'error')
-    expect(failed?.error).toContain('timed out')
+    const download = readBootDownloads().find((d) => d.id === scriptPath)
+    expect(download?.state).toBe('active')
+    expect(fetchRootAsset).not.toHaveBeenCalled()
     expect(globalThis.__bldrWebViewModuleImportError?.message).toContain(
-      'timed out',
+      'still loading',
     )
+  })
+
+  it('retries a stalled import by waiting on the same import', async () => {
+    const pending = deferred<unknown>()
+    const importModule = vi.fn(() => pending.promise)
+    const scriptPath = '/b/pa/spacewave-app/v/app/Slow.mjs'
+
+    await expect(
+      loadWebViewScriptModule(scriptPath, {
+        importModule,
+        importDeadlineMillis: 10,
+      }),
+    ).rejects.toBeInstanceOf(WebViewModuleImportStallError)
+
+    const retry = loadWebViewScriptModule(scriptPath, {
+      importModule,
+      importDeadlineMillis: 60_000,
+    })
+    pending.resolve({ default: 'slow' })
+    await expect(retry).resolves.toEqual({ default: 'slow' })
+    expect(importModule).toHaveBeenCalledOnce()
+    const download = readBootDownloads().find((d) => d.id === scriptPath)
+    expect(download?.state).toBe('complete')
+  })
+
+  it('starts a fresh import after repeated stalls', async () => {
+    const importModule = vi.fn<(path: string) => Promise<unknown>>(
+      () => new Promise<unknown>(() => undefined),
+    )
+    const scriptPath = '/b/pa/spacewave-app/v/app/Wedged.mjs'
+    const options = { importModule, importDeadlineMillis: 10 }
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(
+        loadWebViewScriptModule(scriptPath, options),
+      ).rejects.toBeInstanceOf(WebViewModuleImportStallError)
+    }
+    expect(importModule).toHaveBeenCalledOnce()
+
+    importModule.mockImplementationOnce(async () => ({ default: 'fresh' }))
+    await expect(loadWebViewScriptModule(scriptPath, options)).resolves.toEqual(
+      { default: 'fresh' },
+    )
+    expect(importModule).toHaveBeenCalledTimes(2)
+    expect(importModule.mock.calls[1]?.[0]).toBe(`${scriptPath}?bldr_retry=1`)
   })
 })
 

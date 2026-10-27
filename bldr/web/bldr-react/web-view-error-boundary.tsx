@@ -1,5 +1,8 @@
 import React from 'react'
-import { getWebViewRootAssetLoadError } from './web-view-module-loader.js'
+import {
+  getWebViewModuleImportStallError,
+  getWebViewRootAssetLoadError,
+} from './web-view-module-loader.js'
 
 export interface IWebViewErrorBoundaryProps {
   // children are children elements
@@ -19,6 +22,9 @@ interface IWebViewErrorBoundaryState {
 
 // isRecoverableError checks if the error is a transient error that can be recovered by retrying.
 function isRecoverableError(error: Error): boolean {
+  if (getWebViewModuleImportStallError(error)) {
+    return true
+  }
   const rootAssetError = getWebViewRootAssetLoadError(error)
   if (rootAssetError) {
     return (
@@ -59,6 +65,14 @@ function renderErrorDetails(error: Error): {
   title: string
   detail: string
 } {
+  const stall = getWebViewModuleImportStallError(error)
+  if (stall) {
+    return {
+      title: 'Still loading module',
+      detail: stall.scriptPath,
+    }
+  }
+
   const rootAssetError = getWebViewRootAssetLoadError(error)
   if (rootAssetError) {
     const result = rootAssetError.rootAsset
