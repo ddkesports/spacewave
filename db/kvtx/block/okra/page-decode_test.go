@@ -68,6 +68,19 @@ func checkPageDecode(t *testing.T, data []byte) {
 	}
 }
 
+// entriesInSlab reports whether entries sit in one array, as the slab
+// decoder carves them.
+func entriesInSlab(entries []*Entry) bool {
+	first := reflect.ValueOf(entries[0]).Pointer()
+	size := reflect.TypeFor[Entry]().Size()
+	for i, ent := range entries {
+		if reflect.ValueOf(ent).Pointer() != first+uintptr(i)*size {
+			return false
+		}
+	}
+	return true
+}
+
 // TestPageDecodeMatchesGenerated checks the slab decoder on canonical pages,
 // and that canonical pages take the slab path.
 func TestPageDecodeMatchesGenerated(t *testing.T) {
@@ -96,7 +109,10 @@ func TestPageDecodeMatchesGenerated(t *testing.T) {
 
 			// Require the slab path, then the same page as UnmarshalVT.
 			var slab Page
-			if !decodePageSlab(&slab, data) {
+			if err := slab.UnmarshalDecodedBlock(data); err != nil {
+				t.Fatal(err)
+			}
+			if len(page.Entries) != 0 && !entriesInSlab(slab.Entries) {
 				t.Fatal("canonical page left the slab path")
 			}
 			checkPageDecode(t, data)
@@ -123,9 +139,7 @@ func TestCursorDecodesPageIntoSlab(t *testing.T) {
 	}
 
 	// Require the entries to sit in one array.
-	first := reflect.ValueOf(page.Entries[0]).Pointer()
-	size := reflect.TypeFor[Entry]().Size()
-	if reflect.ValueOf(page.Entries[3]).Pointer() != first+3*size {
+	if !entriesInSlab(page.Entries) {
 		t.Fatal("cursor read did not decode the page into a slab")
 	}
 }

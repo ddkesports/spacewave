@@ -41,7 +41,7 @@ require (
 	github.com/aperturerobotics/go-websocket v1.8.15-0.20261024221652-c1205734f50c
 	github.com/aperturerobotics/go-winjob v0.0.0-20261024222822-b7a5589690d2
 	github.com/aperturerobotics/json-iterator-lite v1.1.0 // latest
-	github.com/aperturerobotics/protobuf-go-lite v0.19.1-0.20261024232153-ab66e6c9cb43 // master
+	github.com/aperturerobotics/protobuf-go-lite v0.19.1-0.20261028131920-f644656fc4a7 // master
 	github.com/aperturerobotics/starpc v0.52.4-0.20261024233818-0a9074172c29 // master
 	github.com/aperturerobotics/util v1.34.10-0.20261024231407-c6b31c4e4ea6 // master
 	github.com/cloudflare/circl v1.6.5

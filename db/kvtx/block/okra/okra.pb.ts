@@ -53,6 +53,7 @@ export const Root: MessageType<Root> = /* @__PURE__ */ createMessageType<Root>(
 
 /**
  * Page is a packed Okra level page.
+ * protobuf-go-lite:arena
  *
  * @generated from message kvtx.block.okra.Page
  */

@@ -2132,7 +2132,7 @@
       ]
     },
     "github.com/s4wave/spacewave/db/kvtx/block/okra": {
-      "hash": "da7f2ca1bea185e822fe305717537d0dcdde6ca0d3d284021110f6754294264c",
+      "hash": "9e52d135dd6fa60098f91a40136e1195a986a85106aa61e497d3562a26f3942d",
       "generatedFiles": [
         "db/kvtx/block/okra/okra.pb.go",
         "db/kvtx/block/okra/okra.pb.ts"

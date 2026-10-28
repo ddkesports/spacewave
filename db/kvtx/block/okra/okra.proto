@@ -21,6 +21,7 @@ message Root {
 }
 
 // Page is a packed Okra level page.
+//protobuf-go-lite:arena
 message Page {
   // Level is the Okra level of every entry in the page.
   uint32 level = 1;
