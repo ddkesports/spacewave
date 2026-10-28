@@ -300,7 +300,7 @@ func (t *Tx) commit(ctx context.Context, ordered bool) error {
 	// released, release the writer lock, and wait for a checkpoint the
 	// writes outpaced.
 	defer db.endWrite()
-	err := db.w.commit(ctx, t.st, changes, ordered)
+	err := db.w.commit(ctx, t.st, changes, ordered, false)
 	db.release(t.st, t.stripe)
 	if err == nil {
 		err = db.w.afterCommit(ctx)

@@ -23,7 +23,8 @@ var healthSources struct {
 }
 
 // RegisterHealth adds w to the volumes whose health HealthSnapshots reports,
-// until the returned function is called.
+// and whose flows FlowSnapshots reports when w is a FlowReporter, until the
+// returned function is called.
 func RegisterHealth(w HealthWatcher) func() {
 	// Count the registration.
 	healthSources.mtx.Lock()

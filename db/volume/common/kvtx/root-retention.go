@@ -230,7 +230,8 @@ func (v *Volume) SetBucketRoots(ctx context.Context, bucketID string, entries []
 	}
 
 	// Write the entries and move the roots in one transaction.
-	return v.withDirectAtomic(ctx, func(blocks block.StoreOps, rg *block_gc.RefGraph) error {
+	var existed []bool
+	err := v.withDirectAtomic(ctx, func(blocks block.StoreOps, rg *block_gc.RefGraph) error {
 		// Write the entries under the bucket's ownership.
 		if len(entries) != 0 {
 			bucket := block_gc.BucketIRI(bucketID)
@@ -238,7 +239,8 @@ func (v *Volume) SetBucketRoots(ctx context.Context, bucketID string, entries []
 				return err
 			}
 			gc := block_gc.NewGCStoreOpsWithParentAndTraceTask(blocks, rg, bucket, block_gc.BucketFlushTask())
-			if _, err := gc.PutBlockBatch(ctx, entries); err != nil {
+			var err error
+			if existed, err = gc.PutBlockBatch(ctx, entries); err != nil {
 				return err
 			}
 			if err := gc.FlushPending(ctx); err != nil {
@@ -254,6 +256,12 @@ func (v *Volume) SetBucketRoots(ctx context.Context, bucketID string, entries []
 		}
 		return nil
 	})
+
+	// Count the blocks the committed entries stored.
+	if err == nil {
+		v.countPutBatch(putRoots, entries, existed)
+	}
+	return err
 }
 
 // setBucketRoot requires a shared physical transaction for bytes and graph.

@@ -131,11 +131,12 @@ func (v *Volume) writeCacheFills(ctx context.Context, owner string, fills []*cac
 // prepareCacheFills writes fills of one owner in one transaction and records
 // each fill's ref and existence.
 func (v *Volume) prepareCacheFills(ctx context.Context, owner string, fills []*cacheFill) error {
+	// Write the fills.
 	size := 0
 	for _, fill := range fills {
 		size += len(fill.data)
 	}
-	return v.prepareOwned(ctx, owner, size, claimBucket, func(store block.StoreOps) error {
+	err := v.prepareOwned(ctx, owner, size, claimBucket, func(store block.StoreOps) error {
 		for _, fill := range fills {
 			ref, existed, err := store.PutBlock(ctx, fill.data, fill.opts)
 			if err != nil {
@@ -145,4 +146,12 @@ func (v *Volume) prepareCacheFills(ctx context.Context, owner string, fills []*c
 		}
 		return nil
 	})
+
+	// Count the blocks they stored.
+	if err == nil {
+		for _, fill := range fills {
+			v.countPut(putFill, len(fill.data), fill.existed)
+		}
+	}
+	return err
 }

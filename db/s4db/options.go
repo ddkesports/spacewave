@@ -29,6 +29,9 @@ type Options struct {
 	// writers wait until this handle closes. It also starts no watcher
 	// goroutine outside the database's own lifetime.
 	SingleProcess bool
+	// Families are key prefixes whose values Flows counts apart. A key
+	// counts under the first family it starts with.
+	Families [][]byte
 }
 
 // withDefaults returns o with zero fields set to their defaults.

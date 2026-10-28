@@ -121,6 +121,9 @@ func (v *Volume) PrepareStagedBlock(ctx context.Context, stage string, data []by
 		ref, existed, err = store.PutBlock(ctx, data, putOpts)
 		return err
 	})
+	if err == nil {
+		v.countPut(putStaged, len(data), existed)
+	}
 	return ref, existed, err
 }
 
@@ -133,6 +136,9 @@ func (v *Volume) PrepareStagedBlockBatch(ctx context.Context, stage string, entr
 		existed, err = store.PutBlockBatch(ctx, entries)
 		return err
 	})
+	if err == nil {
+		v.countPutBatch(putStaged, entries, existed)
+	}
 	return existed, err
 }
 

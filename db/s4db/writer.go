@@ -283,8 +283,9 @@ func (w *writer) replaySpace(st *state) error {
 }
 
 // commit appends a commit record for changes on base, writes its values,
-// and publishes the new state. The caller holds the writer lock.
-func (w *writer) commit(ctx context.Context, base *state, changes []tentry, ordered bool) error {
+// and publishes the new state. moves reports that changes are compaction's
+// moves, which the flows do not count. The caller holds the writer lock.
+func (w *writer) commit(ctx context.Context, base *state, changes []tentry, ordered, moves bool) error {
 	// Load the index paths of the changes the overlay does not answer
 	// together, so a cold commit reads one round per tree level instead of
 	// one path per change while it holds the writer lock.
@@ -299,10 +300,14 @@ func (w *writer) commit(ctx context.Context, base *state, changes []tentry, orde
 		return err
 	}
 
-	// Resolve each change against the base state: frees, count, and value
-	// placement.
+	// Resolve each change against the base state: frees, count, value
+	// placement, and the flow of its family.
 	r := &record{kind: kindCommit}
 	var writes []valueWrite
+	var flows []Flow
+	if !moves {
+		flows = make([]Flow, len(db.flows))
+	}
 	for _, c := range changes {
 		old, found, err := db.lookup(base, c.key)
 		if err != nil {
@@ -313,6 +318,9 @@ func (w *writer) commit(ctx context.Context, base *state, changes []tentry, orde
 		}
 		if found && old.isRef {
 			r.frees = append(r.frees, old.ref)
+			if flows != nil {
+				flows[db.family(c.key)].Freed += int64(old.ref.n)
+			}
 		}
 		switch {
 		case c.del:
@@ -326,6 +334,9 @@ func (w *writer) commit(ctx context.Context, base *state, changes []tentry, orde
 		if len(c.data) > int(db.hdr.inlineMax) {
 			v = value{isRef: true, ref: extentRef{n: uint32(len(c.data)), crc: checksum(c.data)}} // #nosec G115 -- Set bounds values by MaxValueSize.
 			writes = append(writes, valueWrite{op: len(r.ops), data: c.data})
+			if flows != nil {
+				flows[db.family(c.key)].Written += int64(len(c.data))
+			}
 		}
 		r.ops = append(r.ops, op{key: c.key, val: v})
 	}
@@ -399,6 +410,7 @@ func (w *writer) commit(ctx context.Context, base *state, changes []tentry, orde
 	if err := db.publish(ctx, next); err != nil {
 		return err
 	}
+	db.addFlows(flows)
 	if w.building.Load() {
 		w.changed = append(w.changed, r)
 	}
@@ -1277,7 +1289,7 @@ func (w *writer) relocate(ctx context.Context, budget int64, visits int) error {
 
 	// Rewrite the values: placement prefers the lowest free pages.
 	sp.closeOpen(st.seq)
-	return w.commit(ctx, st, moves, true)
+	return w.commit(ctx, st, moves, true, true)
 }
 
 // afterCommit runs checkpoint work. Values leave sparse pages in the

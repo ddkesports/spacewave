@@ -90,6 +90,9 @@ type DB struct {
 	// rewritten on every commit; another writer reading it only keeps more
 	// space.
 	shared atomic.Bool
+	// flows counts the values this handle's commits wrote and freed outside
+	// the index, for each of Options.Families and then for the other keys.
+	flows []flowCount
 }
 
 // open opens the database in s, closing s on failure.
@@ -104,6 +107,7 @@ func open(s storage, opts Options) (*DB, error) {
 		warmer:    routine.NewRoutineContainer(),
 		compactor: routine.NewRoutineContainer(),
 		leases:    make(map[int64]struct{}),
+		flows:     make([]flowCount, len(opts.Families)+1),
 	}
 	db.flush = newFlusher(s, &db.cur)
 	db.w = &writer{db: db}

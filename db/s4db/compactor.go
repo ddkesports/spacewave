@@ -453,7 +453,7 @@ func (c *compactor) commit(ctx context.Context, moves []move) (held bool, moved 
 
 	// Rewrite them in a new extent: placement prefers the lowest free pages.
 	sp.closeOpen(st.seq)
-	return true, moved, w.commit(ctx, st, changes, true)
+	return true, moved, w.commit(ctx, st, changes, true, true)
 }
 
 // sameValue reports whether a and b hold the same value.

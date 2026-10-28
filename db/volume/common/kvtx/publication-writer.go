@@ -40,6 +40,9 @@ type publicationRequest struct {
 	bytes int
 	// rootOwner keeps this revision alive until its consumer takes a reader pin.
 	rootOwner string
+	// existed records which entries the volume held when the group wrote
+	// them, for the flows.
+	existed []bool
 }
 
 // publicationWriter serializes atomic publications into bounded physical groups.
@@ -387,8 +390,14 @@ func (w *publicationWriter) run() {
 		})
 
 		// Notify volume observers only after successful physical publication,
-		// and count its bytes toward the next size measurement.
+		// count the blocks each accepted request stored, and count its bytes
+		// toward the next size measurement.
 		if committed {
+			for i, r := range group {
+				if results[i] == nil {
+					w.volume.countPutBatch(putPublication, r.publication.Entries, r.existed)
+				}
+			}
 			w.volume.broadcastStorageStatsChanged()
 			w.volume.noteWritten(uint64(written)) // #nosec G115 -- an admission cost is not negative.
 		}
@@ -550,8 +559,9 @@ func (w *publicationWriter) apply(
 ) error {
 	// Write untracked entries directly.
 	p := req.publication
+	var err error
 	if !p.TrackGC {
-		if _, err := blocks.PutBlockBatch(ctx, p.Entries); err != nil {
+		if req.existed, err = blocks.PutBlockBatch(ctx, p.Entries); err != nil {
 			return err
 		}
 		return w.setHeads(ctx, tx, p, replacements)
@@ -563,7 +573,7 @@ func (w *publicationWriter) apply(
 		return err
 	}
 	gc := block_gc.NewGCStoreOpsWithParentAndTraceTask(blocks, rg, owner, block_gc.BucketFlushTask())
-	if _, err := gc.PutBlockBatch(ctx, p.Entries); err != nil {
+	if req.existed, err = gc.PutBlockBatch(ctx, p.Entries); err != nil {
 		return err
 	}
 	if err := gc.FlushPending(ctx); err != nil {

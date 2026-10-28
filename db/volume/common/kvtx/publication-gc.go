@@ -81,27 +81,39 @@ func (v *Volume) withDirectAtomic(ctx context.Context, fn func(block.StoreOps, *
 // after return; it also checks existence inside the physical write transaction.
 // An empty bucketID writes the block without ownership.
 func (v *Volume) PrepareOwnedBlock(ctx context.Context, bucketID string, data []byte, opts *block.PutOpts) (ref *block.BlockRef, existed bool, err error) {
+	// Send a cache fill to the fill writer, which counts it.
 	putOpts, _ := block.PutOptsWithoutSync(opts)
 	if putOpts.GetCacheFill() {
 		return v.prepareCacheFill(ctx, bucketOwner(bucketID), data, putOpts)
 	}
+
+	// Write the block under the bucket's ownership and count it.
 	err = v.prepareOwned(ctx, bucketOwner(bucketID), len(data), claimBucket, func(store block.StoreOps) error {
 		ref, existed, err = store.PutBlock(ctx, data, putOpts)
 		return err
 	})
+	if err == nil {
+		v.countPut(putOwned, len(data), existed)
+	}
 	return ref, existed, err
 }
 
 // PrepareOwnedBlockBatch is used by bounded staging's ordinary capacity drains.
 // It cannot expose a gap between persisting bytes and rescuing their ownership.
 func (v *Volume) PrepareOwnedBlockBatch(ctx context.Context, bucketID string, entries []*block.PutBatchEntry) (existed []bool, err error) {
+	// An empty batch writes nothing.
 	if len(entries) == 0 && v.SupportsAtomicPublication() {
 		return nil, nil
 	}
+
+	// Write the entries under the bucket's ownership and count them.
 	err = v.prepareOwned(ctx, bucketOwner(bucketID), batchBytes(entries), claimBucket, func(store block.StoreOps) error {
 		existed, err = store.PutBlockBatch(ctx, entries)
 		return err
 	})
+	if err == nil {
+		v.countPutBatch(putOwned, entries, existed)
+	}
 	return existed, err
 }
 

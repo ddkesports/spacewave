@@ -134,6 +134,11 @@ type Volume struct {
 	// healthDueAt is the writtenBytes at which the next size measurement is
 	// due, zero before the first.
 	healthDueAt atomic.Uint64
+	// puts counts the new blocks of each write path, for the flows.
+	puts [numPutPaths]putCount
+	// valueFlows reports the values the storage wrote and freed by key
+	// family, may be nil.
+	valueFlows func() []volume.ValueFlow
 }
 
 // KvtxVolume is an interface for a volume with a kvtx store.
@@ -371,6 +376,7 @@ func (v *Volume) PutBlockBatch(ctx context.Context, entries []*block.PutBatchEnt
 	if err != nil {
 		return nil, err
 	}
+	v.countPutBatch(putDirect, entries, existed)
 	if len(entries) != 0 {
 		v.broadcastStorageStatsChanged()
 	}
@@ -392,8 +398,10 @@ func (v *Volume) PutBlock(ctx context.Context, data []byte, opts *block.PutOpts)
 		return nil, exists, err
 	}
 
-	// Wake Volume statistics watchers when the block adds stored data.
+	// Count the block and wake Volume statistics watchers when it adds
+	// stored data.
 	if ref != nil && !exists {
+		v.countPut(putDirect, len(data), false)
 		v.broadcastStorageStatsChanged()
 	}
 

@@ -49,15 +49,24 @@ func NewVolume(ctx context.Context, le *logrus.Entry, conf *Config) (*Volume, er
 		return nil, err
 	}
 
-	// Convert a bolt Volume file and open the database.
+	// Convert a bolt Volume file.
 	path := conf.GetPath()
 	if err := convertBolt(ctx, le, path); err != nil {
 		return nil, err
+	}
+
+	// Open the database, counting the values of each of the Volume's key
+	// families.
+	families := volume_kvtx.ValueFamilies(keys)
+	prefixes := make([][]byte, len(families))
+	for i, f := range families {
+		prefixes[i] = f.Prefix
 	}
 	db, err := s4db.Open(path, s4db.Options{
 		CacheBytes:    int(conf.GetCacheBytes()),
 		CheckpointMax: conf.GetCheckpointMaxBytes(),
 		SingleProcess: conf.GetSingleProcess(),
+		Families:      prefixes,
 	})
 	if err != nil {
 		return nil, err
@@ -95,14 +104,32 @@ func NewVolume(ctx context.Context, le *logrus.Entry, conf *Config) (*Volume, er
 	}
 
 	// Coordinate writers across processes through the database file, measure
-	// the file and its disk for the volume's health, and release what
-	// collection frees while the volume refuses writes at its reserve.
+	// the file and its disk for the volume's health, report the values each
+	// key family wrote and freed, and release what collection frees while
+	// the volume refuses writes at its reserve.
 	vol.Coordinator = coord_s4db.NewCoordinator(db, coord_inmem.ForVolume(vol.GetID()))
 	vol.SetReserveRelease(db.Release)
+	vol.SetValueFlows(func() []volume.ValueFlow {
+		return valueFlows(families, db.Flows())
+	})
 	vol.SetHealthSizes(func(ctx context.Context) (volume_kvtx.HealthSizes, error) {
 		return healthSizes(ctx, db, path, conf.GetReserveBytes())
 	})
 	return vol, nil
+}
+
+// valueFlows names the flows of the database opened with families, the last
+// of which counts the keys under none.
+func valueFlows(families []volume_kvtx.ValueFamily, flows []s4db.Flow) []volume.ValueFlow {
+	out := make([]volume.ValueFlow, len(flows))
+	for i, f := range flows {
+		name := "other"
+		if i < len(families) {
+			name = families[i].Name
+		}
+		out[i] = volume.ValueFlow{Family: name, Written: uint64(f.Written), Freed: uint64(f.Freed)} // #nosec G115 -- a flow is not negative.
+	}
+	return out
 }
 
 // GetDB returns the database of an s4db Volume, or nil for another Volume.

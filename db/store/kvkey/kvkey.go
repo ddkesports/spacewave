@@ -108,6 +108,14 @@ func (k *KVKey) GetPeerPrivKey() []byte {
 	}, nil)
 }
 
+// GetObjectStoreFullPrefix returns the prefix for all object stores.
+func (k *KVKey) GetObjectStoreFullPrefix() []byte {
+	return bytes.Join([][]byte{
+		k.conf.GetPrefix(),
+		k.conf.GetObjectStorePrefix(),
+	}, nil)
+}
+
 // GetObjectStorePrefixByID returns the prefix to use for an object store with an id.
 func (k *KVKey) GetObjectStorePrefixByID(objStoreID string) []byte {
 	return bytes.Join([][]byte{

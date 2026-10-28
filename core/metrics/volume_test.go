@@ -57,8 +57,44 @@ func TestVolumeHealthScrape(t *testing.T) {
 	}
 }
 
-// scrapeVolume gathers the process metrics and returns the gauges of volume
-// id, keyed by name and any phase label.
+// flowVolume is a held volume that reports flows.
+type flowVolume struct {
+	heldVolume
+}
+
+// GetFlows returns one write path's flow and one key family's.
+func (v *flowVolume) GetFlows() *volume.VolumeFlows {
+	return &volume.VolumeFlows{
+		VolumeID: "test/held",
+		Puts:     []volume.PutFlow{{Path: "fill", Blocks: 3, Bytes: 4096}},
+		Values:   []volume.ValueFlow{{Family: "graph", Written: 1 << 20, Freed: 1 << 19}},
+	}
+}
+
+// TestVolumeFlowsScrape checks that a scrape reports a registered volume's
+// flows as counters labeled by write path and key family.
+func TestVolumeFlowsScrape(t *testing.T) {
+	// Scrape a volume that reports flows.
+	release := volume.RegisterHealth(&flowVolume{heldVolume{start: time.Now()}})
+	defer release()
+	values := scrapeVolume(t, "test/held")
+
+	// Each flow appears under its label.
+	want := map[string]float64{
+		"spacewave_volume_put_blocks_total{path=fill}":             3,
+		"spacewave_volume_put_bytes_total{path=fill}":              4096,
+		"spacewave_volume_value_written_bytes_total{family=graph}": 1 << 20,
+		"spacewave_volume_value_freed_bytes_total{family=graph}":   1 << 19,
+	}
+	for key, v := range want {
+		if values[key] != v {
+			t.Fatalf("%s = %v; want %v in %v", key, values[key], v, values)
+		}
+	}
+}
+
+// scrapeVolume gathers the process metrics and returns the gauges and
+// counters of volume id, keyed by name and any phase, path or family label.
 func scrapeVolume(t *testing.T, id string) map[string]float64 {
 	// Gather the families.
 	t.Helper()
@@ -79,10 +115,12 @@ func scrapeVolume(t *testing.T, id string) map[string]float64 {
 				continue
 			}
 			key := f.GetName()
-			if phase, ok := labels["phase"]; ok {
-				key += "{phase=" + phase + "}"
+			for _, name := range []string{"phase", "path", "family"} {
+				if value, ok := labels[name]; ok {
+					key += "{" + name + "=" + value + "}"
+				}
 			}
-			values[key] = m.GetGauge().GetValue()
+			values[key] = m.GetGauge().GetValue() + m.GetCounter().GetValue()
 		}
 	}
 	return values

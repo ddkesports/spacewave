@@ -65,6 +65,26 @@ var (
 		"Free disk below which the volume refuses new writes, as last measured; zero for no reserve.",
 		[]string{volumeLabel}, nil,
 	)
+	volumePutBlocksDesc = prometheus.NewDesc(
+		"spacewave_volume_put_blocks_total",
+		"Blocks the volume stored that it did not hold, by write path, since it opened.",
+		[]string{volumeLabel, "path"}, nil,
+	)
+	volumePutBytesDesc = prometheus.NewDesc(
+		"spacewave_volume_put_bytes_total",
+		"Length of the blocks the volume stored that it did not hold, by write path, since it opened.",
+		[]string{volumeLabel, "path"}, nil,
+	)
+	volumeValueWrittenBytesDesc = prometheus.NewDesc(
+		"spacewave_volume_value_written_bytes_total",
+		"Length of the values the volume's storage stored outside its index, by key family, since it opened.",
+		[]string{volumeLabel, "family"}, nil,
+	)
+	volumeValueFreedBytesDesc = prometheus.NewDesc(
+		"spacewave_volume_value_freed_bytes_total",
+		"Length of the stored values outside its index that the volume's storage replaced or deleted, by key family, since it opened.",
+		[]string{volumeLabel, "family"}, nil,
+	)
 )
 
 // volumeCollector reports the health of each volume the process collects.
@@ -76,17 +96,38 @@ func (volumeCollector) Describe(ch chan<- *prometheus.Desc) {
 		volumeGCPhaseDesc, volumeGCPhaseSecondsDesc, volumeFileBytesDesc,
 		volumeLiveValueBytesDesc, volumeFreeDiskBytesDesc, volumeSizesAgeSecondsDesc,
 		volumePublicationPendingDesc, volumePublicationPendingBytesDesc, volumeWriteReserveDesc,
-		volumeReserveBytesDesc,
+		volumeReserveBytesDesc, volumePutBlocksDesc, volumePutBytesDesc,
+		volumeValueWrittenBytesDesc, volumeValueFreedBytesDesc,
 	} {
 		ch <- d
 	}
 }
 
-// Collect sends each registered volume's health as of now.
+// Collect sends each registered volume's health as of now, and the data
+// each wrote since it opened.
 func (volumeCollector) Collect(ch chan<- prometheus.Metric) {
 	now := time.Now()
 	for _, h := range volume.HealthSnapshots() {
 		collectVolume(ch, h, now)
+	}
+	for _, f := range volume.FlowSnapshots() {
+		collectFlows(ch, f)
+	}
+}
+
+// collectFlows sends the counters of the data one volume wrote.
+func collectFlows(ch chan<- prometheus.Metric, f *volume.VolumeFlows) {
+	// Report the new blocks of each write path.
+	id := f.VolumeID
+	for _, p := range f.Puts {
+		ch <- prometheus.MustNewConstMetric(volumePutBlocksDesc, prometheus.CounterValue, float64(p.Blocks), id, p.Path)
+		ch <- prometheus.MustNewConstMetric(volumePutBytesDesc, prometheus.CounterValue, float64(p.Bytes), id, p.Path)
+	}
+
+	// Report the stored values of each key family.
+	for _, v := range f.Values {
+		ch <- prometheus.MustNewConstMetric(volumeValueWrittenBytesDesc, prometheus.CounterValue, float64(v.Written), id, v.Family)
+		ch <- prometheus.MustNewConstMetric(volumeValueFreedBytesDesc, prometheus.CounterValue, float64(v.Freed), id, v.Family)
 	}
 }
 
