@@ -169,10 +169,10 @@ func (v *Volume) prepareOwned(
 	})
 }
 
-// sweepChunkSize bounds the candidates one reference batch releases. The
-// orphan marker owns every candidate, so releasing nodes one at a time would
-// rewrite its posting list once per node, which is quadratic in the number of
-// orphans.
+// sweepChunkSize bounds the candidates one reference batch releases, once
+// chunks have grown from sweepChunkStart. The orphan marker owns every
+// candidate, so releasing nodes one at a time would rewrite its posting list
+// once per node, which is quadratic in the number of orphans.
 const sweepChunkSize = 64
 
 // sweepBudget bounds the time one sweep transaction spends releasing chunks
@@ -180,11 +180,22 @@ const sweepChunkSize = 64
 // changes, so a transaction sweeps chunks until the budget runs out.
 const sweepBudget = 50 * time.Millisecond
 
-// sweepChunkTime is the time one chunk should take. The budget is checked
-// between chunks only, so chunks are sized to fit it: a process starved of CPU
-// that overruns this time halves the next chunk instead of holding the writer
-// for many budgets.
+// sweepChunkTime is the time one chunk should take. A chunk also yields
+// between its nodes, so this bounds only the work a chunk batches into one
+// reference change: a process starved of CPU that overruns this time halves
+// the next chunk instead of batching more.
 const sweepChunkTime = sweepBudget / 4
+
+// sweepChunkStart is the size of a sweep's first chunk. A sweep starts small
+// and doubles while chunks run fast, so the first chunks of a cold store cost
+// the writer a few nodes rather than a full chunk of cold reads.
+const sweepChunkStart = 1
+
+// sweepPrefetchNodes bounds the nodes one sweep transaction removes. Their
+// records are prefetched in a read transaction first, so the reads under the
+// writer find warm pages; a transaction that outran the prefetch would read
+// cold pages under the writer again.
+const sweepPrefetchNodes = 256
 
 // awaitLimit bounds how long a sweep waits for the child lists of reached
 // blocks. A write commits a block's list in its staging flush, after the
@@ -196,10 +207,11 @@ var awaitLimit = 2 * time.Minute
 // Current owners, outgoing edges, orphan markers, and physical deletion of each
 // candidate share one raw transaction with the same serialization as grouped
 // head publication. Each transaction sweeps chunks of candidates until
-// sweepBudget elapses or another writer queues for the store, sizing each
-// chunk by how long the last one took, so a foreground commit waits for at
-// most one chunk. It returns the nodes removed by committed transactions, also
-// when a later transaction fails.
+// sweepBudget elapses or another writer queues for the store, checking before
+// each candidate, so a foreground commit waits for at most one candidate's
+// reads, which a read transaction before each sweep transaction warms. It
+// returns the nodes removed by committed transactions, also when a later
+// transaction fails.
 func (v *Volume) SweepUnreferenced(ctx context.Context, graph block_gc.RefGraphOps, nodes []string) ([]string, error) {
 	// Require the Volume transaction domain for atomic sweeping.
 	actual, ok := v.refGraph.(*transactionRefGraph)
@@ -213,24 +225,29 @@ func (v *Volume) SweepUnreferenced(ctx context.Context, graph block_gc.RefGraphO
 	defer v.wakeHealthSizes()
 
 	// Sweep the candidates in budgeted transactions. Each consumes chunks from
-	// the front of nodes.
+	// the front of nodes, within the window a read transaction warmed first.
 	var swept []string
-	size := sweepChunkSize
+	size := sweepChunkStart
 	for len(nodes) != 0 {
+		window := nodes[:min(len(nodes), sweepPrefetchNodes)]
+		if err := v.prefetchNodeRefs(ctx, window); err != nil {
+			return swept, err
+		}
 		var batch []string
 		err := v.withDirectAtomic(ctx, func(blocks block.StoreOps, rg *block_gc.RefGraph) error {
 			start := time.Now()
-			for len(nodes) != 0 {
+			yield := func() bool { return time.Since(start) >= sweepBudget || v.writersWaiting() }
+			for len(window) != 0 {
 				chunkStart := time.Now()
-				chunk := nodes[:min(len(nodes), size)]
-				nodes = nodes[len(chunk):]
-				removed, err := sweepChunk(ctx, blocks, rg, chunk)
+				chunk := window[:min(len(window), size)]
+				removed, done, err := sweepChunk(ctx, blocks, rg, chunk, yield)
+				window, nodes = window[done:], nodes[done:]
 				if err != nil {
 					return err
 				}
 				batch = append(batch, removed...)
 				size = nextChunkSize(size, time.Since(chunkStart))
-				if time.Since(start) >= sweepBudget || v.writersWaiting() {
+				if yield() {
 					break
 				}
 			}
@@ -465,9 +482,9 @@ func (v *Volume) sweepBlockPass(ctx context.Context, actual *transactionRefGraph
 // whether it swept every unreached block and every block the mark reached has
 // a list.
 func (v *Volume) sweepUnreached(ctx context.Context, mark *block_gc.BlockMark, stats *block_gc.Stats) (bool, error) {
-	// Time the sweep, starting from the default chunk size.
+	// Time the sweep, starting from the first chunk size.
 	nodes := mark.Unreached
-	size := sweepChunkSize
+	size := sweepChunkStart
 	start := time.Now()
 	defer func() { stats.AtomicSweepDuration += time.Since(start) }()
 	var deadline *time.Timer
@@ -487,6 +504,13 @@ func (v *Volume) sweepUnreached(ctx context.Context, mark *block_gc.BlockMark, s
 		}
 		stats.RescuedNodes += caught
 
+		// Warm the records of the blocks the transaction may remove, so the
+		// removals under the writer read no cold pages.
+		window := nodes[:min(len(nodes), sweepPrefetchNodes)]
+		if err := v.prefetchNodeRefs(ctx, window); err != nil {
+			return false, err
+		}
+
 		// Rescue the rest and sweep a budget of chunks under the writer. The
 		// budget covers the rescue and the sweep together.
 		var batch []string
@@ -495,16 +519,18 @@ func (v *Volume) sweepUnreached(ctx context.Context, mark *block_gc.BlockMark, s
 		var rescue time.Duration
 		var rescuedAll bool
 		err = v.withDirectAtomic(ctx, func(blocks block.StoreOps, rg *block_gc.RefGraph) error {
-			// Rescue the blocks adopted since the last transaction. A rescue
-			// the budget or a waiting writer stopped leaves the rest for the
-			// next catch-up and sweeps nothing: blocks are removed only in a
-			// transaction whose rescue walked everything.
+			// Rescue the blocks adopted since the last transaction.
 			held = time.Now()
 			yield := func() bool { return time.Since(held) >= sweepBudget || v.writersWaiting() }
 			rescued, done, err := rg.RescueAdopted(ctx, mark, yield)
 			if err != nil {
 				return err
 			}
+
+			// Record the rescue. A rescue the budget or a waiting writer
+			// stopped leaves the rest for the next catch-up and sweeps
+			// nothing: blocks are removed only in a transaction whose rescue
+			// walked everything.
 			rescue = time.Since(held)
 			stats.RescuedNodes += rescued
 			stats.SweepLongestRescue = max(stats.SweepLongestRescue, rescue)
@@ -545,12 +571,13 @@ func (v *Volume) sweepUnreached(ctx context.Context, mark *block_gc.BlockMark, s
 				return nil
 			}
 
-			// Sweep chunks until the budget runs out or a writer waits.
-			for len(nodes) != 0 {
+			// Sweep chunks of the warmed window until the budget runs out or
+			// a writer waits.
+			for len(window) != 0 {
 				chunkStart := time.Now()
-				chunk := nodes[:min(len(nodes), size)]
+				chunk := window[:min(len(window), size)]
 				removed, done, err := sweepBlockChunk(ctx, blocks, rg, mark.Live, chunk, v.writersWaiting)
-				nodes = nodes[done:]
+				window, nodes = window[done:], nodes[done:]
 				stats.AtomicSweepCount += done
 				if err != nil {
 					return err
@@ -608,6 +635,12 @@ func (v *Volume) sweepUnreached(ctx context.Context, mark *block_gc.BlockMark, s
 	// Report the blocks still unknown, none when later commits listed them.
 	stats.UnknownBlocks, stats.UnknownSample, stats.UnknownNamers = mark.Unknown, mark.UnknownSample, mark.UnknownNamers
 	return mark.Unknown == 0, nil
+}
+
+// prefetchNodeRefs warms the records of nodes in a read transaction that holds
+// no writer, as RefGraph.PrefetchNodeRefs describes.
+func (v *Volume) prefetchNodeRefs(ctx context.Context, nodes []string) error {
+	return openRefGraph(&directReadStore{volume: v}).PrefetchNodeRefs(ctx, nodes)
 }
 
 // sweepBlockChunk removes the chunk's blocks that the mark and the rescues
@@ -676,21 +709,28 @@ func nextChunkSize(size int, took time.Duration) int {
 // candidate another owner took since it was marked: the marker would
 // otherwise list the node as a candidate in every later sweep, and the graph
 // marks it again when it loses its last owner.
-func sweepChunk(ctx context.Context, blocks block.StoreOps, rg *block_gc.RefGraph, chunk []string) ([]string, error) {
+func sweepChunk(ctx context.Context, blocks block.StoreOps, rg *block_gc.RefGraph, chunk []string, yield func() bool) ([]string, int, error) {
 	// Collect the candidates the marker still owns alone, with their edges,
-	// and the candidates another owner took.
+	// and the candidates another owner took, stopping before the next node
+	// once yield reports a waiting writer or a spent budget, after at least
+	// one: each node's reads can cost the writer a cold page.
 	var swept, taken []string
 	var removes []block_gc.RefEdge
 	released := make(map[string]struct{})
 	seen := make(map[string]struct{}, len(chunk))
-	for _, node := range chunk {
+	done := len(chunk)
+	for i, node := range chunk {
+		if i != 0 && yield() {
+			done = i
+			break
+		}
 		if _, dup := seen[node]; dup {
 			continue
 		}
 		seen[node] = struct{}{}
 		marked, owned, err := markerState(ctx, rg, node)
 		if err != nil {
-			return nil, err
+			return nil, i, err
 		}
 		if !marked {
 			continue
@@ -701,7 +741,7 @@ func sweepChunk(ctx context.Context, blocks block.StoreOps, rg *block_gc.RefGrap
 		}
 		targets, err := rg.GetOutgoingRefs(ctx, node)
 		if err != nil {
-			return nil, err
+			return nil, i, err
 		}
 		for _, target := range targets {
 			removes = append(removes, block_gc.RefEdge{Subject: node, Object: target})
@@ -720,24 +760,24 @@ func sweepChunk(ctx context.Context, blocks block.StoreOps, rg *block_gc.RefGrap
 		}
 	}
 	if len(removes) == 0 {
-		return nil, nil
+		return nil, done, nil
 	}
 
 	// Release the edges together. Removing a node's own marker keeps it
 	// unmarked, and each child left without an owner gains a marker.
 	if err := rg.ApplyRefBatch(ctx, nil, removes); err != nil {
-		return nil, err
+		return nil, done, err
 	}
 
 	// Delete the swept blocks.
 	for _, node := range swept {
 		if ref, ok := block_gc.ParseBlockIRI(node); ok {
 			if err := blocks.RmBlock(ctx, ref); err != nil {
-				return nil, err
+				return nil, done, err
 			}
 		}
 	}
-	return swept, nil
+	return swept, done, nil
 }
 
 // markerState reports whether the unreferenced marker holds node and whether

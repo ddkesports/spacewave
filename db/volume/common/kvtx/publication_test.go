@@ -35,6 +35,17 @@ type publicationTestStore struct {
 	afterCommit          bool
 	writersWaiting       bool
 	commits              int
+	// readDelay slows each read of a write transaction, as a cold page does.
+	readDelay time.Duration
+	// longestWrite is the longest a write transaction stayed open.
+	longestWrite time.Duration
+}
+
+// holdWrite records the time a write transaction stayed open.
+func (s *publicationTestStore) holdWrite(opened time.Time) {
+	s.mu.Lock()
+	s.longestWrite = max(s.longestWrite, time.Since(opened))
+	s.mu.Unlock()
 }
 
 func (s *publicationTestStore) SupportsAtomicCommit() bool { return true }
@@ -61,6 +72,7 @@ func (s *publicationTestStore) NewTransaction(ctx context.Context, write bool) (
 	var g *publicationGate
 	var setErr, commitErr error
 	var after bool
+	var delay time.Duration
 	if write {
 		s.mu.Lock()
 		g = s.gate
@@ -68,6 +80,7 @@ func (s *publicationTestStore) NewTransaction(ctx context.Context, write bool) (
 		setErr = s.failSet
 		commitErr = s.errorCommit
 		after = s.afterCommit
+		delay = s.readDelay
 		s.mu.Unlock()
 	}
 
@@ -89,7 +102,7 @@ func (s *publicationTestStore) NewTransaction(ctx context.Context, write bool) (
 	if !write {
 		return tx, nil
 	}
-	return &publicationTestTx{Tx: tx, store: s, failSet: setErr, errorCommit: commitErr, afterCommit: after}, nil
+	return &publicationTestTx{Tx: tx, store: s, failSet: setErr, errorCommit: commitErr, afterCommit: after, delay: delay, opened: time.Now()}, nil
 }
 
 type publicationTestTx struct {
@@ -97,6 +110,35 @@ type publicationTestTx struct {
 	store                *publicationTestStore
 	failSet, errorCommit error
 	afterCommit          bool
+	// delay slows each read, and opened times the transaction's hold.
+	delay  time.Duration
+	opened time.Time
+	ended  sync.Once
+}
+
+// end records the transaction's hold once, on commit or discard.
+func (t *publicationTestTx) end() {
+	t.ended.Do(func() { t.store.holdWrite(t.opened) })
+}
+
+func (t *publicationTestTx) Get(ctx context.Context, key []byte) ([]byte, bool, error) {
+	time.Sleep(t.delay)
+	return t.Tx.Get(ctx, key)
+}
+
+func (t *publicationTestTx) Exists(ctx context.Context, key []byte) (bool, error) {
+	time.Sleep(t.delay)
+	return t.Tx.Exists(ctx, key)
+}
+
+func (t *publicationTestTx) ScanPrefixKeys(ctx context.Context, prefix []byte, cb func(key []byte) error) error {
+	time.Sleep(t.delay)
+	return t.Tx.ScanPrefixKeys(ctx, prefix, cb)
+}
+
+func (t *publicationTestTx) Discard() {
+	t.end()
+	t.Tx.Discard()
 }
 
 func (t *publicationTestTx) Set(ctx context.Context, key, value []byte) error {
@@ -114,7 +156,9 @@ func (t *publicationTestTx) Commit(ctx context.Context) error {
 	if t.errorCommit != nil && !t.afterCommit {
 		return t.errorCommit
 	}
-	if err := t.Tx.Commit(ctx); err != nil {
+	err := t.Tx.Commit(ctx)
+	t.end()
+	if err != nil {
 		return err
 	}
 

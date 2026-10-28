@@ -554,6 +554,31 @@ func (g *RefGraph) GetIncomingRefs(ctx context.Context, node string) ([]string, 
 	return answer, nil
 }
 
+// PrefetchNodeRefs loads, in one read transaction, the index pages of the
+// records that GetIncomingRefs, GetOutgoingRefs and RemoveNodeRefs read for
+// each node: its incoming and forward records and, for a block, its child
+// list. A sweep calls it before the write transaction that removes the nodes,
+// so the reads under the writer hit the store's page cache instead of cold
+// pages, and the writer is held for the removal alone.
+func (g *RefGraph) PrefetchNodeRefs(ctx context.Context, nodes []string) error {
+	// Skip the transaction when there is nothing to load.
+	if len(nodes) == 0 {
+		return nil
+	}
+
+	// List the record keys of every node, then load their pages together.
+	keys := make([][]byte, 0, 3*len(nodes))
+	for _, node := range nodes {
+		keys = append(keys, graphKey(kindIncoming, node), graphKey(kindForward, node))
+		if isBlockNode(node) {
+			keys = append(keys, graphKey(kindChildren, node))
+		}
+	}
+	return g.transaction(ctx, false, func(ctx context.Context, tx kvtx.Tx) error {
+		return kvtx.Prefetch(ctx, tx, keys)
+	})
+}
+
 // TrackedBlocks reports, for each ref, whether the graph tracks the block, in
 // one read. A block is tracked from its first write until a block pass sweeps
 // it, which removes its child list and its value together, so a tracked block
