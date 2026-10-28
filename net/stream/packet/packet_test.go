@@ -138,3 +138,40 @@ func TestRecvMsgEOF(t *testing.T) {
 		t.Fatalf("RecvMsg on empty stream: got %v, want io.EOF", err)
 	}
 }
+
+// countingWriter counts the writes that reach its buffer.
+type countingWriter struct {
+	rwBuf
+	writes int
+}
+
+func (b *countingWriter) Write(p []byte) (int, error) {
+	b.writes++
+	return b.rwBuf.Write(p)
+}
+
+// TestSendMsgsOneWrite verifies a batch reaches the stream in one write and
+// decodes as the same messages in order.
+func TestSendMsgsOneWrite(t *testing.T) {
+	// Send a batch that includes an empty message.
+	buf := &countingWriter{}
+	sess := NewSession(buf, 1<<20)
+	out := []*timestamppb.Timestamp{{Seconds: 1}, {}, {Seconds: 3, Nanos: 4}}
+	if err := sess.SendMsgs(out[0], out[1], out[2]); err != nil {
+		t.Fatalf("SendMsgs: %v", err)
+	}
+	if buf.writes != 1 {
+		t.Fatalf("batch took %d writes, want 1", buf.writes)
+	}
+
+	// Receive each framed message in order.
+	for i, want := range out {
+		in := &timestamppb.Timestamp{}
+		if err := sess.RecvMsg(in); err != nil {
+			t.Fatalf("RecvMsg %d: %v", i, err)
+		}
+		if in.GetSeconds() != want.GetSeconds() || in.GetNanos() != want.GetNanos() {
+			t.Fatalf("message %d = %v, want %v", i, in, want)
+		}
+	}
+}

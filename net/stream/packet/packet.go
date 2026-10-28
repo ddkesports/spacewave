@@ -34,24 +34,41 @@ func NewSession(
 
 // SendMsg tries to send a message on the wire.
 func (s *Session) SendMsg(msg protobuf_go_lite.Message) error {
-	// Measure and bound the serialized message.
-	size := msg.SizeVT()
-	if size > math.MaxInt32 {
-		return errors.New("message too large: exceeds maximum uint32 value")
+	return s.SendMsgs(msg)
+}
+
+// SendMsgs sends messages in order with one write, so a stream whose writes
+// each wait for its transport pays that wait once per batch.
+func (s *Session) SendMsgs(msgs ...protobuf_go_lite.Message) error {
+	// Measure and bound each serialized message.
+	sizes := make([]int, len(msgs))
+	total := 0
+	for i, msg := range msgs {
+		sizes[i] = msg.SizeVT()
+		if sizes[i] > math.MaxInt32 {
+			return errors.New("message too large: exceeds maximum uint32 value")
+		}
+		total += sizes[i] + 4
 	}
 
-	// Allocate the length-prefixed packet and marshal the payload.
-	pktBuf := make([]byte, size+4)
-	binary.LittleEndian.PutUint32(pktBuf[:4], uint32(size)) //nolint:gosec // size is bounded by the packet framing limit.
-	if _, err := msg.MarshalToSizedBufferVT(pktBuf[4:]); err != nil {
-		return err
+	// Allocate the length-prefixed packets and marshal each payload.
+	pktBuf := make([]byte, total)
+	off := 0
+	for i, msg := range msgs {
+		size := sizes[i]
+		binary.LittleEndian.PutUint32(pktBuf[off:off+4], uint32(size)) //nolint:gosec // size is bounded by the packet framing limit.
+		off += 4
+		if _, err := msg.MarshalToSizedBufferVT(pktBuf[off : off+size]); err != nil {
+			return err
+		}
+		off += size
 	}
 
 	// Serialize writes under the session send lock.
 	s.sendMtx.Lock()
 	defer s.sendMtx.Unlock()
 
-	// Write the complete packet to the underlying stream.
+	// Write the complete packets to the underlying stream.
 	if _, err := s.Write(pktBuf); err != nil {
 		return err
 	}

@@ -6,7 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/aperturerobotics/util/csync"
+	protobuf_go_lite "github.com/aperturerobotics/protobuf-go-lite"
 	"github.com/aperturerobotics/util/routine"
 	"github.com/pkg/errors"
 	"github.com/s4wave/spacewave/db/block"
@@ -29,10 +29,12 @@ type peerSession struct {
 	nextID     atomic.Uint32
 	closed     atomic.Bool
 
-	// sendMtx serializes SendMsg writes in arrival order. A sender waits for
-	// it with its own context, so a canceled request does not wait behind a
-	// long block write.
-	sendMtx csync.Mutex
+	// sendMtx guards sendQueue and sending. It is never held during a write.
+	sendMtx sync.Mutex
+	// sendQueue holds the messages waiting for the writer, oldest first.
+	sendQueue []*queuedSend
+	// sending indicates a writer goroutine is draining sendQueue.
+	sending bool
 
 	// mtx guards pending and handling. It is never held during a write, so
 	// the read loop dispatches responses while a large block is sent.
@@ -42,6 +44,26 @@ type peerSession struct {
 	// handling maps the remote peer's request ids to the requests this side
 	// is serving.
 	handling map[uint32]*handledRequest
+}
+
+// queuedSend states: a queued message is either written or abandoned by its
+// sender, whichever claims it first.
+const (
+	sendQueued int32 = iota
+	sendWriting
+	sendAbandoned
+)
+
+// queuedSend is a message waiting for the session writer.
+type queuedSend struct {
+	ctx, requestCtx context.Context
+	msg             *DexMessage
+	access          RequestAccess
+	closeOnCancel   bool
+	// state is sendQueued until the writer or the sender claims it.
+	state atomic.Int32
+	// done receives the write result.
+	done chan error
 }
 
 // handledRequest is an incoming request this side is serving.
@@ -264,54 +286,169 @@ func (s *peerSession) buildResponse(ctx context.Context, req *DexMessage) *DexMe
 	return resp
 }
 
-// sendMessage checks authority under the write slot and serializes the response.
-// A revoked in-flight payload closes its session because a partial frame cannot be reused.
+// sendMessage queues a message for the session writer and waits for its write.
+// A sender whose ctx ends before the write starts drops its message; a write
+// in progress completes on the stream it already holds.
 func (s *peerSession) sendMessage(ctx, requestCtx context.Context, resp *DexMessage, access RequestAccess, closeOnCancel bool) error {
-	// Serialize with all other session writes, using the caller's cancellation.
-	release, err := s.sendMtx.Lock(ctx)
-	if err != nil {
-		return err
-	}
+	// Refuse a write that ctx already canceled.
 	if err := ctx.Err(); err != nil {
-		release()
 		return err
 	}
 
-	// Replace a revoked response entirely so neither data nor child refs escape.
-	if access != nil {
-		err = access.Check()
-		if err != nil {
-			resp = &DexMessage{RequestId: resp.GetRequestId(), IsResponse: true, Error: err.Error()}
-			closeOnCancel = true
-		} else if err = context.Cause(requestCtx); err != nil {
-			resp = &DexMessage{RequestId: resp.GetRequestId(), IsResponse: true, Error: err.Error()}
+	// Queue the message, starting a writer when none is draining the queue.
+	q := &queuedSend{
+		ctx:           ctx,
+		requestCtx:    requestCtx,
+		msg:           resp,
+		access:        access,
+		closeOnCancel: closeOnCancel,
+		done:          make(chan error, 1),
+	}
+	s.sendMtx.Lock()
+	s.sendQueue = append(s.sendQueue, q)
+	start := !s.sending
+	s.sending = true
+	s.sendMtx.Unlock()
+	if start {
+		go s.writeQueued()
+	}
+
+	// Wait for the write, abandoning the message if ctx ends while it waits.
+	select {
+	case err := <-q.done:
+		return err
+	case <-ctx.Done():
+		if q.state.CompareAndSwap(sendQueued, sendAbandoned) {
+			return ctx.Err()
+		}
+		return <-q.done
+	}
+}
+
+// maxSendBatch bounds the payload bytes of one batched write. A larger message
+// still goes out alone.
+const maxSendBatch = 1 << 20
+
+// writeQueued writes queued messages in arrival order until the queue is
+// empty. One running writer drains every message queued behind it and writes
+// them in batches, so a busy session pays one transport wait per batch rather
+// than one sender wakeup and one transport wait per message.
+func (s *peerSession) writeQueued() {
+	for {
+		// Take the queued messages, or stop when nothing is queued.
+		s.sendMtx.Lock()
+		queue := s.sendQueue
+		s.sendQueue = nil
+		if len(queue) == 0 {
+			s.sending = false
+			s.sendMtx.Unlock()
+			return
+		}
+		s.sendMtx.Unlock()
+
+		// Write them in bounded batches.
+		for len(queue) != 0 {
+			queue = queue[s.writeBatch(queue):]
 		}
 	}
+}
 
+// preparedSend is a claimed message checked at the write slot.
+type preparedSend struct {
+	q             *queuedSend
+	msg           *DexMessage
+	closeOnCancel bool
+}
+
+// writeBatch claims messages from the front of queue up to maxSendBatch bytes
+// and writes them together. It returns the number of entries it consumed.
+// A revoked in-flight payload closes its session because a partial frame
+// cannot be reused.
+func (s *peerSession) writeBatch(queue []*queuedSend) int {
+	// Claim the messages whose senders still wait, checking each one's
+	// authority at the write slot.
+	var batch []preparedSend
+	n, size := 0, 0
+	for ; n < len(queue) && (len(batch) == 0 || size < maxSendBatch); n++ {
+		q := queue[n]
+		if !q.state.CompareAndSwap(sendQueued, sendWriting) {
+			continue
+		}
+		p, err := prepareSend(q)
+		if err != nil {
+			q.done <- err
+			continue
+		}
+		batch = append(batch, p)
+		size += len(p.msg.GetData())
+	}
+	if len(batch) == 0 {
+		return n
+	}
+
+	// Watch each message's cancellation and authority while the batch writes.
+	msgs := make([]protobuf_go_lite.Message, len(batch))
+	var stops []func() bool
+	for i, p := range batch {
+		msgs[i] = p.msg
+		stops = s.watchWrite(stops, p)
+	}
+
+	// Write the batch, then report the result to every sender.
+	err := s.sess.SendMsgs(msgs...)
+	for _, stop := range stops {
+		stop()
+	}
+	peerID := s.ms.GetPeerID().String()
+	for _, p := range batch {
+		if err == nil && p.msg.GetIsResponse() {
+			s.c.recordTransfer(peerID, len(p.msg.GetData()), 0)
+		}
+		p.q.done <- err
+	}
+	return n
+}
+
+// prepareSend checks a claimed message's sender and authority at the write
+// slot, replacing a revoked response entirely so neither data nor child refs
+// escape.
+func prepareSend(q *queuedSend) (preparedSend, error) {
+	// Skip a message whose sender ended before the write started.
+	if err := q.ctx.Err(); err != nil {
+		return preparedSend{}, err
+	}
+
+	// Deny a response whose requester lost authority or ended.
+	p := preparedSend{q: q, msg: q.msg, closeOnCancel: q.closeOnCancel}
+	if q.access != nil {
+		if err := q.access.Check(); err != nil {
+			p.msg = &DexMessage{RequestId: q.msg.GetRequestId(), IsResponse: true, Error: err.Error()}
+			p.closeOnCancel = true
+		} else if err = context.Cause(q.requestCtx); err != nil {
+			p.msg = &DexMessage{RequestId: q.msg.GetRequestId(), IsResponse: true, Error: err.Error()}
+		}
+	}
+	return p, nil
+}
+
+// watchWrite appends the stops of the callbacks that close the stream while p
+// writes: when a canceled sender's denial blocks, and when a payload's
+// requester loses authority.
+func (s *peerSession) watchWrite(stops []func() bool, p preparedSend) []func() bool {
 	// Close the stream if a canceled request blocks while writing its denial.
-	if closeOnCancel {
-		stopClose := context.AfterFunc(ctx, s.close)
-		defer stopClose()
+	if p.closeOnCancel {
+		stops = append(stops, context.AfterFunc(p.q.ctx, s.close))
 	}
 
 	// Interrupt an in-progress payload write if its requester loses authority.
-	if resp.GetFound() && access != nil {
-		stopClose := context.AfterFunc(requestCtx, func() {
+	if access := p.q.access; p.msg.GetFound() && access != nil {
+		stops = append(stops, context.AfterFunc(p.q.requestCtx, func() {
 			if access.Check() != nil {
 				s.close()
 			}
-		})
-		defer stopClose()
+		}))
 	}
-	err = s.sess.SendMsg(resp)
-	release()
-	if err != nil {
-		return err
-	}
-	if resp.GetIsResponse() {
-		s.c.recordTransfer(s.ms.GetPeerID().String(), len(resp.GetData()), 0)
-	}
-	return nil
+	return stops
 }
 
 // finishRequest removes a finished request from the handling map unless a

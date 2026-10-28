@@ -45,21 +45,29 @@ func TestRequestRevocationStopsBlockedPayload(t *testing.T) {
 // TestRequestRechecksAuthorityAtWriteSlot prevents queued responses from using
 // authority captured before another writer held the session.
 func TestRequestRechecksAuthorityAtWriteSlot(t *testing.T) {
-	// Hold the response write slot while a real request resolves its local block.
+	// Prepare a real request over an unbuffered pipe with write observation.
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	t.Cleanup(cancel)
 	session, remote, access, ref := newAuthorizedRequest(t, ctx)
-	release, err := session.sendMtx.Lock(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	mounted := session.ms.(*testDexMountedStream)
+	observed := &writeObserverConn{Conn: mounted.stream, writing: make(chan struct{}, 1)}
+	mounted.stream = observed
+	session.sess = stream_packet.NewSession(mounted.GetStream(), maxMessageSize)
+
+	// Block the writer on a frame the remote has not read yet.
+	go func() { _ = session.sendMsg(ctx, &DexMessage{RequestId: 99, Ref: ref}) }()
+	recvTestDexValue(t, observed.writing, "blocked write slot")
+
+	// Queue the request's response behind the blocked frame.
 	session.startRequest(ctx, &DexMessage{RequestId: 2, Ref: ref})
 	recvTestDexValue(t, access.watching, "request authority watch")
 
 	// The queued response must read authority again after it gets the write slot.
 	access.allowed.SetValue(false)
-	release()
-	var response DexMessage
+	var held, response DexMessage
+	if err := remote.RecvMsg(&held); err != nil {
+		t.Fatal(err)
+	}
 	if err := remote.RecvMsg(&response); err != nil {
 		t.Fatal(err)
 	}
@@ -200,4 +208,55 @@ func newAuthorizedRequest(t *testing.T, ctx context.Context) (*peerSession, *str
 	session, remote, cleanup := newTestPeerSessionPair(node.dex, peer.ID("requester"))
 	t.Cleanup(cleanup)
 	return session, remote, access, ref
+}
+
+// TestQueuedSendAbandonedOnCancel verifies a sender that gives up while its
+// message waits for the writer drops that message without stalling the queue.
+func TestQueuedSendAbandonedOnCancel(t *testing.T) {
+	// Hold the write slot with a frame blocked on the unread pipe.
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	t.Cleanup(cancel)
+	session, remote, _, ref := newAuthorizedRequest(t, ctx)
+	mounted := session.ms.(*testDexMountedStream)
+	observed := &writeObserverConn{Conn: mounted.stream, writing: make(chan struct{}, 1)}
+	mounted.stream = observed
+	session.sess = stream_packet.NewSession(mounted.GetStream(), maxMessageSize)
+
+	// Block the writer on a frame the remote has not read yet.
+	go func() { _ = session.sendMsg(ctx, &DexMessage{RequestId: 1, Ref: ref}) }()
+	recvTestDexValue(t, observed.writing, "blocked write slot")
+
+	// Queue a message behind it and cancel its sender before the write starts.
+	queuedCtx, cancelQueued := context.WithCancel(ctx)
+	queuedErr := make(chan error, 1)
+	go func() { queuedErr <- session.sendMsg(queuedCtx, &DexMessage{RequestId: 2, Ref: ref}) }()
+	for {
+		session.sendMtx.Lock()
+		queued := len(session.sendQueue)
+		session.sendMtx.Unlock()
+		if queued != 0 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancelQueued()
+	if err := recvTestDexValue(t, queuedErr, "abandoned send"); err == nil {
+		t.Fatal("abandoned send reported a write")
+	}
+
+	// A later message follows the held frame and the abandoned one is absent.
+	laterErr := make(chan error, 1)
+	go func() { laterErr <- session.sendMsg(ctx, &DexMessage{RequestId: 3, Ref: ref}) }()
+	for _, want := range []uint32{1, 3} {
+		var msg DexMessage
+		if err := remote.RecvMsg(&msg); err != nil {
+			t.Fatal(err)
+		}
+		if msg.GetRequestId() != want {
+			t.Fatalf("frame request ID = %d, want %d", msg.GetRequestId(), want)
+		}
+	}
+	if err := recvTestDexValue(t, laterErr, "later send"); err != nil {
+		t.Fatal(err)
+	}
 }
