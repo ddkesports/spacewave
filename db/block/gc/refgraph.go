@@ -579,6 +579,29 @@ func (g *RefGraph) PrefetchNodeRefs(ctx context.Context, nodes []string) error {
 	})
 }
 
+// PrefetchPutBatch loads, in one read transaction, the index pages of the
+// records that flushing a put of entries under parent reads, as
+// GCStoreOps.FlushPending does after GCStoreOps.PutBlockBatch. A writer that
+// queues the put calls it while earlier work holds the writer, so the flush
+// reads under the writer hit the store's page cache instead of cold pages.
+func (g *RefGraph) PrefetchPutBatch(ctx context.Context, parent string, entries []*block.PutBatchEntry) error {
+	// Skip the transaction when the put records no edge.
+	adds, removes := putBatchRefEdges(parent, entries)
+	if len(adds)+len(removes) == 0 {
+		return nil
+	}
+
+	// Load the records of the owner's root edge and of every batch edge, with
+	// the block pass and young log head the flush's logs read.
+	adds = append(adds, RefEdge{Subject: NodeGCRoot, Object: parent})
+	return g.transaction(ctx, false, func(ctx context.Context, tx kvtx.Tx) error {
+		if err := kvtx.Prefetch(ctx, tx, [][]byte{passKey, youngKey}); err != nil {
+			return err
+		}
+		return prefetchRefBatchTx(ctx, tx, adds, removes)
+	})
+}
+
 // TrackedBlocks reports, for each ref, whether the graph tracks the block, in
 // one read. A block is tracked from its first write until a block pass sweeps
 // it, which removes its child list and its value together, so a tracked block

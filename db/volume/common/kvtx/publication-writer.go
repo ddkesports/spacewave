@@ -75,6 +75,16 @@ func newPublicationWriter(v *Volume) *publicationWriter {
 	return w
 }
 
+// prefetchRefs warms the reference graph records the flush of an admitted
+// tracked publication reads, in a read transaction that holds no writer. It
+// overlaps the groups ahead of the publication, so its flush under the writer
+// reads cached pages. The writer does not wait for it; a failed prefetch only
+// leaves the flush to read the pages itself.
+func (w *publicationWriter) prefetchRefs(ctx context.Context, p *block.AtomicPublication) {
+	owner := block_gc.BucketIRI(p.BucketID)
+	_ = openRefGraph(&directReadStore{volume: w.volume}).PrefetchPutBatch(ctx, owner, p.Entries)
+}
+
 // publicationSize computes the bounded admission cost of a publication.
 func publicationSize(p *block.AtomicPublication) (int, error) {
 	// Require a bounded block delta and distinct head replacements in one
@@ -203,8 +213,14 @@ func (w *publicationWriter) submit(ctx context.Context, p *block.AtomicPublicati
 		})
 
 		// Return the admission result, or await a capacity or lifetime change.
-		if err != nil || receipt != nil {
-			return receipt, err
+		if err != nil {
+			return nil, err
+		}
+		if receipt != nil {
+			if p.TrackGC {
+				go w.prefetchRefs(context.WithoutCancel(ctx), p)
+			}
+			return receipt, nil
 		}
 		select {
 		case <-ctx.Done():

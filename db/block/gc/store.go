@@ -358,6 +358,35 @@ func (g *GCStoreOps) bufferPutLocked(ref *block.BlockRef, targets []*block.Block
 	}
 }
 
+// putBatchRefEdges returns the edges a flush of entries written under parent
+// can add and remove, whether or not each block already existed: the owner
+// and staging edges and child list of each written block, the owner edges it
+// moves off its targets, and the owner edge each tombstone releases. The flush
+// reads the record of each, so prefetching them warms its reads.
+func putBatchRefEdges(parent string, entries []*block.PutBatchEntry) (adds, removes []RefEdge) {
+	// Collect the edges of each entry with a reference.
+	for _, entry := range entries {
+		if entry == nil || entry.Ref == nil || entry.Ref.GetEmpty() {
+			continue
+		}
+		iri := BlockIRI(entry.Ref)
+		if entry.Tombstone {
+			removes = append(removes, RefEdge{Subject: parent, Object: iri})
+			continue
+		}
+		adds = append(adds, RefEdge{Subject: parent, Object: iri}, RefEdge{Subject: NodeUnreferenced, Object: iri})
+		for _, t := range entry.Refs {
+			if t == nil || t.GetEmpty() {
+				continue
+			}
+			target := BlockIRI(t)
+			adds = append(adds, RefEdge{Subject: iri, Object: target})
+			removes = append(removes, RefEdge{Subject: parent, Object: target})
+		}
+	}
+	return adds, removes
+}
+
 func (g *GCStoreOps) bufferReleaseLocked(iri string) {
 	if g.pendingReleases == nil {
 		g.pendingReleases = make(map[string]struct{})
