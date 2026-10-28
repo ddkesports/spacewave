@@ -227,7 +227,7 @@ func TestMarkReads(t *testing.T) {
 	mode := os.Getenv("SPACEWAVE_GC_MARK_MODE")
 	switch mode {
 	case "scan":
-		mark, err = g.MarkBlocksScan(ctx)
+		mark, err = g.MarkBlocksScan(ctx, nil)
 	default:
 		mark, err = g.MarkBlocks(ctx)
 	}

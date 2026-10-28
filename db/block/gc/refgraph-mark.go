@@ -24,6 +24,9 @@ type BlockMark struct {
 	// whose references are not recorded. A sweep removes nothing while any
 	// remains, since such a block may reference any unreached one.
 	Unknown int
+	// Absent counts the reached blocks without a child list that the mark
+	// settled as holes, since the store did not hold them.
+	Absent int
 	// UnknownSample lists up to unknownSample of those blocks.
 	UnknownSample []string
 	// UnknownNamers lists, for each block in UnknownSample, the node whose
@@ -124,6 +127,11 @@ func (m *BlockMark) noteUnknown(b namedNode) {
 	m.await(b)
 }
 
+// BlocksStored reports which of the block nodes the block store holds, as
+// GetBlockExistsBatch reports them, in short read transactions that hold no
+// writer.
+type BlocksStored func(ctx context.Context, nodes []string) ([]bool, error)
+
 // SettleAbsent stops counting each listed unknown block that a parent block's
 // list named and that stored reports absent from the block store, and reports
 // how many it settled. Such a block is a hole, as a copy that found no source
@@ -145,27 +153,60 @@ func (m *BlockMark) SettleAbsent(stored func(node string) (bool, error)) (int, e
 		return 0, nil
 	}
 
+	// Settle the absent blocks, checking each in the caller's transaction.
+	settled, err := m.settleAbsent(func(nodes []string) ([]bool, error) {
+		found := make([]bool, len(nodes))
+		for i, node := range nodes {
+			var err error
+			if found[i], err = stored(node); err != nil {
+				return nil, err
+			}
+		}
+		return found, nil
+	})
+	m.Unknown -= settled
+	return settled, err
+}
+
+// settleAbsent settles each listed unknown block that a parent block's list
+// named and that stored reports absent, as SettleAbsent describes, and
+// reports how many it settled. It leaves the count to the caller.
+func (m *BlockMark) settleAbsent(stored func(nodes []string) ([]bool, error)) (int, error) {
+	// Ask the store about the blocks parent blocks named. A block an owner
+	// or a write adopted stays unknown.
+	var named []string
+	for _, b := range m.awaiting {
+		if isBlockNode(b.namer) {
+			named = append(named, b.node)
+		}
+	}
+	if len(named) == 0 {
+		return 0, nil
+	}
+	found, err := stored(named)
+	if err != nil {
+		return 0, err
+	}
+
 	// Keep the blocks an owner or a write adopted, and those the store
 	// holds.
 	kept := make([]namedNode, 0, len(m.awaiting))
 	var absent []namedNode
+	var i int
 	for _, b := range m.awaiting {
-		found := !isBlockNode(b.namer)
-		if !found {
-			var err error
-			if found, err = stored(b.node); err != nil {
-				return 0, err
-			}
+		if !isBlockNode(b.namer) {
+			kept = append(kept, b)
+			continue
 		}
-		if found {
+		if found[i] {
 			kept = append(kept, b)
 		} else {
 			absent = append(absent, b)
 		}
+		i++
 	}
 
-	// Uncount the absent blocks, note them with their namers, and sample
-	// the rest afresh.
+	// Note the absent blocks with their namers, and sample the rest afresh.
 	settled := len(absent)
 	if settled == 0 {
 		return 0, nil
@@ -177,7 +218,6 @@ func (m *BlockMark) SettleAbsent(stored func(node string) (bool, error)) (int, e
 		m.settled.Add(b.node)
 		m.settledNamers = append(m.settledNamers, b.namer)
 	}
-	m.Unknown -= settled
 	m.awaiting = kept
 	m.UnknownSample, m.UnknownNamers = nil, nil
 	for _, b := range kept[:min(len(kept), unknownSample)] {

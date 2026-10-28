@@ -79,7 +79,7 @@ type Stats struct {
 	// for a walk.
 	UnknownNamers []string
 	// AbsentBlocks is the number of reached blocks without a child list that
-	// sweeps treated as leaves because the store does not hold them.
+	// marks and sweeps treated as leaves because the store does not hold them.
 	AbsentBlocks int
 	// RescuedNodes is the number of nodes sweeps rescued from the adopt log.
 	RescuedNodes int
@@ -107,6 +107,7 @@ func (s *Stats) recordMark(mark *BlockMark) {
 	s.UnreachedBlocks = len(mark.Unreached)
 	s.UnknownBlocks = mark.Unknown
 	s.UnknownSample, s.UnknownNamers = mark.UnknownSample, mark.UnknownNamers
+	s.AbsentBlocks += mark.Absent
 	s.MarkScans = mark.Scans
 	s.MarkLongestRead = mark.LongestRead
 	s.MarkRoots, s.MarkOwners = mark.Roots, mark.Owners

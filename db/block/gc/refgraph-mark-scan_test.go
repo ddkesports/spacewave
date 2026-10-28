@@ -114,7 +114,7 @@ func testMarkScanAcrossWrites(t *testing.T, rnd *rand.Rand) {
 	if err := rg.BeginBlockPass(ctx); err != nil {
 		t.Fatal(err)
 	}
-	mark, err := rg.markScan(ctx, markLimit{records: 1 + rnd.IntN(3), tail: rnd.IntN(4)}, between)
+	mark, err := rg.markScan(ctx, markLimit{records: 1 + rnd.IntN(3), tail: rnd.IntN(4)}, nil, between)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +175,7 @@ func TestMarkScanUnknownAcrossOwnerWrite(t *testing.T) {
 					{Subject: "bucket:a", Object: late},
 				}, nil)
 			}
-			mark, err := rg.markScan(ctx, markLimit{records: 1}, between)
+			mark, err := rg.markScan(ctx, markLimit{records: 1}, nil, between)
 			if err != nil {
 				t.Fatal(err)
 			}

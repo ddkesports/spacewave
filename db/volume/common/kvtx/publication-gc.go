@@ -422,6 +422,18 @@ func (v *Volume) sweepBlockPass(ctx context.Context, actual *transactionRefGraph
 		return mark, false, nil
 	}
 
+	// Log the namers of the holes the mark settled before anything can
+	// promote, so minor passes reach a hole a write stores later, as
+	// LogSettled describes.
+	if mark.Absent != 0 {
+		err := v.withDirectAtomic(ctx, func(_ block.StoreOps, rg *block_gc.RefGraph) error {
+			return rg.LogSettled(ctx, mark)
+		})
+		if err != nil {
+			return mark, false, err
+		}
+	}
+
 	// Sweep what the mark did not reach, then measure the space it freed.
 	v.setGCPhase(volume.VolumeGCPhase_VOLUME_GC_PHASE_SWEEP)
 	defer v.wakeHealthSizes()

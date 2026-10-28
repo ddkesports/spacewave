@@ -37,9 +37,13 @@ type markLimit struct {
 // between the mark's transactions.
 //
 // It never falls back to MarkBlocks to name the reached blocks without a
-// child list: that walk would hold one snapshot for the whole graph.
-func (g *RefGraph) MarkBlocksScan(ctx context.Context) (*BlockMark, error) {
-	return g.markScan(ctx, markLimit{budget: MarkReadBudget, tail: markTailLimit}, nil)
+// child list: that walk would hold one snapshot for the whole graph. When
+// stored is set, it settles each such block that a parent block names and the
+// store does not hold as a hole, however many there are, as settleUnknown
+// describes; the caller logs their namers with LogSettled before the pass
+// promotes.
+func (g *RefGraph) MarkBlocksScan(ctx context.Context, stored BlocksStored) (*BlockMark, error) {
+	return g.markScan(ctx, markLimit{budget: MarkReadBudget, tail: markTailLimit}, stored, nil)
 }
 
 // markScan marks like MarkBlocks, but reads the child lists in key order:
@@ -51,8 +55,8 @@ func (g *RefGraph) MarkBlocksScan(ctx context.Context) (*BlockMark, error) {
 // each index page of the lists once, so the scans cost pages, and the tail
 // costs a read a block only once it is small. Without the tail a chain whose
 // links sort before their children would cost a scan a link. It counts the
-// blocks without a list in mark.Unknown and lists them, as settleUnknown
-// describes.
+// blocks without a list in mark.Unknown and lists them, and settles the holes
+// among them when stored is set, as settleUnknown describes.
 //
 // Each read transaction stays within limit, and the next resumes after the
 // last record read, calling between first when set. The adopt log of an open
@@ -60,7 +64,7 @@ func (g *RefGraph) MarkBlocksScan(ctx context.Context) (*BlockMark, error) {
 // read the edge's source logs the block, and the sweep rescues it. Seeding
 // takes both ends of every edge from a node that is not a block, so a seed
 // read early misses only edges added later, which the log covers.
-func (g *RefGraph) markScan(ctx context.Context, limit markLimit, between func() error) (*BlockMark, error) {
+func (g *RefGraph) markScan(ctx context.Context, limit markLimit, stored BlocksStored, between func() error) (*BlockMark, error) {
 	// Mark seeds live, counting the blocks among them.
 	mark := &BlockMark{Live: NewNodeSet()}
 	live := mark.Live
@@ -167,16 +171,16 @@ func (g *RefGraph) markScan(ctx context.Context, limit markLimit, between func()
 	}
 
 	// A live block without a list has unknown references. Settle those a
-	// write gave a list after the scans passed them, then list the
-	// unreached blocks with one more key scan.
+	// write gave a list after the scans passed them and the holes, then list
+	// the unreached blocks with one more key scan.
 	if liveBlocks != expanded.Len() {
-		added, err := g.settleUnknown(ctx, mark, expanded, limit, between)
+		added, err := g.settleUnknown(ctx, mark, expanded, limit, stored, between)
 		if err != nil {
 			return nil, err
 		}
 		liveBlocks += added
 	}
-	mark.Unknown = liveBlocks - expanded.Len()
+	mark.Unknown = liveBlocks - expanded.Len() - mark.Absent
 	err = g.scanRecords(ctx, mark, lists, limit, between, func(key []byte, _ kvtx.Iterator) error {
 		if block := lastNode(lists, key); !live.Has(block) {
 			mark.Unreached = append(mark.Unreached, block)
@@ -282,45 +286,72 @@ type unknownBlock struct {
 }
 
 // settleUnknown checks the child list of each live block the scans left
-// unexpanded, up to settleLimit of them, as findUnknown lists them. A write
-// can stage a block after the scans passed its key, so its list may exist
-// now: settleUnknown expands it, then checks each child it makes live the
-// same way. It lists the blocks still without a list in mark, with their
-// namers, and returns how many blocks it made live. Reading a list later than
-// the scans is safe for the same reason the scans' later transactions are:
-// the adopt log covers edges added since.
-func (g *RefGraph) settleUnknown(ctx context.Context, mark *BlockMark, expanded *NodeSet, limit markLimit, between func() error) (int, error) {
-	// List the unexpanded live blocks.
-	pending, err := g.findUnknown(ctx, mark, expanded, limit, between)
-	if err != nil {
-		return 0, err
-	}
-
-	// Check the lists in transactions within limit until none is pending.
+// unexpanded, settleLimit at a time, as findUnknown lists them. A write can
+// stage a block after the scans passed its key, so its list may exist now:
+// settleUnknown expands it, then checks each child it makes live the same
+// way. It lists the blocks still without a list in mark, with their namers,
+// and returns how many blocks it made live. Reading a list later than the
+// scans is safe for the same reason the scans' later transactions are: the
+// adopt log covers edges added since.
+//
+// Without stored it lists only the first settleLimit blocks. With stored it
+// settles each listed block that a parent block names and that stored
+// reports absent as a hole, counting it in mark.Absent, and lists the next
+// blocks, until findUnknown lists no more or the blocks still awaiting fill
+// the list. A lazy replica's lists name many blocks it never fetched, so a
+// cap on the holes would stop every pass. Checking presence after the
+// scans is safe for the same reason: a write that stores a hole later logs
+// the blocks it adopts.
+func (g *RefGraph) settleUnknown(ctx context.Context, mark *BlockMark, expanded *NodeSet, limit markLimit, stored BlocksStored, between func() error) (int, error) {
 	var added int
-	for first := true; len(pending) != 0; first = false {
-		if !first && between != nil {
-			if err := between(); err != nil {
-				return 0, err
-			}
-		}
-		var n int
-		err := g.transaction(ctx, false, func(ctx context.Context, tx kvtx.Tx) (err error) {
-			pending, n, err = settleTx(ctx, tx, mark, expanded, pending, limit)
-			return err
-		})
-		added += n
+	noted := NewNodeSet()
+	for {
+		// List the next unexpanded live blocks.
+		pending, err := g.findUnknown(ctx, mark, expanded, noted, limit, between)
 		if err != nil {
 			return 0, err
 		}
+		full := len(pending) == settleLimit
+
+		// Check the lists in transactions within limit until none is
+		// pending.
+		for first := true; len(pending) != 0; first = false {
+			if !first && between != nil {
+				if err := between(); err != nil {
+					return 0, err
+				}
+			}
+			var n int
+			err := g.transaction(ctx, false, func(ctx context.Context, tx kvtx.Tx) (err error) {
+				pending, n, err = settleTx(ctx, tx, mark, expanded, noted, pending, limit)
+				return err
+			})
+			added += n
+			if err != nil {
+				return 0, err
+			}
+		}
+
+		// Settle the holes outside any transaction of the graph, and list
+		// more while room remains.
+		if stored == nil {
+			return added, nil
+		}
+		settled, err := mark.settleAbsent(func(nodes []string) ([]bool, error) { return stored(ctx, nodes) })
+		if err != nil {
+			return 0, err
+		}
+		mark.Absent += settled
+		if !full || len(mark.awaiting) >= settleLimit {
+			return added, nil
+		}
 	}
-	return added, nil
 }
 
 // settleTx checks the lists of the pending blocks in order until limit, as
 // settleUnknown describes, and returns the blocks still pending and how many
 // blocks it made live. It records its duration in mark.LongestRead.
-func settleTx(ctx context.Context, tx kvtx.Tx, mark *BlockMark, expanded *NodeSet, pending []unknownBlock, limit markLimit) ([]unknownBlock, int, error) {
+func settleTx(ctx context.Context, tx kvtx.Tx, mark *BlockMark, expanded, noted *NodeSet, pending []unknownBlock, limit markLimit) ([]unknownBlock, int, error) {
 	// Time the transaction.
 	start := time.Now()
 	defer func() { mark.LongestRead = max(mark.LongestRead, time.Since(start)) }()
@@ -355,6 +386,7 @@ func settleTx(ctx context.Context, tx kvtx.Tx, mark *BlockMark, expanded *NodeSe
 			}
 			if child := value[:size]; mark.Live.addBlock(child) {
 				added++
+				noted.addBlock(child)
 				pending = append(pending, unknownBlock{enc: slices.Clone(child), namer: block})
 			}
 			value = value[size:]
@@ -364,16 +396,17 @@ func settleTx(ctx context.Context, tx kvtx.Tx, mark *BlockMark, expanded *NodeSe
 }
 
 // findUnknown lists up to settleLimit of the live blocks a scan mark left
-// unexpanded, each with its namer, and no block the mark did not reach. Only the records that made them live name
-// them, so it scans the roots, the edges from text nodes and the expanded
-// lists, within limit like the mark, and stops once the list is full.
-func (g *RefGraph) findUnknown(ctx context.Context, mark *BlockMark, expanded *NodeSet, limit markLimit, between func() error) ([]unknownBlock, error) {
+// unexpanded and noted does not hold, each with its namer, and no block the
+// mark did not reach, adding each to noted. Only the records that made them
+// live name them, so it scans the roots, the edges from text nodes and the
+// expanded lists, within limit like the mark, and stops once the list is
+// full.
+func (g *RefGraph) findUnknown(ctx context.Context, mark *BlockMark, expanded, noted *NodeSet, limit markLimit, between func() error) ([]unknownBlock, error) {
 	// Note each unexpanded live block once. An edge a write added after the
 	// seeds or the scans can name a block the mark never made live; the
 	// adopt log covers it, and noting it would expand a list liveBlocks does
 	// not count, so the mark would count too few unknown blocks.
 	var found []unknownBlock
-	noted := NewNodeSet()
 	note := func(enc []byte, namer string) error {
 		if len(enc) == 0 || enc[0] == textNode || !mark.Live.hasBlock(enc) || expanded.hasBlock(enc) || !noted.addBlock(enc) {
 			return nil

@@ -75,7 +75,7 @@ func TestMarkBlocksKeepsChildrenOfUnknownBlock(t *testing.T) {
 	}
 
 	// A scan mark names the bucket as the record that made the parent live.
-	mark, err = rg.markScan(env.ctx, markLimit{records: 1}, nil)
+	mark, err = rg.markScan(env.ctx, markLimit{records: 1}, nil, nil)
 	if err != nil || mark.Unknown != 1 || !slices.Equal(mark.UnknownNamers, []string{"bucket"}) {
 		t.Fatalf("scan mark unknown %d namers %v err=%v, want the bucket", mark.Unknown, mark.UnknownNamers, err)
 	}
@@ -87,7 +87,7 @@ func TestMarkBlocksKeepsChildrenOfUnknownBlock(t *testing.T) {
 	record := []RefEdge{{Subject: NodeUnreferenced, Object: BlockIRI(parent)}, {Subject: BlockIRI(parent), Object: BlockIRI(child)}}
 	for at := 1; ; at++ {
 		var calls int
-		mark, err = rg.markScan(env.ctx, markLimit{records: 1}, func() error {
+		mark, err = rg.markScan(env.ctx, markLimit{records: 1}, nil, func() error {
 			if calls++; calls != at {
 				return nil
 			}
@@ -248,9 +248,9 @@ func testMarkBlocksMatchesReachability(t *testing.T, rnd *rand.Rand) {
 	marks := map[string]func() (*BlockMark, error){
 		"walk": func() (*BlockMark, error) { return rg.MarkBlocks(ctx) },
 		"scan": func() (*BlockMark, error) {
-			return rg.markScan(ctx, markLimit{records: 1 + rnd.IntN(3), tail: rnd.IntN(4)}, nil)
+			return rg.markScan(ctx, markLimit{records: 1 + rnd.IntN(3), tail: rnd.IntN(4)}, nil, nil)
 		},
-		"budgeted scan": func() (*BlockMark, error) { return rg.MarkBlocksScan(ctx) },
+		"budgeted scan": func() (*BlockMark, error) { return rg.MarkBlocksScan(ctx, nil) },
 	}
 	for name, markBlocks := range marks {
 		mark, err := markBlocks()

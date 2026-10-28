@@ -2,6 +2,7 @@ package kvtx
 
 import (
 	"context"
+	"slices"
 	"sync"
 
 	"github.com/s4wave/spacewave/db/block"
@@ -122,11 +123,49 @@ func (g *transactionRefGraph) TraceOwners(ctx context.Context, blocks []string, 
 }
 
 // MarkBlocksScan marks the graph's blocks by scanning child lists in short
-// read transactions, as RefGraph.MarkBlocksScan describes. Each transaction
-// joins the Volume's direct operations on its own, so neither a snapshot nor
-// Close waits on the whole mark.
+// read transactions, as RefGraph.MarkBlocksScan describes, settling the holes
+// the Volume does not hold. Each transaction joins the Volume's direct
+// operations on its own, so neither a snapshot nor Close waits on the whole
+// mark.
 func (g *transactionRefGraph) MarkBlocksScan(ctx context.Context) (*block_gc.BlockMark, error) {
-	return openRefGraph(&directReadStore{volume: g.volume}).MarkBlocksScan(ctx)
+	return openRefGraph(&directReadStore{volume: g.volume}).MarkBlocksScan(ctx, g.volume.blocksStored)
+}
+
+// storedProbeBatch bounds the blocks one read transaction of blocksStored
+// checks, so each stays short.
+const storedProbeBatch = 512
+
+// blocksStored reports which block nodes the Volume holds, counting the blocks
+// of admitted publications, in read transactions of at most storedProbeBatch
+// blocks each.
+func (v *Volume) blocksStored(ctx context.Context, nodes []string) ([]bool, error) {
+	found := make([]bool, 0, len(nodes))
+	for chunk := range slices.Chunk(nodes, storedProbeBatch) {
+		// Parse the chunk; a node that is not a block counts as held.
+		refs := make([]*block.BlockRef, 0, len(chunk))
+		at := make([]int, 0, len(chunk))
+		held := make([]bool, len(chunk))
+		for i, node := range chunk {
+			ref, ok := block_gc.ParseBlockIRI(node)
+			if !ok {
+				held[i] = true
+				continue
+			}
+			refs = append(refs, ref)
+			at = append(at, i)
+		}
+
+		// Check the blocks in one read.
+		exists, err := v.GetBlockExistsBatch(ctx, refs)
+		if err != nil {
+			return nil, err
+		}
+		for j, ok := range exists {
+			held[at[j]] = ok
+		}
+		found = append(found, held...)
+	}
+	return found, nil
 }
 
 // directReadStore opens read transactions of the Volume's store, each joined

@@ -201,6 +201,157 @@ func TestPublicationSweepPastAbsentBlock(t *testing.T) {
 	assertPublishedBlock(t, v, parent, true)
 }
 
+// manyHoles is more holes than a mark lists at a time, block_gc's
+// settleLimit, as a lazy replica's lists name.
+const manyHoles = 5000
+
+// nameHoles publishes a parent whose list names n blocks the store never held,
+// and returns the parent and the holes.
+func nameHoles(t *testing.T, v *Volume, n int) (*block.AtomicPublication, []block_gc.RefEdge) {
+	// Publish the parent.
+	t.Helper()
+	parent := publicationFor(t, "parent", "", "two")
+	if err := v.PublishAtomic(t.Context(), parent); err != nil {
+		t.Fatal(err)
+	}
+
+	// Name the holes from the parent.
+	edges := make([]block_gc.RefEdge, n)
+	for i := range edges {
+		hole := block_gc.BlockIRI(publicationFor(t, "hole", "", fmt.Sprint("hole-", i)).Entries[0].Ref)
+		edges[i] = block_gc.RefEdge{Subject: block_gc.BlockIRI(parent.Entries[0].Ref), Object: hole}
+	}
+	if err := v.GetRefGraph().ApplyRefBatch(t.Context(), edges, nil); err != nil {
+		t.Fatal(err)
+	}
+	return parent, edges
+}
+
+// TestPublicationSweepPastManyAbsentBlocks checks that a block pass sweeps past
+// more holes than a mark lists at a time, as a replica that fetched a parent
+// and few of its children holds.
+func TestPublicationSweepPastManyAbsentBlocks(t *testing.T) {
+	// Release a block, and name many holes from a parent.
+	v, _ := newPublicationTestVolume(t)
+	ctx := t.Context()
+	p := publicationFor(t, "absent", "", "one")
+	if err := v.PublishAtomic(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	orphanPublication(t, v, p)
+	parent, _ := nameHoles(t, v, manyHoles)
+
+	// The pass settles every hole, sweeps the released block and keeps the
+	// parent.
+	rg := v.refGraph.(*transactionRefGraph)
+	stats, err := block_gc.NewCollector(rg, v, nil).Collect(ctx)
+	if err != nil || stats.BlocksSwept != 1 || stats.AbsentBlocks != manyHoles || stats.UnknownBlocks != 0 {
+		t.Fatalf("stats=%+v err=%v", stats, err)
+	}
+	assertPublishedBlock(t, v, p, false)
+	assertPublishedBlock(t, v, parent, true)
+}
+
+// TestPublicationSweepStopsAtStoredBlockAmongHoles checks that a block the
+// store holds without a child list still stops a pass when many holes sit
+// beside it: it may name any unreached block.
+func TestPublicationSweepStopsAtStoredBlockAmongHoles(t *testing.T) {
+	// Release a block, and name many holes from a parent.
+	v, _ := newPublicationTestVolume(t)
+	ctx := t.Context()
+	p := publicationFor(t, "absent", "", "one")
+	if err := v.PublishAtomic(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	orphanPublication(t, v, p)
+	parent, _ := nameHoles(t, v, manyHoles)
+
+	// Store a block the parent names below the graph, without its list.
+	raw := publicationFor(t, "raw", "", "three").Entries[0]
+	if _, _, err := v.Store.PutBlock(ctx, raw.Data, &block.PutOpts{ForceBlockRef: raw.Ref}); err != nil {
+		t.Fatal(err)
+	}
+	edge := block_gc.RefEdge{Subject: block_gc.BlockIRI(parent.Entries[0].Ref), Object: block_gc.BlockIRI(raw.Ref)}
+	if err := v.GetRefGraph().ApplyRefBatch(ctx, []block_gc.RefEdge{edge}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// The mark settles the holes and counts the stored block, which stops a
+	// sweep, as TestPublicationSweepUnknownBlocks checks.
+	rg := v.refGraph.(*transactionRefGraph)
+	if err := rg.write(ctx, func(rg *block_gc.RefGraph) error { return rg.BeginBlockPass(ctx) }); err != nil {
+		t.Fatal(err)
+	}
+	mark, err := rg.MarkBlocksScan(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mark.Absent != manyHoles || mark.Unknown != 1 || !slices.Equal(mark.UnknownSample, []string{block_gc.BlockIRI(raw.Ref)}) {
+		t.Fatalf("absent=%d unknown=%d sample=%v", mark.Absent, mark.Unknown, mark.UnknownSample)
+	}
+}
+
+// TestPublicationSweepKeepsBlockAHoleNamesOnceStored checks that a write that
+// stores a hole after the mark settled it keeps the unreached block the hole
+// names: the write logs the block it adopts and the sweep rescues it.
+func TestPublicationSweepKeepsBlockAHoleNamesOnceStored(t *testing.T) {
+	for _, w := range holeWriters {
+		t.Run(w.name, func(t *testing.T) {
+			// Release a block.
+			v, _ := newPublicationTestVolume(t)
+			ctx := t.Context()
+			released := publicationFor(t, "released", "", "one")
+			if err := v.PublishAtomic(ctx, released); err != nil {
+				t.Fatal(err)
+			}
+			orphanPublication(t, v, released)
+
+			// Name many holes from a parent, the first of which names
+			// the released block once stored.
+			parent, edges := nameHoles(t, v, manyHoles)
+			hole := publicationFor(t, "hole", "", "hole-0").Entries[0]
+			if block_gc.BlockIRI(hole.Ref) != edges[0].Object {
+				t.Fatal("hole entry does not match the first hole")
+			}
+			hole.Refs, hole.RefsKnown = []*block.BlockRef{released.Entries[0].Ref}, true
+
+			// Open a pass, mark, and settle the holes.
+			rg := v.refGraph.(*transactionRefGraph)
+			if err := rg.write(ctx, func(rg *block_gc.RefGraph) error { return rg.BeginBlockPass(ctx) }); err != nil {
+				t.Fatal(err)
+			}
+			mark, err := rg.MarkBlocksScan(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			node := block_gc.BlockIRI(released.Entries[0].Ref)
+			if mark.Absent != manyHoles || mark.Unknown != 0 || !slices.Contains(mark.Unreached, node) {
+				t.Fatalf("absent=%d unknown=%d unreached=%v", mark.Absent, mark.Unknown, mark.Unreached)
+			}
+
+			// A write stores the hole before the sweep.
+			child := released.Entries[0]
+			child.RefsKnown = true
+			w.write(t, v, rg, child, hole)
+
+			// The sweep rescues the released block.
+			var stats block_gc.Stats
+			if _, err := v.sweepUnreached(ctx, mark, &stats); err != nil {
+				t.Fatal(err)
+			}
+			if stats.BlocksSwept != 0 || !mark.Live.Has(node) {
+				t.Fatalf("stats=%+v released live=%v", stats, mark.Live.Has(node))
+			}
+			for _, e := range []*block.PutBatchEntry{hole, child} {
+				if _, found, err := v.GetBlock(ctx, e.Ref); err != nil || !found {
+					t.Fatalf("block found=%v err=%v", found, err)
+				}
+			}
+			assertPublishedBlock(t, v, parent, true)
+		})
+	}
+}
+
 // TestPublicationSweepBatchMarksReleasedChildren checks that one sweep batch
 // marks each child it leaves without an owner, leaves a child another owner
 // keeps unmarked, leaves no marker on the nodes it removes, and drops the
