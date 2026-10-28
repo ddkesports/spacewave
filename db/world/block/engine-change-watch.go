@@ -65,6 +65,10 @@ type engineChangeWatch struct {
 	// each starting at the seqno the one before it reached and the last
 	// reaching baseSeqno. A comparison without a ChangeSet empties it.
 	history []changeSpan
+	// catchUps holds the comparisons from recorded heads to bases of the
+	// watch, oldest first, which the subscribers that start behind the watch
+	// at the same head share.
+	catchUps []*changeCatchUp
 	// idle closes when the last watcher leaves so the watch releases its base
 	// without waiting for another head.
 	idle chan struct{}

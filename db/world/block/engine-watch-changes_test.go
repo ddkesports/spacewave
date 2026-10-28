@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -216,6 +217,89 @@ func TestWatchChangesRecorded(t *testing.T) {
 	}
 }
 
+// TestWatchChangesShareCatchUp checks that the subscribers that start behind
+// the change watch at the same head share one comparison, and that a later one
+// continues from that comparison through the spans the watch recorded since.
+func TestWatchChangesShareCatchUp(t *testing.T) {
+	// Commit a first head to watch from, since an empty root takes no pin.
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	e := newSessionFixture(t).engine
+	ws := world.NewEngineWorldState(e, true)
+	createWatchTestObject(t, ctx, ws, "share/first")
+	after := headSeqno(t, ctx, e)
+	afterRoot := e.GetRootRef().GetRootRef()
+
+	// Count the comparisons from the first head by its pins.
+	var pins atomic.Int32
+	store := e.writeBlockStore
+	setPin(e, func(ctx context.Context, ref *block.BlockRef) (func(), error) {
+		if ref.EqualsRef(afterRoot) {
+			pins.Add(1)
+		}
+		return block.PinRoot(ctx, store, ref)
+	})
+
+	// Commit past the first head, then start the watch with a live
+	// subscriber, so the watch records no span from the first head.
+	createWatchTestObject(t, ctx, ws, "share/a")
+	reported := make(chan uint64)
+	live := headSeqno(t, ctx, e)
+	go func() {
+		_ = e.WatchChanges(ctx, live, nil, func(seqno uint64, _ *world.ChangeSet) error {
+			select {
+			case reported <- seqno:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		})
+	}()
+
+	// Expect a wave of subscribers from the first head to see the commit.
+	check := func(changes *world.ChangeSet, want ...string) {
+		t.Helper()
+		if changes.Unknown {
+			t.Fatal("changes since the first head are unknown")
+		}
+		if got := slices.Sorted(slices.Values(changes.Keys)); !slices.Equal(got, want) {
+			t.Fatalf("changed keys %q, want %q", got, want)
+		}
+	}
+	const wave = 8
+	windows := make(chan *world.ChangeSet, wave)
+	for range wave {
+		go func() {
+			_ = e.WatchChanges(ctx, after, nil, func(_ uint64, cs *world.ChangeSet) error {
+				windows <- cs
+				return errWindowRead
+			})
+		}()
+	}
+	for range wave {
+		check(<-windows, "share/a")
+	}
+
+	// Commit again and wait for the watch to record it.
+	createWatchTestObject(t, ctx, ws, "share/b")
+	want := headSeqno(t, ctx, e)
+	for seqno := uint64(0); seqno < want; {
+		select {
+		case seqno = <-reported:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("watch did not report seqno %d", want)
+		}
+	}
+
+	// Expect a late subscriber to see both commits, and the first head to
+	// have been compared once.
+	_, changes := readChangeWindow(t, ctx, e, after)
+	check(changes, "share/a", "share/b")
+	if n := pins.Load(); n != 1 {
+		t.Fatalf("compared the first head %d times, want 1", n)
+	}
+}
+
 // TestWatchChangesFilter checks that the change watch hands a filtered
 // subscriber only the changes its filter accepts, so a commit it does not
 // watch never reaches it.
@@ -356,10 +440,12 @@ func (s *pinFuncStore) PinRoot(ctx context.Context, ref *block.BlockRef) (func()
 	return s.pin(ctx, ref)
 }
 
-// setPin replaces how the engine's write store pins roots.
+// setPin replaces how the engine's write store pins roots, keeping its other
+// root retention.
 func setPin(e *Engine, pin func(ctx context.Context, ref *block.BlockRef) (func(), error)) {
 	locked := e.bcast.Lock()
-	e.writeBlockStore = &pinFuncStore{StoreOps: e.writeBlockStore, pin: pin}
+	retainer, _ := e.writeBlockStore.(block.RootRetainer)
+	e.writeBlockStore = &pinFuncStore{StoreOps: e.writeBlockStore, RootRetainer: retainer, pin: pin}
 	locked.Unlock()
 }
 

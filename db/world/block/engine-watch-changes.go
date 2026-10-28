@@ -5,7 +5,6 @@ import (
 	"slices"
 	"sync"
 
-	"github.com/s4wave/spacewave/db/block"
 	bucket_lookup "github.com/s4wave/spacewave/db/bucket/lookup"
 	"github.com/s4wave/spacewave/db/world"
 )
@@ -48,10 +47,11 @@ type changeSubscriber struct {
 //
 // A subscriber that starts behind the change watch merges the ChangeSets the
 // watch recorded since the head at afterSeqno. When the watch did not record
-// that far back, it compares the head at afterSeqno against the published
-// head. The Engine records the last
-// changeWatchHeads heads it published, starting with the head it opened at, so
-// a recent afterSeqno is precise. Recording does not pin a head, so superseded
+// that far back, it compares the head at afterSeqno against the watch's base
+// and continues from there, sharing the comparison with the other subscribers
+// that start at the same head. The Engine records the last changeWatchHeads
+// heads it published, starting with the head it opened at, so a recent
+// afterSeqno is precise. Recording does not pin a head, so superseded
 // Worlds stay collectible, and a base the volume collected reports unknown
 // changes. The ChangeSet is also unknown when the head at afterSeqno is no
 // longer recorded, when two recorded heads share that seqno, or when the
@@ -118,17 +118,15 @@ func (e *Engine) WatchIndexedChanges(
 	baseSeqno := w.baseSeqno
 	locked.Unlock()
 
-	// Merge the recorded spans, or compare the head at afterSeqno with the
-	// published head. The first wake checks whether the watch already ended.
+	// Merge the recorded spans, or the shared comparison from the head at
+	// afterSeqno. The first wake checks whether the watch already ended.
 	if len(spans) != 0 {
 		sub.add(baseSeqno, mergeSpans(spans))
 	}
 	if !caughtUp {
-		seqno, changes, err := e.catchUpChanges(ctx, afterSeqno)
-		if err != nil {
+		if err := e.catchUpSubscriber(ctx, w, sub, afterSeqno); err != nil {
 			return err
 		}
-		sub.add(seqno, changes)
 	}
 	sub.signal()
 
@@ -160,72 +158,6 @@ func (e *Engine) WatchIndexedChanges(
 		}
 		afterSeqno = seqno
 	}
-}
-
-// catchUpChanges compares the recorded head at afterSeqno with the published
-// head and returns the published head's seqno and the changes.
-func (e *Engine) catchUpChanges(ctx context.Context, afterSeqno uint64) (uint64, *world.ChangeSet, error) {
-	// Hold the published head and the recorded base.
-	seqno, head, base, release, err := e.holdWatchedHeads(ctx, afterSeqno)
-	if err != nil {
-		return 0, nil, err
-	}
-	defer release()
-	if base == nil {
-		return seqno, world.NewUnknownChangeSet(), nil
-	}
-
-	// Compare the two heads outside the publication lock.
-	_, beforeBcs := base.BuildTransactionWithStore(nil, e.writeBlockStore)
-	_, afterBcs := head.BuildTransactionWithStore(nil, e.writeBlockStore)
-	changes, err := WorldChanges(ctx, beforeBcs, afterBcs, changeDiffLimit)
-	if err != nil {
-		if ctx.Err() != nil {
-			return 0, nil, ctx.Err()
-		}
-		e.le.WithError(err).Warn("world change comparison failed; reporting unknown changes")
-	}
-	return seqno, changes, nil
-}
-
-// holdWatchedHeads holds the published head and pins the recorded head at
-// afterSeqno until release. base is nil when no single recorded head has that
-// seqno or it can no longer be pinned.
-func (e *Engine) holdWatchedHeads(ctx context.Context, afterSeqno uint64) (
-	seqno uint64,
-	head, base *bucket_lookup.Cursor,
-	release func(),
-	err error,
-) {
-	// Hold the head and clone the recorded root at the base seqno.
-	locked := e.bcast.Lock()
-	if e.closed {
-		locked.Unlock()
-		return 0, nil, nil, nil, ErrEngineClosed
-	}
-	seqno = e.headSeqnoLocked()
-	head, releaseHead := e.holdHeadLocked()
-	if found := e.watchedHeadLocked(afterSeqno); found != nil {
-		base = found.Clone()
-	}
-	locked.Unlock()
-	if base == nil {
-		return seqno, head, nil, releaseHead, nil
-	}
-
-	// Pin the base outside the lock without waiting for a peer. A base the
-	// volume already collected cannot be compared.
-	pinCtx, _ := block.WithoutPeerWait(ctx)
-	unpinBase, err := block.PinRoot(pinCtx, e.writeBlockStore, base.GetRef().GetRootRef())
-	if err != nil {
-		base.Release()
-		return seqno, head, nil, releaseHead, nil
-	}
-	return seqno, head, base, func() {
-		base.Release()
-		unpinBase()
-		releaseHead()
-	}, nil
 }
 
 // watchedHeadLocked returns the one recorded root at seqno, or nil when the
