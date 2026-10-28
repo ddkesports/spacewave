@@ -251,6 +251,9 @@ func (g *RefGraph) MarkYoung(ctx context.Context) (*BlockMark, error) {
 			return err
 		}
 		mark = &BlockMark{Live: NewNodeSet(), young: NewNodeSet(), youngSeen: head.hi, youngBound: head.hi}
+		if err := trackCreatedTx(ctx, tx, mark); err != nil {
+			return err
+		}
 		live, young := mark.Live, mark.young
 		var records []youngRecord
 		for seq := head.lo; seq < head.hi; seq++ {
@@ -317,7 +320,7 @@ func (g *RefGraph) MarkYoung(ctx context.Context) (*BlockMark, error) {
 		}
 
 		// Walk the young blocks from the seeds.
-		if _, err := walkTx(ctx, tx, live, stack, young, mark.noteUnknown, nil); err != nil {
+		if _, err := walkTx(ctx, tx, live, stack, young, nil, mark.noteUnknown, nil); err != nil {
 			return err
 		}
 
@@ -386,10 +389,11 @@ func firstOwnerTx(ctx context.Context, tx kvtx.Tx, prefix []byte) (string, error
 
 // growYoungTx adds the blocks created in the young log records written since
 // the mark last read it to the mark's young scope, so a walk descends into
-// blocks created during the pass. It does nothing for a mark without a scope.
+// blocks created during the pass, and to its created blocks, whose lists a
+// walk does not read. It does nothing for a mark with neither.
 func growYoungTx(ctx context.Context, tx kvtx.Tx, mark *BlockMark) error {
-	// Grow only a minor pass's scope.
-	if mark.young == nil {
+	// Grow only a minor pass's scope or a pass's created blocks.
+	if mark.young == nil && mark.created == nil {
 		return nil
 	}
 	head, err := readYoungTx(ctx, tx)
@@ -405,10 +409,36 @@ func growYoungTx(ctx context.Context, tx kvtx.Tx, mark *BlockMark) error {
 			continue
 		}
 		for _, block := range r.created {
-			mark.young.Add(block)
+			if mark.young != nil {
+				mark.young.Add(block)
+			}
+			if mark.created != nil {
+				mark.created.Add(block)
+			}
 		}
 	}
 	mark.youngSeen = max(mark.youngSeen, head.hi)
+	return nil
+}
+
+// trackCreatedTx starts mark's created blocks at the young log's end when a
+// block pass with an adopt log range is open, as BlockMark.created describes.
+// The caller runs it after the pass opened. Without a pass, or with a pass
+// record from a release that kept no range, it leaves them unset, and every
+// walk reads every list.
+func trackCreatedTx(ctx context.Context, tx kvtx.Tx, mark *BlockMark) error {
+	// Require an open pass that logs by range.
+	r, open, err := readPassTx(ctx, tx)
+	if err != nil || !open || r.legacy {
+		return err
+	}
+
+	// Start at the young log's end.
+	head, err := readYoungTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+	mark.created, mark.youngSeen = NewNodeSet(), head.hi
 	return nil
 }
 

@@ -72,6 +72,16 @@ type BlockMark struct {
 	// youngBound is the first young log record the MarkYoung snapshot did
 	// not list.
 	youngBound uint64
+	// created, when set, holds the blocks whose child lists a write created
+	// after the pass opened, as the young log records from the position the
+	// mark took list them. That write logged each child the list named in
+	// the adopt log, as does every later write that adds one, so a walk adds
+	// such a block to Live without reading its list: the pass's catch-up and
+	// rescue walk those children before any sweep. Each rescue and catch-up
+	// grows it first, as it grows young. Reading those lists cost a catch-up
+	// one read for each block a write created, and while writes created
+	// blocks faster than it read them, it never finished.
+	created *NodeSet
 	// promoteNext is the next record after the bound PromoteYoung rewrites,
 	// and promoteEnd the record it stops before, zero until it starts.
 	promoteNext, promoteEnd uint64
@@ -252,6 +262,9 @@ func (g *RefGraph) MarkBlocks(ctx context.Context) (*BlockMark, error) {
 	err := g.transaction(ctx, false, func(ctx context.Context, tx kvtx.Tx) error {
 		// Mark the seeds, stacking the blocks to walk.
 		mark = &BlockMark{Live: NewNodeSet()}
+		if err := trackCreatedTx(ctx, tx, mark); err != nil {
+			return err
+		}
 		live := mark.Live
 		var stack []namedNode
 		err := seedMarkTx(ctx, tx, mark, func(node, namer string) {
@@ -264,7 +277,7 @@ func (g *RefGraph) MarkBlocks(ctx context.Context) (*BlockMark, error) {
 		}
 
 		// Walk the owned blocks, noting those of unknown references.
-		if _, err := walkTx(ctx, tx, live, stack, nil, mark.noteUnknown, nil); err != nil {
+		if _, err := walkTx(ctx, tx, live, stack, nil, nil, mark.noteUnknown, nil); err != nil {
 			return err
 		}
 
@@ -325,17 +338,20 @@ func seedMarkTx(ctx context.Context, tx kvtx.Tx, mark *BlockMark, seed func(node
 // walkTx walks child lists and forward edges from the nodes on stack, adding
 // each node it reaches to reached. scope, when set, holds the blocks whose
 // lists it walks: a block outside it is only checked for a list, as MarkYoung
-// describes. untracked, when set, is called with each block it reaches that
-// has no child list, named by the node whose record reached it. It pops
-// chunks of nodes and loads the index pages of each chunk's records together
-// in key order, so a cold store costs a batch of reads per chunk instead of
-// one read per node, and the work list stays small however wide the graph is. stop, when set, is checked after each chunk; once
-// it reports true, the walk returns the nodes it reached but did not walk.
-// Otherwise it walks until the stack is empty and returns nil.
-func walkTx(ctx context.Context, tx kvtx.Tx, reached *NodeSet, stack []namedNode, scope *NodeSet, untracked func(namedNode), stop func() bool) ([]namedNode, error) {
-	// Stack each node on its first visit, with the node that reached it.
+// describes. unread, when set, holds the blocks it adds to reached without
+// reading their lists, as BlockMark.created describes. untracked, when set, is
+// called with each block it reaches that has no child list, named by the node
+// whose record reached it. It pops chunks of nodes and loads the index pages
+// of each chunk's records together in key order, so a cold store costs a batch
+// of reads per chunk instead of one read per node, and the work list stays
+// small however wide the graph is. stop, when set, is checked after each
+// chunk; once it reports true, the walk returns the nodes it reached but did
+// not walk. Otherwise it walks until the stack is empty and returns nil.
+func walkTx(ctx context.Context, tx kvtx.Tx, reached *NodeSet, stack []namedNode, scope, unread *NodeSet, untracked func(namedNode), stop func() bool) ([]namedNode, error) {
+	// Stack each node on its first visit, with the node that reached it,
+	// unless its list needs no read.
 	visit := func(node, namer string) {
-		if reached.Add(node) {
+		if reached.Add(node) && (unread == nil || !unread.Has(node)) {
 			stack = append(stack, namedNode{node, namer})
 		}
 	}
@@ -604,7 +620,7 @@ func catchUpTx(ctx context.Context, tx kvtx.Tx, mark *BlockMark, end uint64, bud
 func walkFrontierTx(ctx context.Context, tx kvtx.Tx, mark *BlockMark, blocks []string, stop func() bool) (bool, error) {
 	// Walk the frontier and the new blocks, keeping what the stop left.
 	stack := append(mark.frontier, adoptedStack(mark, blocks)...)
-	left, err := walkTx(ctx, tx, mark.Live, stack, mark.young, mark.noteUnknown, stop)
+	left, err := walkTx(ctx, tx, mark.Live, stack, mark.young, mark.created, mark.noteUnknown, stop)
 	if err != nil {
 		return false, err
 	}
@@ -612,12 +628,12 @@ func walkFrontierTx(ctx context.Context, tx kvtx.Tx, mark *BlockMark, blocks []s
 	return len(left) == 0, nil
 }
 
-// adoptedStack adds the blocks to mark.Live and returns those it added, for a
-// walk from them.
+// adoptedStack adds the blocks to mark.Live and returns those it added whose
+// lists need a read, for a walk from them.
 func adoptedStack(mark *BlockMark, blocks []string) []namedNode {
 	var stack []namedNode
 	for _, block := range blocks {
-		if mark.Live.Add(block) {
+		if mark.Live.Add(block) && (mark.created == nil || !mark.created.Has(block)) {
 			stack = append(stack, namedNode{node: block})
 		}
 	}

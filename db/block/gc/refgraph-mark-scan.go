@@ -65,8 +65,16 @@ func (g *RefGraph) MarkBlocksScan(ctx context.Context, stored BlocksStored) (*Bl
 // takes both ends of every edge from a node that is not a block, so a seed
 // read early misses only edges added later, which the log covers.
 func (g *RefGraph) markScan(ctx context.Context, limit markLimit, stored BlocksStored, between func() error) (*BlockMark, error) {
-	// Mark seeds live, counting the blocks among them.
+	// Start the blocks writes create during the pass at the young log's end.
 	mark := &BlockMark{Live: NewNodeSet()}
+	err := g.transaction(ctx, false, func(ctx context.Context, tx kvtx.Tx) error {
+		return trackCreatedTx(ctx, tx, mark)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Mark seeds live, counting the blocks among them.
 	live := mark.Live
 	var liveBlocks int
 	seed := func(node string) {
@@ -78,7 +86,7 @@ func (g *RefGraph) markScan(ctx context.Context, limit markLimit, stored BlocksS
 	// Seed the graph root and the registered roots.
 	seed(NodeGCRoot)
 	roots := graphKey(kindRoot)
-	err := g.scanRecords(ctx, mark, roots, limit, between, func(key []byte, _ kvtx.Iterator) error {
+	err = g.scanRecords(ctx, mark, roots, limit, between, func(key []byte, _ kvtx.Iterator) error {
 		mark.Roots++
 		seed(lastNode(roots, key))
 		return nil
