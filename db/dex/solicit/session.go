@@ -366,11 +366,16 @@ type preparedSend struct {
 // cannot be reused.
 func (s *peerSession) writeBatch(queue []*queuedSend) int {
 	// Claim the messages whose senders still wait, checking each one's
-	// authority at the write slot.
+	// authority at the write slot. A message that would carry the batch past
+	// maxSendBatch waits for the next batch, so small frames do not wait
+	// behind a large one.
 	var batch []preparedSend
 	n, size := 0, 0
-	for ; n < len(queue) && (len(batch) == 0 || size < maxSendBatch); n++ {
+	for ; n < len(queue); n++ {
 		q := queue[n]
+		if len(batch) != 0 && size+len(q.msg.GetData()) > maxSendBatch {
+			break
+		}
 		if !q.state.CompareAndSwap(sendQueued, sendWriting) {
 			continue
 		}

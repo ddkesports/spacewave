@@ -260,3 +260,38 @@ func TestQueuedSendAbandonedOnCancel(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestWriteBatchLeavesLargeMessageForNextBatch verifies a message that would
+// carry a batch past maxSendBatch waits for the next batch, so the small frame
+// ahead of it does not wait for the large write.
+func TestWriteBatchLeavesLargeMessageForNextBatch(t *testing.T) {
+	// Drain the remote side so each batch write completes.
+	session, remote, cleanup := newTestPeerSessionPair(newTestDexSolicitController(), "remote")
+	t.Cleanup(cleanup)
+	go func() {
+		for {
+			if err := remote.RecvMsg(&DexMessage{}); err != nil {
+				return
+			}
+		}
+	}()
+
+	// Queue a small frame ahead of a full-size one.
+	queue := []*queuedSend{
+		{ctx: t.Context(), msg: &DexMessage{RequestId: 1, Data: make([]byte, 100)}, done: make(chan error, 1)},
+		{ctx: t.Context(), msg: &DexMessage{RequestId: 2, Data: make([]byte, maxSendBatch)}, done: make(chan error, 1)},
+	}
+
+	// The first batch takes only the small frame, and the next takes the other.
+	if n := session.writeBatch(queue); n != 1 {
+		t.Fatalf("first batch consumed %d messages, want 1", n)
+	}
+	if n := session.writeBatch(queue[1:]); n != 1 {
+		t.Fatalf("second batch consumed %d messages, want 1", n)
+	}
+	for _, q := range queue {
+		if err := <-q.done; err != nil {
+			t.Fatal(err)
+		}
+	}
+}
