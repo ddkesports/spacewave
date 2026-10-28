@@ -296,12 +296,15 @@ func (e *Engine) runChangeWatch(w *engineChangeWatch) {
 		// from the index here reads a base at or past this span and merges it
 		// from the history or its catch-up instead.
 		w.indexMtx.Lock()
-		candidates := w.index.Candidates(changes)
+		accepted, tested := w.index.Candidates(changes)
 		w.indexMtx.Unlock()
 
-		// Hand the changes to the named subscribers that accept them, testing
-		// each outside the locks.
-		for _, sub := range candidates {
+		// Hand the changes to the subscribers a changed key names, and to the
+		// other named ones that accept them, testing those outside the locks.
+		for _, sub := range accepted {
+			sub.add(nextSeqno, changes)
+		}
+		for _, sub := range tested {
 			if sub.interest.Accepts(changes) {
 				sub.add(nextSeqno, changes)
 			}

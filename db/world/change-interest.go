@@ -9,13 +9,15 @@ package world
 type ChangeInterest struct {
 	// filter decides whether a change concerns the watcher.
 	filter ChangeFilter
-	// keys are the changed object keys the filter may accept.
+	// keys are object keys the filter accepts every change to. A change feed
+	// hands such a change to the watcher without testing the filter.
 	keys []string
 	// terms are the changed quad fields the filter may accept.
 	terms []quadTerm
 	// all is set when the filter may accept a change naming none of them.
 	all bool
-	// shared are finished read sets whose changes the filter may accept. A
+	// shared are finished read sets whose changes the filter may accept, and
+	// does accept for every change touching an object key a set read. A
 	// change feed names each set once for all the watchers sharing it, so a
 	// watcher costs one entry per set, not one per key the set read.
 	shared []*ReadSet

@@ -202,8 +202,8 @@ func (e *Engine) indexedSubscribers() []*changeSubscriber {
 	return slices.Collect(w.index.All())
 }
 
-// indexCandidates returns the subscribers the change watch would test on
-// changes.
+// indexCandidates returns the subscribers the change watch would hand
+// changes to or test them on.
 func (e *Engine) indexCandidates(changes *world.ChangeSet) []*changeSubscriber {
 	// Find the running change watch.
 	locked := e.bcast.Lock()
@@ -216,5 +216,6 @@ func (e *Engine) indexCandidates(changes *world.ChangeSet) []*changeSubscriber {
 	// Read its index under the index lock.
 	w.indexMtx.Lock()
 	defer w.indexMtx.Unlock()
-	return w.index.Candidates(changes)
+	accepted, tested := w.index.Candidates(changes)
+	return slices.Concat(accepted, tested)
 }

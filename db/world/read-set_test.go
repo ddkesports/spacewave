@@ -248,7 +248,7 @@ func TestReadSetJoin(t *testing.T) {
 	x := NewChangeIndex[string]()
 	x.Add("outer", &ChangeInterest{shared: []*ReadSet{outer}})
 	for _, key := range []string{"inner", "middle"} {
-		if got := x.Candidates(&ChangeSet{Keys: []string{key}}); !slices.Equal(got, []string{"outer"}) {
+		if got := candidates(x, &ChangeSet{Keys: []string{key}}); !slices.Equal(got, []string{"outer"}) {
 			t.Fatalf("change to %q names %q, want [outer]", key, got)
 		}
 	}

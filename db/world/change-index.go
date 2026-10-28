@@ -104,36 +104,69 @@ func (x *ChangeIndex[T]) Remove(w T) {
 	}
 }
 
-// Candidates returns each watcher whose interest may accept changes once: the
-// watchers named by a changed key or quad field, directly or through a held
-// set, and those tested on every change, or every watcher for an unknown
-// ChangeSet. A watcher left out rejects changes.
-func (x *ChangeIndex[T]) Candidates(changes *ChangeSet) []T {
-	// An unknown ChangeSet reaches every watcher.
+// Candidates returns the watchers whose interest may accept changes, each
+// once, in two lists. accepted holds those a changed object key names, directly
+// or through a held set: a ChangeInterest's filter accepts any change to a key
+// it names, so these need no test. tested holds the rest that must be tested:
+// those named only by a changed quad field, whose pattern may still miss, and
+// those tested on every change, or every watcher for an unknown ChangeSet. A
+// watcher in neither rejects changes.
+func (x *ChangeIndex[T]) Candidates(changes *ChangeSet) (accepted, tested []T) {
+	// An unknown ChangeSet reaches every watcher, to be tested.
 	if changes.Unknown {
-		return slices.Collect(maps.Keys(x.interests))
+		return nil, slices.Collect(maps.Keys(x.interests))
 	}
 
-	// Gather the watchers the changes name, and the held sets they name.
-	found := make(map[T]struct{})
-	x.watchers.collect(changes, found)
-	named := make(map[*heldSet[T]]struct{})
-	x.sets.collect(changes, named)
+	// Gather the watchers and held sets the changed keys name, then those the
+	// other names reach.
+	sure, maybe := make(map[T]struct{}), make(map[T]struct{})
+	x.watchers.collectKeys(changes, sure)
+	x.watchers.collectOthers(changes, maybe)
+	keyed, named := make(map[*heldSet[T]]struct{}), make(map[*heldSet[T]]struct{})
+	x.sets.collectKeys(changes, keyed)
+	x.sets.collectOthers(changes, named)
 
-	// Add the watchers of each named set and of every set that joined one.
-	pending := slices.Collect(maps.Keys(named))
+	// Add the watchers of each named set and of every set that joined one. A
+	// set a changed key names is touched, and so is each set that joined it.
+	x.reachWatchers(keyed, sure, nil)
+	x.reachWatchers(named, maybe, keyed)
+
+	// Test only the watchers no changed key names.
+	for w := range maybe {
+		if _, ok := sure[w]; !ok {
+			tested = append(tested, w)
+		}
+	}
+	return slices.Collect(maps.Keys(sure)), tested
+}
+
+// reachWatchers adds to found the watchers of each set in named and of every
+// held set that joined one, directly or through others. A set in skip, and
+// the sets that joined it, are left out: another pass reaches them. named
+// gains every set reached.
+func (x *ChangeIndex[T]) reachWatchers(named map[*heldSet[T]]struct{}, found map[T]struct{}, skip map[*heldSet[T]]struct{}) {
+	// Start from the named sets another pass does not reach.
+	pending := make([]*heldSet[T], 0, len(named))
+	for entry := range named {
+		if _, ok := skip[entry]; !ok {
+			pending = append(pending, entry)
+		}
+	}
+
+	// Walk up to every set that joined one, collecting their watchers.
 	for len(pending) != 0 {
 		entry := pending[len(pending)-1]
 		pending = pending[:len(pending)-1]
 		maps.Copy(found, entry.watchers)
 		for parent := range entry.parents {
-			if _, ok := named[parent]; !ok {
+			_, seen := named[parent]
+			_, skipped := skip[parent]
+			if !seen && !skipped {
 				named[parent] = struct{}{}
 				pending = append(pending, parent)
 			}
 		}
 	}
-	return slices.Collect(maps.Keys(found))
 }
 
 // hold returns the entry of set, indexing it by its own reads and holding
@@ -240,13 +273,17 @@ func (x *nameIndex[T]) remove(e T, names *ChangeInterest) {
 	}
 }
 
-// collect adds to found the entries named by a changed key or quad field and
-// those collected for every change.
-func (x *nameIndex[T]) collect(changes *ChangeSet, found map[T]struct{}) {
-	maps.Copy(found, x.all)
+// collectKeys adds to found the entries a changed object key names.
+func (x *nameIndex[T]) collectKeys(changes *ChangeSet, found map[T]struct{}) {
 	for _, key := range changes.Keys {
 		maps.Copy(found, x.keys[key])
 	}
+}
+
+// collectOthers adds to found the entries a changed quad field names and
+// those collected for every change.
+func (x *nameIndex[T]) collectOthers(changes *ChangeSet, found map[T]struct{}) {
+	maps.Copy(found, x.all)
 	for _, q := range changes.Quads {
 		for _, term := range quadTerms(q) {
 			maps.Copy(found, x.terms[term])

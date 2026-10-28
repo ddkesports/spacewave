@@ -32,7 +32,7 @@ func TestChangeIndexCandidates(t *testing.T) {
 		{NewUnknownChangeSet(), []string{"filter", "keyed", "linked", "prefixed"}},
 	}
 	for i, c := range cases {
-		if got := slices.Sorted(slices.Values(x.Candidates(c.changes))); !slices.Equal(got, c.want) {
+		if got := slices.Sorted(slices.Values(candidates(x, c.changes))); !slices.Equal(got, c.want) {
 			t.Errorf("case %d: candidates %q, want %q", i, got, c.want)
 		}
 	}
@@ -42,6 +42,46 @@ func TestChangeIndexCandidates(t *testing.T) {
 		x.Remove(name)
 	}
 	expectEmptyIndex(t, x)
+}
+
+// TestChangeIndexAcceptsKeyed checks that a watcher a changed key names,
+// directly or through a set it joined, is accepted without a test, and that
+// one named only by a quad field or tested on every change is tested.
+func TestChangeIndexAcceptsKeyed(t *testing.T) {
+	// Read a key, a set joining a key read, and a pattern twice.
+	keyed, part, joining, linked, sharedLinked := NewReadSet(), NewReadSet(), NewReadSet(), NewReadSet(), NewReadSet()
+	keyed.addKeys("obj/a")
+	part.addKeys("obj/b")
+	joining.join(part)
+	linked.addPatterns(NewGraphQuad("<obj/c>", "<p>", "", ""))
+	sharedLinked.addPatterns(NewGraphQuad("<obj/c>", "<p>", "", ""))
+
+	// Index them, the pattern directly and through a shared set, beside a
+	// plain filter.
+	x := NewChangeIndex[string]()
+	x.Add("keyed", readSetInterest(keyed))
+	x.Add("joining", &ChangeInterest{shared: []*ReadSet{joining}})
+	x.Add("linked", readSetInterest(linked))
+	x.Add("shared", &ChangeInterest{shared: []*ReadSet{sharedLinked}})
+	x.Add("filter", NewChangeInterest(func(*ChangeSet) bool { return false }))
+
+	// Changed keys accept their readers; a quad field or every change tests.
+	cases := []struct {
+		changes          *ChangeSet
+		accepted, tested []string
+	}{
+		{&ChangeSet{Keys: []string{"obj/a", "obj/b"}}, []string{"joining", "keyed"}, []string{"filter"}},
+		{&ChangeSet{Quads: []GraphQuad{NewGraphQuad("<obj/c>", "<q>", "<obj/d>", "")}}, nil, []string{"filter", "linked", "shared"}},
+		{&ChangeSet{Keys: []string{"obj/c"}}, []string{"linked", "shared"}, []string{"filter"}},
+	}
+	for i, c := range cases {
+		accepted, tested := x.Candidates(c.changes)
+		slices.Sort(accepted)
+		slices.Sort(tested)
+		if !slices.Equal(accepted, c.accepted) || !slices.Equal(tested, c.tested) {
+			t.Errorf("case %d: accepted %q tested %q, want %q and %q", i, accepted, tested, c.accepted, c.tested)
+		}
+	}
 }
 
 // TestChangeIndexSharedOnce checks that watchers sharing a read set name it
@@ -76,7 +116,7 @@ func TestChangeIndexSharedOnce(t *testing.T) {
 		{&ChangeSet{Keys: []string{"other"}}, nil},
 	}
 	for i, c := range cases {
-		if got := slices.Sorted(slices.Values(x.Candidates(c.changes))); !slices.Equal(got, c.want) {
+		if got := slices.Sorted(slices.Values(candidates(x, c.changes))); !slices.Equal(got, c.want) {
 			t.Errorf("case %d: candidates %q, want %q", i, got, c.want)
 		}
 	}
@@ -84,7 +124,7 @@ func TestChangeIndexSharedOnce(t *testing.T) {
 	// The set stays indexed while a watcher holds it.
 	x.Remove("a")
 	x.Remove("b")
-	if got := x.Candidates(&ChangeSet{Keys: []string{"obj/inner"}}); !slices.Equal(got, []string{"c"}) {
+	if got := candidates(x, &ChangeSet{Keys: []string{"obj/inner"}}); !slices.Equal(got, []string{"c"}) {
 		t.Fatalf("candidates after two left: %q, want [c]", got)
 	}
 	x.Remove("c")
@@ -123,7 +163,7 @@ func TestChangeIndexJoinedOnce(t *testing.T) {
 		{&ChangeSet{Keys: []string{"other"}}, nil},
 	}
 	for i, c := range cases {
-		if got := slices.Sorted(slices.Values(x.Candidates(c.changes))); !slices.Equal(got, c.want) {
+		if got := slices.Sorted(slices.Values(candidates(x, c.changes))); !slices.Equal(got, c.want) {
 			t.Errorf("case %d: candidates %q, want %q", i, got, c.want)
 		}
 	}
@@ -131,11 +171,17 @@ func TestChangeIndexJoinedOnce(t *testing.T) {
 	// The part stays while a merged set or a watcher holds it.
 	x.Remove("c")
 	x.Remove("a")
-	if got := x.Candidates(&ChangeSet{Keys: []string{"part/1"}}); !slices.Equal(got, []string{"b"}) {
+	if got := candidates(x, &ChangeSet{Keys: []string{"part/1"}}); !slices.Equal(got, []string{"b"}) {
 		t.Fatalf("candidates after two left: %q, want [b]", got)
 	}
 	x.Remove("b")
 	expectEmptyIndex(t, x)
+}
+
+// candidates returns every watcher x names for changes, accepted or tested.
+func candidates[T comparable](x *ChangeIndex[T], changes *ChangeSet) []T {
+	accepted, tested := x.Candidates(changes)
+	return slices.Concat(accepted, tested)
 }
 
 // expectEmptyIndex checks that x holds no watcher, set or name.
@@ -190,7 +236,8 @@ func TestChangeIndexSound(t *testing.T) {
 		x.Add(i, interest)
 	}
 
-	// Each random ChangeSet names every set it touches.
+	// Each random ChangeSet names every set it touches, and accepts without a
+	// test only sets it touches.
 	for range 2000 {
 		changes := &ChangeSet{}
 		for range rng.IntN(3) {
@@ -199,11 +246,15 @@ func TestChangeIndexSound(t *testing.T) {
 		for range rng.IntN(3) {
 			changes.Quads = append(changes.Quads, NewGraphQuad(pick(), pick(), pick(), maybe()))
 		}
-		candidates := x.Candidates(changes)
+		accepted, tested := x.Candidates(changes)
 		for i, set := range sets {
 			touched := set.Touched(changes) || slices.ContainsFunc(shared[i], func(s *ReadSet) bool { return s.Touched(changes) })
-			if touched && !slices.Contains(candidates, i) {
+			isAccepted, isTested := slices.Contains(accepted, i), slices.Contains(tested, i)
+			if touched && !isAccepted && !isTested {
 				t.Fatalf("set %d touched by %+v is not a candidate", i, changes)
+			}
+			if isAccepted && (!touched || isTested) {
+				t.Fatalf("set %d accepted for %+v: touched %v, also tested %v", i, changes, touched, isTested)
 			}
 		}
 	}
@@ -307,4 +358,61 @@ func BenchmarkChangeIndexMergedWake(b *testing.B) {
 		x.Add(v, own[v].waitInterest(nil, []*ReadSet{merged[v]}))
 		v = (v + 1) % len(own)
 	}
+}
+
+// BenchmarkChangeIndexMergedDeliver measures handing one revision's changes
+// to the views, as a change feed does, when each of 1000 views holds its own
+// set joining the same 100 parts of 200 keys each and the revision changes 20
+// keys of one part. test-all tests every candidate's filter; accept-keyed
+// accepts the candidates a changed key names and tests the rest.
+func BenchmarkChangeIndexMergedDeliver(b *testing.B) {
+	// Build the parts the views share.
+	parts := make([]*ReadSet, 100)
+	for p := range parts {
+		parts[p] = NewReadSet()
+		for i := range 200 {
+			parts[p].addKeys("part/" + strconv.Itoa(p) + "/" + strconv.Itoa(i))
+		}
+	}
+
+	// Give each view its own set joining every part, waiting as a view does.
+	x := NewChangeIndex[*ChangeInterest]()
+	for v := range 1000 {
+		own, merged := NewReadSet(), NewReadSet()
+		own.addKeys("own/" + strconv.Itoa(v))
+		for _, part := range parts {
+			merged.join(part)
+		}
+		touches := func(cs *ChangeSet) bool { return own.Touched(cs) || merged.Touched(cs) }
+		interest := own.waitInterest(touches, []*ReadSet{merged})
+		x.Add(interest, interest)
+	}
+
+	// Each revision is a new ChangeSet, so no set's memo answers it.
+	keys := make([]string, 20)
+	for i := range keys {
+		keys[i] = "part/50/" + strconv.Itoa(i*10)
+	}
+	deliver := func(b *testing.B, testAll bool) {
+		b.ReportAllocs()
+		for b.Loop() {
+			changes := &ChangeSet{Keys: keys}
+			accepted, tested := x.Candidates(changes)
+			if testAll {
+				tested = slices.Concat(accepted, tested)
+				accepted = nil
+			}
+			n := len(accepted)
+			for _, interest := range tested {
+				if interest.Accepts(changes) {
+					n++
+				}
+			}
+			if n != 1000 {
+				b.Fatalf("delivered to %d views, want 1000", n)
+			}
+		}
+	}
+	b.Run("test-all", func(b *testing.B) { deliver(b, true) })
+	b.Run("accept-keyed", func(b *testing.B) { deliver(b, false) })
 }
