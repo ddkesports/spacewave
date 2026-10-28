@@ -35,12 +35,14 @@ func (g *GCStoreOps) GetStoredBlock(ctx context.Context, ref *block.BlockRef) (*
 
 // getBlockEdges resolves the outgoing edges of a stored block.
 func (g *GCStoreOps) getBlockEdges(ctx context.Context, ref *block.BlockRef, data []byte) (*block.StoredBlock, error) {
-	// Collect the recorded and buffered references of the stored block.
+	// Collect the recorded and buffered references of the stored block, and
+	// whether the graph tracks it when the graph reads both at once.
 	node := BlockIRI(ref)
-	refs, err := g.getOutgoingBlockRefs(ctx, node)
+	targets, tracked, combined, err := g.readBlockEdges(ctx, node)
 	if err != nil {
 		return nil, err
 	}
+	refs := g.withBufferedBlockRefs(node, targets)
 
 	// A re-put carries the block's own refs before FlushPending restores them.
 	if len(refs) == 0 {
@@ -58,8 +60,8 @@ func (g *GCStoreOps) getBlockEdges(ctx context.Context, ref *block.BlockRef, dat
 	// The graph reports the staging edge of a block that has a child list; an
 	// owner alone does not make the list, so a block taken by a parent after
 	// an untracked write stays unknown rather than read as a leaf.
-	known := len(refs) != 0 || g.hasBufferedBlockEdges(node)
-	if !known {
+	known := len(refs) != 0 || tracked || g.hasBufferedBlockEdges(node)
+	if !known && !combined {
 		incoming, err := g.refGraph.GetIncomingRefs(ctx, node)
 		if err != nil {
 			return nil, err
@@ -67,6 +69,21 @@ func (g *GCStoreOps) getBlockEdges(ctx context.Context, ref *block.BlockRef, dat
 		known = slices.Contains(incoming, NodeUnreferenced)
 	}
 	return &block.StoredBlock{Data: data, Refs: refs, RefsKnown: known}, nil
+}
+
+// readBlockEdges reads node's recorded outgoing edges. A graph that reads them
+// together with whether it tracks the block reports combined; otherwise
+// tracked is false and the caller asks the graph separately.
+func (g *GCStoreOps) readBlockEdges(ctx context.Context, node string) (targets []string, tracked, combined bool, err error) {
+	// Read the edges and the child list together when the graph can.
+	if reader, ok := g.refGraph.(BlockEdgeReader); ok {
+		targets, tracked, err = reader.GetBlockEdges(ctx, node)
+		return targets, tracked, true, err
+	}
+
+	// Otherwise read only the edges.
+	targets, err = g.refGraph.GetOutgoingRefs(ctx, node)
+	return targets, false, false, err
 }
 
 // hasBufferedBlockEdges reports whether node participates in a buffered edge,
@@ -100,7 +117,12 @@ func (g *GCStoreOps) getOutgoingBlockRefs(ctx context.Context, node string) ([]*
 	if err != nil {
 		return nil, err
 	}
+	return g.withBufferedBlockRefs(node, targets), nil
+}
 
+// withBufferedBlockRefs adds node's edges buffered for the next flush, or left
+// by a failed flush, to its recorded targets and returns the block refs.
+func (g *GCStoreOps) withBufferedBlockRefs(node string, targets []string) []*block.BlockRef {
 	// Include edges buffered for the next flush, or left by a failed flush.
 	g.mu.Lock()
 	for _, edge := range g.pendingRefs {
@@ -124,5 +146,5 @@ func (g *GCStoreOps) getOutgoingBlockRefs(ctx context.Context, node string) ([]*
 			refs = append(refs, ref)
 		}
 	}
-	return refs, nil
+	return refs
 }

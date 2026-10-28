@@ -72,3 +72,11 @@ type RefGraphOps interface {
 	// Close closes the ref graph.
 	Close() error
 }
+
+// BlockEdgeReader is implemented by a RefGraphOps that reads a block's
+// outgoing edges and whether the graph tracks the block in one read.
+type BlockEdgeReader interface {
+	// GetBlockEdges returns what GetOutgoingRefs reports for a block node and
+	// whether GetIncomingRefs would report NodeUnreferenced for it.
+	GetBlockEdges(ctx context.Context, node string) (targets []string, tracked bool, err error)
+}

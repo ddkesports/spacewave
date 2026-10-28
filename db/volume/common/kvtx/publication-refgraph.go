@@ -93,6 +93,13 @@ func (g *transactionRefGraph) GetOutgoingRefs(ctx context.Context, node string) 
 	return
 }
 
+// GetBlockEdges returns a block's outgoing edges and whether the graph tracks
+// it, in one read transaction.
+func (g *transactionRefGraph) GetBlockEdges(ctx context.Context, node string) (targets []string, tracked bool, err error) {
+	err = g.read(ctx, func(rg *block_gc.RefGraph) error { targets, tracked, err = rg.GetBlockEdges(ctx, node); return err })
+	return
+}
+
 // GetIncomingRefs returns the reference sources of a node.
 func (g *transactionRefGraph) GetIncomingRefs(ctx context.Context, node string) (refs []string, err error) {
 	err = g.read(ctx, func(rg *block_gc.RefGraph) error { refs, err = rg.GetIncomingRefs(ctx, node); return err })
@@ -255,4 +262,7 @@ func (e *atomicRefBatchError) RefBatchRemainder() ([]block_gc.RefEdge, []block_g
 }
 
 // _ is a type assertion
-var _ block_gc.RefGraphOps = (*transactionRefGraph)(nil)
+var (
+	_ block_gc.RefGraphOps     = (*transactionRefGraph)(nil)
+	_ block_gc.BlockEdgeReader = (*transactionRefGraph)(nil)
+)

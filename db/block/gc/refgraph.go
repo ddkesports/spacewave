@@ -501,27 +501,51 @@ func (g *RefGraph) list(ctx context.Context, prefix []byte) ([]string, error) {
 func (g *RefGraph) GetOutgoingRefs(ctx context.Context, node string) ([]string, error) {
 	var answer []string
 	err := g.transaction(ctx, false, func(ctx context.Context, tx kvtx.Tx) error {
-		// Read a block's child list.
-		answer = nil
-		if isBlockNode(node) {
-			children, _, err := readChildrenTx(ctx, tx, node)
-			if err != nil {
-				return err
-			}
-			answer = children
-		}
-
-		// Add the targets of the forward records.
-		prefix := graphKey(kindForward, node)
-		return tx.ScanPrefixKeys(ctx, prefix, func(key []byte) error {
-			answer = append(answer, lastNode(prefix, key))
-			return nil
-		})
+		var err error
+		answer, _, err = readOutgoingTx(ctx, tx, node)
+		return err
 	})
 	if err != nil {
 		return nil, err
 	}
 	return answer, nil
+}
+
+// GetBlockEdges returns what GetOutgoingRefs reports for a block node and
+// whether the graph tracks the block, which GetIncomingRefs reports as the
+// unreferenced queue's edge, in one read.
+func (g *RefGraph) GetBlockEdges(ctx context.Context, node string) (targets []string, tracked bool, err error) {
+	err = g.transaction(ctx, false, func(ctx context.Context, tx kvtx.Tx) error {
+		targets, tracked, err = readOutgoingTx(ctx, tx, node)
+		return err
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return targets, tracked, nil
+}
+
+// readOutgoingTx reads all current targets of a node and, for a block, whether
+// its child list exists.
+func readOutgoingTx(ctx context.Context, tx kvtx.Tx, node string) ([]string, bool, error) {
+	// Read a block's child list.
+	var answer []string
+	var tracked bool
+	if isBlockNode(node) {
+		var err error
+		answer, tracked, err = readChildrenTx(ctx, tx, node)
+		if err != nil {
+			return nil, false, err
+		}
+	}
+
+	// Add the targets of the forward records.
+	prefix := graphKey(kindForward, node)
+	err := tx.ScanPrefixKeys(ctx, prefix, func(key []byte) error {
+		answer = append(answer, lastNode(prefix, key))
+		return nil
+	})
+	return answer, tracked, err
 }
 
 // GetIncomingRefs returns all current owners of a node. A block reports its
@@ -700,5 +724,6 @@ func (g *RefGraph) Close() error { return nil }
 // _ is a type assertion
 var (
 	_ RefGraphOps            = (*RefGraph)(nil)
+	_ BlockEdgeReader        = (*RefGraph)(nil)
 	_ RefBatchRemainderError = (*batchRemainderError)(nil)
 )

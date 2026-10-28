@@ -132,7 +132,7 @@ type stallGraph struct {
 	applying chan struct{}
 	// release lets ApplyRefBatch apply the batch.
 	release chan struct{}
-	// read is closed when the first incoming lookup has answered.
+	// read is closed when the first block edge lookup has answered.
 	read     chan struct{}
 	readOnce sync.Once
 }
@@ -144,11 +144,11 @@ func (g *stallGraph) ApplyRefBatch(ctx context.Context, adds, removes []RefEdge)
 	return g.RefGraph.ApplyRefBatch(ctx, adds, removes)
 }
 
-// GetIncomingRefs reads the wrapped graph and reports the first lookup.
-func (g *stallGraph) GetIncomingRefs(ctx context.Context, node string) ([]string, error) {
-	sources, err := g.RefGraph.GetIncomingRefs(ctx, node)
+// GetBlockEdges reads the wrapped graph and reports the first lookup.
+func (g *stallGraph) GetBlockEdges(ctx context.Context, node string) ([]string, bool, error) {
+	targets, tracked, err := g.RefGraph.GetBlockEdges(ctx, node)
 	g.readOnce.Do(func() { close(g.read) })
-	return sources, err
+	return targets, tracked, err
 }
 
 // TestGCStoreOpsGetStoredBlockDuringFlush checks that a block whose edges a
@@ -192,5 +192,59 @@ func TestGCStoreOpsGetStoredBlockDuringFlush(t *testing.T) {
 	got := <-read
 	if got.err != nil || got.stored == nil || !got.stored.RefsKnown {
 		t.Fatalf("block during flush = %+v/%v, want known refs", got.stored, got.err)
+	}
+}
+
+// separateReadsGraph hides the combined block edge read, as a graph served
+// over RPC does.
+type separateReadsGraph struct {
+	RefGraphOps
+}
+
+// TestGCStoreOpsGetStoredBlockSeparateReads checks that a graph without the
+// combined read reports the same refs and knowledge as one with it.
+func TestGCStoreOpsGetStoredBlockSeparateReads(t *testing.T) {
+	// Store a tracked parent and leaf, and an untracked block.
+	env := newGCTestEnv(t)
+	child := env.putBlock(t, "separate child")
+	parent, _, err := block.PutBlock(env.ctx, env.gcStore, &block_mock.Root{ExampleSubBlock: &block_mock.SubBlock{ExamplePtr: child}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.flush(t)
+	untracked, _, err := env.rawStore.PutBlock(env.ctx, []byte("separate untracked"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Read each block through both graph shapes.
+	separate := NewGCStoreOps(env.rawStore, separateReadsGraph{env.refGraph})
+	for _, ref := range []*block.BlockRef{parent, child, untracked} {
+		want, err := env.gcStore.GetStoredBlock(env.ctx, ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := separate.GetStoredBlock(env.ctx, ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.RefsKnown != want.RefsKnown || len(got.Refs) != len(want.Refs) {
+			t.Fatalf("%v: separate reads = %+v, combined = %+v", ref, got, want)
+		}
+		for i := range got.Refs {
+			if !got.Refs[i].EqualsRef(want.Refs[i]) {
+				t.Fatalf("%v: separate ref %d = %v, combined %v", ref, i, got.Refs[i], want.Refs[i])
+			}
+		}
+	}
+
+	// The fixture covers a parent, a known leaf and an unknown block.
+	stored, err := env.gcStore.GetStoredBlock(env.ctx, untracked)
+	if err != nil || stored.RefsKnown {
+		t.Fatalf("untracked = %+v/%v, want unknown refs", stored, err)
+	}
+	stored, err = env.gcStore.GetStoredBlock(env.ctx, child)
+	if err != nil || !stored.RefsKnown || len(stored.Refs) != 0 {
+		t.Fatalf("leaf = %+v/%v, want known leaf", stored, err)
 	}
 }
