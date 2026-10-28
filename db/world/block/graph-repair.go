@@ -380,7 +380,14 @@ func (t *WorldState) DumpGraphTree(
 	for _, key := range refKeys {
 		value, found, err := tree.Get(ctx, key)
 		if err != nil {
-			return errors.Wrapf(err, "read value of key %q", key)
+			// A missing value block is a hole of the one key.
+			if ctx.Err() != nil {
+				return errors.Wrapf(err, "read value of key %q", key)
+			}
+			if herr := hole(kvtx_block_okra.SalvageHole{Low: key, High: append(bytes.Clone(key), 0), Keys: 1, Err: err}); herr != nil {
+				return herr
+			}
+			continue
 		}
 		if !found {
 			return errors.Errorf("key %q not found while reading its value", key)
