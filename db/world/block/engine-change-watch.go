@@ -6,6 +6,7 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/s4wave/spacewave/db/block"
 	"github.com/s4wave/spacewave/db/bucket"
 	bucket_lookup "github.com/s4wave/spacewave/db/bucket/lookup"
 	"github.com/s4wave/spacewave/db/world"
@@ -268,8 +269,11 @@ func (e *Engine) runChangeWatch(w *engineChangeWatch) {
 		listChanges := len(w.subs) != 0
 		locked.Unlock()
 
-		// Compare the World trees outside the publication lock.
-		keys, changes, err := e.compareChangeWatchHeads(w.ctx, w, w.base, next, listChanges)
+		// Compare the World trees outside the publication lock. A block only
+		// an absent peer could serve fails the comparison instead of waiting
+		// for the peer, since every subscriber waits behind it.
+		compareCtx, _ := block.WithoutPeerWait(w.ctx)
+		keys, changes, err := e.compareChangeWatchHeads(compareCtx, w, w.base, next, listChanges)
 		if err != nil && w.ctx.Err() == nil {
 			e.le.WithError(err).Warn("world change comparison failed; waking every watcher")
 		}

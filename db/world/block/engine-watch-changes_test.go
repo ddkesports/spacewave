@@ -573,3 +573,130 @@ func checkQuads(t *testing.T, got []world.GraphQuad, want ...world.GraphQuad) {
 		t.Fatalf("changed quads %q, want %q", g, w)
 	}
 }
+
+// getFuncStore reads blocks with get and passes everything else to the store.
+type getFuncStore struct {
+	block.StoreOps
+	block.RootRetainer
+	// get reads a block.
+	get func(ctx context.Context, ref *block.BlockRef) ([]byte, bool, error)
+}
+
+// GetBlock reads ref with get.
+func (s *getFuncStore) GetBlock(ctx context.Context, ref *block.BlockRef) ([]byte, bool, error) {
+	return s.get(ctx, ref)
+}
+
+// TestWatchChangesMissingBlockNoPeer checks that a head comparison reading a
+// block only an absent peer could serve reports unknown changes to the
+// subscribers instead of waiting for the peer.
+func TestWatchChangesMissingBlockNoPeer(t *testing.T) {
+	// Commit an object to watch from.
+	f := newSessionFixture(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	w := sessionWriter(t, f)
+	sessionObject(t, w, "hole/first")
+	if err := w.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	base := f.engine.GetRootRef().GetRootRef()
+
+	// Leave the watched head's root only on an absent peer once armed.
+	armed := setPeerOnlyBlock(f.engine, base)
+
+	// Subscribe from the head, then commit past it with the root missing.
+	after := headSeqno(t, ctx, f.engine)
+	windows := make(chan *world.ChangeSet, 1)
+	go func() {
+		_ = f.engine.WatchChanges(ctx, after, nil, func(_ uint64, cs *world.ChangeSet) error {
+			windows <- cs
+			return errWindowRead
+		})
+	}()
+	armed.Store(true)
+	w = sessionWriter(t, f)
+	sessionObject(t, w, "hole/second")
+	if err := w.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Expect unknown changes before the deadline.
+	select {
+	case changes := <-windows:
+		if !changes.Unknown {
+			t.Fatalf("changes across a missing block = %+v, want unknown", changes)
+		}
+	case <-ctx.Done():
+		t.Fatal("change watch waited for the absent peer")
+	}
+}
+
+// TestWatchChangesCatchUpMissingBlockNoPeer checks that a catch-up comparison
+// reading a block only an absent peer could serve reports unknown changes
+// instead of waiting for the peer.
+func TestWatchChangesCatchUpMissingBlockNoPeer(t *testing.T) {
+	// Commit an object to catch up from.
+	f := newSessionFixture(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	w := sessionWriter(t, f)
+	sessionObject(t, w, "hole/first")
+	if err := w.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	after := headSeqno(t, ctx, f.engine)
+	armed := setPeerOnlyBlock(f.engine, f.engine.GetRootRef().GetRootRef())
+
+	// Commit past it and start the watch there, so it records no span from
+	// the first head.
+	w = sessionWriter(t, f)
+	sessionObject(t, w, "hole/second")
+	if err := w.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	live := headSeqno(t, ctx, f.engine)
+	go func() {
+		_ = f.engine.WatchChanges(ctx, live, nil, func(uint64, *world.ChangeSet) error { return nil })
+	}()
+
+	// Expect a subscriber from the first head to see unknown changes before
+	// the deadline once its root is missing.
+	armed.Store(true)
+	_, changes := readChangeWindow(t, ctx, f.engine, after)
+	if !changes.Unknown {
+		t.Fatalf("changes across a missing block = %+v, want unknown", changes)
+	}
+	if err := ctx.Err(); err != nil {
+		t.Fatalf("catch-up waited for the absent peer: %v", err)
+	}
+}
+
+// setPeerOnlyBlock replaces the engine's write store so that, once armed,
+// ref is held only by an absent peer: a read that may wait for the peer
+// blocks, and one that may not reports ErrUnavailable.
+func setPeerOnlyBlock(e *Engine, ref *block.BlockRef) *atomic.Bool {
+	// Read ref as an absent peer would serve it once armed.
+	armed := &atomic.Bool{}
+	store := e.writeBlockStore
+	get := func(ctx context.Context, got *block.BlockRef) ([]byte, bool, error) {
+		// Read every other block, and ref until armed, from the store.
+		if !armed.Load() || !got.EqualsRef(ref) {
+			return store.GetBlock(ctx, got)
+		}
+
+		// Fail a read that may not wait, and block one that may.
+		if block.GetPeerWait(ctx) != nil {
+			return nil, false, block.ErrUnavailable
+		}
+		<-ctx.Done()
+		return nil, false, context.Cause(ctx)
+	}
+
+	// Wrap the store under the publication lock, keeping its root retention.
+	locked := e.bcast.Lock()
+	retainer, _ := store.(block.RootRetainer)
+	e.writeBlockStore = &getFuncStore{StoreOps: store, RootRetainer: retainer, get: get}
+	locked.Unlock()
+	return armed
+}

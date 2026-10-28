@@ -138,14 +138,15 @@ func (e *Engine) compareCatchUp(ctx context.Context, c *changeCatchUp, before, a
 		close(c.done)
 	}()
 
-	// Pin both heads without waiting for a peer.
-	pinCtx, _ := block.WithoutPeerWait(ctx)
-	unpinBefore, err := block.PinRoot(pinCtx, e.writeBlockStore, before.GetRef().GetRootRef())
+	// Pin and read both heads without waiting for a peer, reporting unknown
+	// changes for a block only an absent peer could serve.
+	readCtx, _ := block.WithoutPeerWait(ctx)
+	unpinBefore, err := block.PinRoot(readCtx, e.writeBlockStore, before.GetRef().GetRootRef())
 	if err != nil {
 		return
 	}
 	defer unpinBefore()
-	unpinAfter, err := block.PinRoot(pinCtx, e.writeBlockStore, after.GetRef().GetRootRef())
+	unpinAfter, err := block.PinRoot(readCtx, e.writeBlockStore, after.GetRef().GetRootRef())
 	if err != nil {
 		return
 	}
@@ -154,7 +155,7 @@ func (e *Engine) compareCatchUp(ctx context.Context, c *changeCatchUp, before, a
 	// Compare the two heads.
 	_, beforeBcs := before.BuildTransactionWithStore(nil, e.writeBlockStore)
 	_, afterBcs := after.BuildTransactionWithStore(nil, e.writeBlockStore)
-	listed, err := WorldChanges(ctx, beforeBcs, afterBcs, changeDiffLimit)
+	listed, err := WorldChanges(readCtx, beforeBcs, afterBcs, changeDiffLimit)
 	if err != nil {
 		if ctx.Err() == nil {
 			e.le.WithError(err).Warn("world change comparison failed; reporting unknown changes")
