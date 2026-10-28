@@ -267,14 +267,17 @@ func (a *graphAudit) logRecord(ctx context.Context, entry kvtx_block_okra.BuildE
 
 // meta reads the stored quad count and ID horizon.
 func (a *graphAudit) meta(ctx context.Context, entry kvtx_block_okra.BuildEntry, name string) error {
+	// Skip the other meta entries.
 	if name != "size" && name != "horizon" {
 		return nil
 	}
+
+	// Decode the stored counter and record it under its name.
 	data, err := a.value(ctx, entry)
 	if err != nil || len(data) != 8 {
 		return err
 	}
-	v := int64(binary.LittleEndian.Uint64(data))
+	v := int64(binary.LittleEndian.Uint64(data)) //nolint:gosec // the counter is an int64 stored as its little-endian bits.
 	if name == "size" {
 		a.report.Size = v
 	} else {
@@ -382,7 +385,7 @@ func (a *graphAudit) resolveNodes(ctx context.Context) error {
 		}
 		if found {
 			if refs, n := binary.Uvarint(data); n > 0 {
-				mn.Refs = int64(refs)
+				mn.Refs = int64(refs) //nolint:gosec // a reference count stays far below 2^63.
 			}
 		}
 	}
@@ -445,7 +448,7 @@ func (a *graphAudit) finish() {
 	}
 	for _, mn := range a.missingN {
 		mn.InLogHole = a.inLogHole(mn.ID)
-		if int(mn.ID) < len(a.refs) {
+		if mn.ID < uint64(len(a.refs)) {
 			mn.KnownRefs = int(a.refs[mn.ID])
 		}
 		a.report.MissingNodes = append(a.report.MissingNodes, mn)

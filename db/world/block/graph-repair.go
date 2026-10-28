@@ -18,7 +18,7 @@ import (
 // GraphRepair reports a repair of the World's graph tree.
 type GraphRepair struct {
 	// Keys is the number of keys the current tree can read.
-	Keys int
+	Keys uint64
 	// Holes are the pages of the current tree that are missing.
 	Holes []kvtx_block_okra.SalvageHole
 	// Fills are the keys found for each hole, indexed like Holes.
@@ -67,7 +67,7 @@ func (t *WorldState) RepairGraphTree(
 	if err != nil {
 		return nil, errors.Wrap(err, "walk graph tree")
 	}
-	report := &GraphRepair{Keys: int(keys), Holes: holes, Fills: make([]GraphHoleFill, len(holes))}
+	report := &GraphRepair{Keys: keys, Holes: holes, Fills: make([]GraphHoleFill, len(holes))}
 
 	// Fill each hole from the first older World that reads its whole range.
 	for i, hole := range holes {
@@ -155,16 +155,19 @@ func (t *WorldState) readGraphRange(
 // GraphTreeHolesAt walks the whole graph tree of the World at root and reports
 // its readable keys and missing pages, writing nothing.
 func (t *WorldState) GraphTreeHolesAt(ctx context.Context, root *block.BlockRef) (*GraphRepair, error) {
+	// Open the tree at root.
 	tree, seqno, err := t.openGraphTreeAt(ctx, root)
 	if err != nil {
 		return nil, err
 	}
 	defer tree.Discard()
+
+	// Count the readable keys and find the missing pages.
 	keys, holes, err := tree.SalvageHoles(ctx, nil, nil)
 	if err != nil {
 		return nil, errors.Wrap(err, "walk graph tree")
 	}
-	return &GraphRepair{Keys: int(keys), Holes: holes, Fills: make([]GraphHoleFill, len(holes)), Seqno: seqno}, nil
+	return &GraphRepair{Keys: keys, Holes: holes, Fills: make([]GraphHoleFill, len(holes)), Seqno: seqno}, nil
 }
 
 // openGraphTreeAt opens the graph tree of the World at root read-only, over
@@ -216,7 +219,7 @@ func (t *WorldState) ReindexGraphTree(ctx context.Context, apply bool) (*GraphRe
 	if err != nil {
 		return nil, errors.Wrap(err, "walk graph tree")
 	}
-	report := &GraphRepair{Keys: int(keys), Holes: holes, Fills: make([]GraphHoleFill, len(holes))}
+	report := &GraphRepair{Keys: keys, Holes: holes, Fills: make([]GraphHoleFill, len(holes))}
 
 	// Require each missing range to lie inside one posting bucket.
 	for i, hole := range holes {
@@ -235,12 +238,14 @@ func (t *WorldState) ReindexGraphTree(ctx context.Context, apply bool) (*GraphRe
 		}
 	}
 
-	// Drop the missing ranges, then rebuild the postings from the log
-	// through the same store stack the graph handle uses.
+	// Drop the missing ranges.
 	entries := salvageEntries(ctx, tree, nil)
 	if err := tree.ReplaceAllEntries(ctx, entries); err != nil {
 		return report, errors.Wrap(err, "replace graph tree")
 	}
+
+	// Rebuild the postings from the log through the same store stack the
+	// graph handle uses.
 	var store kvtx.TxOps = tree
 	if t.graphOps != nil {
 		store = t.graphOps
