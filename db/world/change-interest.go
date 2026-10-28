@@ -1,5 +1,7 @@
 package world
 
+import "slices"
+
 // ChangeInterest is a ChangeFilter that also names the changes it may accept,
 // so a change feed can index its watcher by those names and test it only on a
 // change that names one of them. An interest without names, or one marked as
@@ -49,6 +51,19 @@ type quadTerm struct {
 // names none of them, so a change feed tests it on every change.
 func NewChangeInterest(filter ChangeFilter) *ChangeInterest {
 	return &ChangeInterest{filter: filter, all: true}
+}
+
+// NewReadSetsInterest returns an interest in the changes that touch any of
+// sets, finished read sets. A ChangeIndex holds each set once for all the
+// watchers naming it, so watchers built from shared sets cost one entry per
+// set.
+func NewReadSetsInterest(sets ...*ReadSet) *ChangeInterest {
+	return &ChangeInterest{
+		filter: func(changes *ChangeSet) bool {
+			return slices.ContainsFunc(sets, func(set *ReadSet) bool { return set.Touched(changes) })
+		},
+		shared: sets,
+	}
 }
 
 // Accepts reports whether the interest's filter lets changes through. A nil

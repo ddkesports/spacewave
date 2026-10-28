@@ -84,6 +84,37 @@ func TestChangeIndexAcceptsKeyed(t *testing.T) {
 	}
 }
 
+// TestReadSetsInterest checks that an interest in several finished sets is
+// named by a change to any of them, accepted untested for a changed key, and
+// accepts only changes that touch one.
+func TestReadSetsInterest(t *testing.T) {
+	// Index one watcher over a key read and a pattern read.
+	keyed, linked := NewReadSet(), NewReadSet()
+	keyed.addKeys("obj/a")
+	linked.addPatterns(NewGraphQuad("<obj/b>", "<p>", "", ""))
+	interest := NewReadSetsInterest(keyed, linked)
+	x := NewChangeIndex[string]()
+	x.Add("w", interest)
+
+	// A changed key accepts it, a quad field tests it, and others skip it.
+	cases := []struct {
+		changes          *ChangeSet
+		accepted, tested bool
+		accepts          bool
+	}{
+		{&ChangeSet{Keys: []string{"obj/a"}}, true, false, true},
+		{&ChangeSet{Quads: []GraphQuad{NewGraphQuad("<obj/b>", "<q>", "", "")}}, false, true, false},
+		{&ChangeSet{Quads: []GraphQuad{NewGraphQuad("<obj/b>", "<p>", "<obj/c>", "")}}, false, true, true},
+		{&ChangeSet{Keys: []string{"other"}}, false, false, false},
+	}
+	for i, c := range cases {
+		accepted, tested := x.Candidates(c.changes)
+		if (len(accepted) == 1) != c.accepted || (len(tested) == 1) != c.tested || interest.Accepts(c.changes) != c.accepts {
+			t.Errorf("case %d: accepted %v tested %v accepts %v", i, accepted, tested, interest.Accepts(c.changes))
+		}
+	}
+}
+
 // TestChangeIndexSharedOnce checks that watchers sharing a read set name it
 // once, that a change to it reaches each of them, and that the set's names
 // leave the index with its last watcher.
