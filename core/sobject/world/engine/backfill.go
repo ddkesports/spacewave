@@ -318,8 +318,8 @@ func (e *soEngine) ReplayWorlds(ctx context.Context) ([]*block.BlockRef, error) 
 		}
 		roots = append(roots, ref.Clone())
 	}
-	for i := len(e.replay.positions) - 1; i >= 0; i-- {
-		add(e.replay.positions[i].state.GetHeadRef().GetRootRef())
+	for _, v := range slices.Backward(e.replay.positions) {
+		add(v.state.GetHeadRef().GetRootRef())
 	}
 	add(e.replay.base.GetHeadRef().GetRootRef())
 	for _, root := range e.retainedRoots {
@@ -365,8 +365,8 @@ func (e *soEngine) ReplayFrom(ctx context.Context, root *block.BlockRef, apply b
 	// Find the newest position whose World is root.
 	r := e.replay
 	kept := -1
-	for i := len(r.positions) - 1; i >= 0; i-- {
-		if r.positions[i].state.GetHeadRef().GetRootRef().EqualsRef(root) {
+	for i, v := range slices.Backward(r.positions) {
+		if v.state.GetHeadRef().GetRootRef().EqualsRef(root) {
 			kept = i + 1
 			break
 		}

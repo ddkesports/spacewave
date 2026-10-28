@@ -178,12 +178,10 @@ func (s *salvage) walk(ctx context.Context, page *Page, cursor *block.Cursor, pa
 		child := &children[i]
 		child.cursor = page.FollowChild(cursor, child.index)
 		sem <- struct{}{}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			defer func() { <-sem }()
 			child.page, child.err = loadPage(ctx, child.cursor)
-		}()
+		})
 	}
 	wg.Wait()
 
