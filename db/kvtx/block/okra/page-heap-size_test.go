@@ -38,7 +38,7 @@ func TestPageDecodedHeapSize(t *testing.T) {
 	runtime.GC()
 	runtime.ReadMemStats(&before)
 
-	// Measure the heap retained by many independent decoded copies.
+	// Measure the heap retained by many independent cloned copies.
 	for i := range retained {
 		retained[i] = page.CloneVT()
 	}
@@ -50,6 +50,33 @@ func TestPageDecodedHeapSize(t *testing.T) {
 	// Compare the estimate with the measured size.
 	estimate := float64(page.DecodedHeapSize())
 	if ratio := estimate / measured; ratio < 0.9 || ratio > 1.1 {
-		t.Fatalf("estimate %.0f bytes, measured %.0f bytes per page", estimate, measured)
+		t.Fatalf("cloned: estimate %.0f bytes, measured %.0f bytes per page", estimate, measured)
+	}
+
+	// Encode the page as a cursor would fetch it.
+	data, err := page.MarshalVT()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Measure the heap retained by pages a cursor decodes.
+	clear(retained)
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	for i := range retained {
+		retained[i] = &Page{}
+		if err := retained[i].UnmarshalDecodedBlock(data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	measured = float64(after.HeapAlloc-before.HeapAlloc) / copies
+	runtime.KeepAlive(retained)
+
+	// Compare the decoded page's estimate with the measured size.
+	estimate = float64(retained[0].DecodedHeapSize())
+	if ratio := estimate / measured; ratio < 0.9 || ratio > 1.1 {
+		t.Fatalf("decoded: estimate %.0f bytes, measured %.0f bytes per page", estimate, measured)
 	}
 }

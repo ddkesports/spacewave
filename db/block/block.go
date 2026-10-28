@@ -61,6 +61,23 @@ type DecodedBlockValidator interface {
 	ValidateDecodedBlock() error
 }
 
+// DecodedBlockUnmarshaler is implemented by a block with a faster decoder for
+// blocks read through a cursor. UnmarshalDecodedBlock must leave the block
+// exactly as UnmarshalVT would, and must not retain data.
+type DecodedBlockUnmarshaler interface {
+	// UnmarshalDecodedBlock unmarshals data into the block.
+	UnmarshalDecodedBlock(data []byte) error
+}
+
+// unmarshalDecodedBlock unmarshals data into b, preferring its
+// DecodedBlockUnmarshaler.
+func unmarshalDecodedBlock(b Block, data []byte) error {
+	if u, ok := b.(DecodedBlockUnmarshaler); ok {
+		return u.UnmarshalDecodedBlock(data)
+	}
+	return b.UnmarshalVT(data)
+}
+
 // BlockWithRefs has references keyed by ID.
 // Each field can contain a reference.
 type BlockWithRefs interface {
