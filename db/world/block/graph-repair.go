@@ -4,15 +4,19 @@ import (
 	"bytes"
 	"context"
 	"iter"
+	"time"
 
 	cayley_kv "github.com/aperturerobotics/cayley/graph/kv"
 	"github.com/aperturerobotics/cayley/kv/flat"
 	"github.com/pkg/errors"
 	"github.com/s4wave/spacewave/db/block"
+	"github.com/s4wave/spacewave/db/block/blob"
+	"github.com/s4wave/spacewave/db/bucket"
 	"github.com/s4wave/spacewave/db/kvtx"
 	kvtx_block "github.com/s4wave/spacewave/db/kvtx/block"
 	kvtx_block_okra "github.com/s4wave/spacewave/db/kvtx/block/okra"
 	hidalgo "github.com/s4wave/spacewave/db/kvtx/hidalgo"
+	"github.com/s4wave/spacewave/db/tx"
 )
 
 // GraphRepair reports a repair of the World's graph tree.
@@ -331,4 +335,228 @@ func postingBucketName(index cayley_kv.QuadIndex) string {
 		}
 	}
 	return string(buf)
+}
+
+// DumpGraphTree walks the graph tree of this World in key order, calling
+// entry with each readable key and its value and hole with each missing page,
+// and writes nothing. A value the tree keeps in a page is passed as it is; a
+// value kept in its own block is read after the walk, in key order among
+// those values only. The walk holds only the pages on its current path.
+func (t *WorldState) DumpGraphTree(
+	ctx context.Context,
+	entry func(key, value []byte) error,
+	hole func(kvtx_block_okra.SalvageHole) error,
+) error {
+	tree, ok := t.graphTree.(*kvtx_block_okra.Tx)
+	if !ok {
+		return errors.Errorf("graph tree is %T, not an okra tree", t.graphTree)
+	}
+
+	// Walk the readable entries and the holes; stop at the first error.
+	var cbErr error
+	var refKeys [][]byte
+	err := tree.Salvage(ctx, nil, nil, func(e kvtx_block_okra.BuildEntry) bool {
+		switch {
+		case e.ValueBlob != nil && e.ValueBlob.GetBlobType() == blob.BlobType_BlobType_RAW:
+			cbErr = entry(e.Key, e.ValueBlob.GetRawData())
+		case e.ValueBlob == nil && e.ValueRef.GetEmpty():
+			cbErr = entry(e.Key, nil)
+		default:
+			refKeys = append(refKeys, bytes.Clone(e.Key))
+		}
+		return cbErr == nil
+	}, func(h kvtx_block_okra.SalvageHole) bool {
+		cbErr = hole(h)
+		return cbErr == nil
+	})
+	if err == nil {
+		err = cbErr
+	}
+	if err != nil {
+		return err
+	}
+
+	// Read the values kept in their own blocks.
+	for _, key := range refKeys {
+		value, found, err := tree.Get(ctx, key)
+		if err != nil {
+			return errors.Wrapf(err, "read value of key %q", key)
+		}
+		if !found {
+			return errors.Errorf("key %q not found while reading its value", key)
+		}
+		if err := entry(key, value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// DumpObjectTree walks the object tree of this World in key order, calling
+// object with each readable object's key, root ref and revision, record with
+// each key whose record would not read, and hole with each missing page of
+// the tree. A record block the store lacks is fetched from peers, which may
+// never answer, so each record read ends after recordTimeout. It writes nothing.
+func (t *WorldState) DumpObjectTree(
+	ctx context.Context,
+	recordTimeout time.Duration,
+	object func(key string, rootRef *bucket.ObjectRef, rev uint64) error,
+	record func(key string, err error) error,
+	hole func(kvtx_block_okra.SalvageHole) error,
+) error {
+	tree, ok := t.objTree.(*kvtx_block_okra.Tx)
+	if !ok {
+		return errors.Errorf("object tree is %T, not an okra tree", t.objTree)
+	}
+
+	// Collect the readable keys and report the holes.
+	var cbErr error
+	var keys []string
+	err := tree.Salvage(ctx, nil, nil, func(e kvtx_block_okra.BuildEntry) bool {
+		if key, ok := bytes.CutPrefix(e.Key, []byte(objectKeyPrefix)); ok {
+			keys = append(keys, string(key))
+		}
+		return true
+	}, func(h kvtx_block_okra.SalvageHole) bool {
+		cbErr = hole(h)
+		return cbErr == nil
+	})
+	if err == nil {
+		err = cbErr
+	}
+	if err != nil {
+		return err
+	}
+
+	// Read each object's record.
+	for _, key := range keys {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		rctx, cancel := context.WithTimeout(ctx, recordTimeout)
+		obj, found, err := t.getObjectRootRef(rctx, key)
+		cancel()
+		if err == nil && !found {
+			err = errors.New("record not found")
+		}
+		if err != nil {
+			if err := record(key, err); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := object(key, t.externalObjectRef(obj.GetRootRef()), obj.GetRev()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// PutStoredBlocks writes encoded blocks, each verified against its ref,
+// through the store this World writes through, so the commit whose root
+// reaches them adopts them as it adopts the World's own writes. Each entry
+// lists its outgoing refs and declares them complete. Use it to carry blocks
+// of another copy of this World, which share its transforms.
+func (t *WorldState) PutStoredBlocks(ctx context.Context, entries []*block.PutBatchEntry) error {
+	if !t.write {
+		return tx.ErrNotWrite
+	}
+	if t.discarded.Load() {
+		return tx.ErrDiscarded
+	}
+	for _, e := range entries {
+		if e.Ref.GetEmpty() || len(e.Data) == 0 || e.Tombstone {
+			return errors.New("a stored block needs its ref and data")
+		}
+		e.RefsKnown = true
+	}
+	_, err := t.store.PutBlockBatch(ctx, entries)
+	return err
+}
+
+// IsWrite reports whether this World state accepts writes.
+func (t *WorldState) IsWrite() bool {
+	return t.write
+}
+
+// ReplaceObjectRecord writes a new record for the object at key with rootRef,
+// without reading the record it replaces, so an object whose record block the
+// store lacks gets a readable record again. The object keeps its graph quads.
+// Appends an OBJECT_SET change to the changelog.
+func (t *WorldState) ReplaceObjectRecord(ctx context.Context, key string, rootRef *bucket.ObjectRef) error {
+	if !t.write {
+		return tx.ErrNotWrite
+	}
+	if t.discarded.Load() {
+		return tx.ErrDiscarded
+	}
+	k := []byte(objectKeyPrefix + key)
+	obj := NewObject(key, t.localObjectRef(rootRef))
+	nbcs := t.bcs.Detach(false)
+	nbcs.ClearAllRefs()
+	nbcs.SetBlock(obj, true)
+	if err := t.objTree.SetCursorAtKey(ctx, k, nbcs, false); err != nil {
+		return err
+	}
+	changeBcs, err := t.queueWorldChange(ctx, &WorldChange{
+		Key:        key,
+		ChangeType: WorldChangeType_WorldChange_OBJECT_SET,
+	})
+	if err != nil {
+		return err
+	}
+	if changeBcs != nil {
+		changeBcs.SetRef(5, nbcs)
+	}
+	t.markObjectExists(key)
+	return nil
+}
+
+// SalvageObjectRange walks the object keys in [low, high), keys without the
+// object prefix, calling entry for each readable key and hole for each page
+// that reads as missing. Empty bounds are open.
+func (t *WorldState) SalvageObjectRange(ctx context.Context, low, high string, entry func(key string) error, hole func(kvtx_block_okra.SalvageHole) error) error {
+	tree, ok := t.objTree.(*kvtx_block_okra.Tx)
+	if !ok {
+		return errors.Errorf("object tree is %T, not an okra tree", t.objTree)
+	}
+	var lo, hi []byte
+	if low != "" {
+		lo = []byte(objectKeyPrefix + low)
+	}
+	if high != "" {
+		hi = []byte(objectKeyPrefix + high)
+	} else {
+		hi = []byte(objectKeyPrefix[:len(objectKeyPrefix)-1] + string(rune(objectKeyPrefix[len(objectKeyPrefix)-1]+1)))
+	}
+	var cbErr error
+	err := tree.Salvage(ctx, lo, hi, func(e kvtx_block_okra.BuildEntry) bool {
+		if key, ok := bytes.CutPrefix(e.Key, []byte(objectKeyPrefix)); ok {
+			cbErr = entry(string(key))
+		}
+		return cbErr == nil
+	}, func(h kvtx_block_okra.SalvageHole) bool {
+		cbErr = hole(h)
+		return cbErr == nil
+	})
+	if err == nil {
+		err = cbErr
+	}
+	return err
+}
+
+// GetGraphKey reads one raw key of the graph tree.
+func (t *WorldState) GetGraphKey(ctx context.Context, key []byte) ([]byte, bool, error) {
+	tree, ok := t.graphTree.(*kvtx_block_okra.Tx)
+	if !ok {
+		return nil, false, errors.Errorf("graph tree is %T, not an okra tree", t.graphTree)
+	}
+	return tree.Get(ctx, key)
+}
+
+// ObjectRecordReadable reports whether the object at key has a readable
+// record, reading it under ctx.
+func (t *WorldState) ObjectRecordReadable(ctx context.Context, key string) (bool, error) {
+	_, found, err := t.getObjectRootRef(ctx, key)
+	return found, err
 }
