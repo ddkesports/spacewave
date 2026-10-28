@@ -352,6 +352,125 @@ func TestPublicationSweepKeepsBlockAHoleNamesOnceStored(t *testing.T) {
 	}
 }
 
+// TestPublicationSweepPastHoleAWriteNames checks that a block pass sweeps past
+// a hole that a write during the pass names, as a lazy replica's cache fill of
+// a parent whose children it did not fetch does: the rescue reaches the hole
+// through the adopt log, with no parent as its namer, and the store does not
+// hold it.
+func TestPublicationSweepPastHoleAWriteNames(t *testing.T) {
+	// Give up waiting for a list quickly.
+	saved := awaitLimit
+	awaitLimit = 100 * time.Millisecond
+	t.Cleanup(func() { awaitLimit = saved })
+
+	// Release a block, and publish a parent.
+	v, _ := newPublicationTestVolume(t)
+	ctx := t.Context()
+	released := publicationFor(t, "released", "", "one")
+	if err := v.PublishAtomic(ctx, released); err != nil {
+		t.Fatal(err)
+	}
+	orphanPublication(t, v, released)
+	parent := publicationFor(t, "parent", "", "two")
+	if err := v.PublishAtomic(ctx, parent); err != nil {
+		t.Fatal(err)
+	}
+
+	// Open a pass and mark.
+	rg := v.refGraph.(*transactionRefGraph)
+	if err := rg.write(ctx, func(rg *block_gc.RefGraph) error { return rg.BeginBlockPass(ctx) }); err != nil {
+		t.Fatal(err)
+	}
+	mark, err := rg.MarkBlocksScan(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node := block_gc.BlockIRI(released.Entries[0].Ref)
+	if mark.Unknown != 0 || !slices.Contains(mark.Unreached, node) {
+		t.Fatalf("unknown=%d unreached=%v", mark.Unknown, mark.Unreached)
+	}
+
+	// A write names a hole from the parent after the mark.
+	hole, _ := holeEntries(t)
+	edge := block_gc.RefEdge{Subject: block_gc.BlockIRI(parent.Entries[0].Ref), Object: block_gc.BlockIRI(hole.Ref)}
+	if err := v.GetRefGraph().ApplyRefBatch(ctx, []block_gc.RefEdge{edge}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// The sweep settles the hole and sweeps the released block.
+	var stats block_gc.Stats
+	complete, err := v.sweepUnreached(ctx, mark, &stats)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !complete || stats.BlocksSwept != 1 || stats.UnknownBlocks != 0 || stats.AbsentBlocks != 1 {
+		t.Fatalf("complete=%v stats=%+v", complete, stats)
+	}
+	assertPublishedBlock(t, v, released, false)
+	assertPublishedBlock(t, v, parent, true)
+}
+
+// TestPublicationSweepStopsAtOwnedBlockAWriteNames checks that a block an
+// owner adopts during the pass, before its staging flush records its list,
+// stops the sweep while the store lacks it, even when a parent's list also
+// names it: the write may still be storing it.
+func TestPublicationSweepStopsAtOwnedBlockAWriteNames(t *testing.T) {
+	// Give up waiting for a list quickly.
+	saved := awaitLimit
+	awaitLimit = 100 * time.Millisecond
+	t.Cleanup(func() { awaitLimit = saved })
+
+	// Publish and release a block, and publish a parent.
+	v, _ := newPublicationTestVolume(t)
+	ctx := t.Context()
+	released := publicationFor(t, "released", "", "one")
+	if err := v.PublishAtomic(ctx, released); err != nil {
+		t.Fatal(err)
+	}
+	orphanPublication(t, v, released)
+	parent := publicationFor(t, "parent", "", "two")
+	if err := v.PublishAtomic(ctx, parent); err != nil {
+		t.Fatal(err)
+	}
+
+	// Open a pass and mark.
+	rg := v.refGraph.(*transactionRefGraph)
+	if err := rg.write(ctx, func(rg *block_gc.RefGraph) error { return rg.BeginBlockPass(ctx) }); err != nil {
+		t.Fatal(err)
+	}
+	mark, err := rg.MarkBlocksScan(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A bucket adopts a block the store does not hold yet, and a write
+	// names it from the parent, before the block's staging flush.
+	owned, _ := holeEntries(t)
+	node := block_gc.BlockIRI(owned.Ref)
+	if err := rg.AddRef(ctx, "bucket", node); err != nil {
+		t.Fatal(err)
+	}
+	err = v.GetRefGraph().ApplyRefBatch(ctx, []block_gc.RefEdge{
+		{Subject: block_gc.BlockIRI(parent.Entries[0].Ref), Object: node},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The sweep keeps the released block and reports the owned block.
+	var stats block_gc.Stats
+	complete, err := v.sweepUnreached(ctx, mark, &stats)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if complete || stats.BlocksSwept != 0 || stats.UnknownBlocks != 1 || stats.AbsentBlocks != 0 {
+		t.Fatalf("complete=%v stats=%+v", complete, stats)
+	}
+	if _, found, err := v.GetBlock(ctx, released.Entries[0].Ref); err != nil || !found {
+		t.Fatalf("released block found=%v err=%v", found, err)
+	}
+}
+
 // TestPublicationSweepBatchMarksReleasedChildren checks that one sweep batch
 // marks each child it leaves without an owner, leaves a child another owner
 // keeps unmarked, leaves no marker on the nodes it removes, and drops the

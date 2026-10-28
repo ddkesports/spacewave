@@ -256,6 +256,111 @@ func TestMinorPassKeepsFilledHole(t *testing.T) {
 	}
 }
 
+// TestMinorPassKeepsFilledHoleAWriteNamed checks that minor passes keep a hole
+// that a write named during a major pass, which settled it with no namer to
+// log, once a later write stores it: the write that named it logged the
+// parent's changed list in the young log, past the bound the pass promotes.
+func TestMinorPassKeepsFilledHoleAWriteNamed(t *testing.T) {
+	for _, w := range holeWriters {
+		t.Run(w.name, func(t *testing.T) {
+			// Publish and release a block.
+			v, _ := newPublicationTestVolume(t)
+			ctx := t.Context()
+			rg := v.GetRefGraph()
+			released := publicationFor(t, "released", "", "one")
+			if err := v.PublishAtomic(ctx, released); err != nil {
+				t.Fatal(err)
+			}
+			orphanPublication(t, v, released)
+
+			// Publish a parent, and pick a hole and its child.
+			parent := publicationFor(t, "parent", "", "one")
+			if err := v.PublishAtomic(ctx, parent); err != nil {
+				t.Fatal(err)
+			}
+			hole, child := holeEntries(t)
+
+			// A major pass in which a write names the hole after the mark
+			// settles it, sweeps the released block and promotes.
+			var stats block_gc.Stats
+			err := v.runBlockPass(ctx, rg, false, func(actual *transactionRefGraph) error {
+				// Take the promote bound before the pass begins.
+				var bound uint64
+				err := actual.read(ctx, func(rg *block_gc.RefGraph) (err error) {
+					bound, err = rg.YoungPosition(ctx)
+					return err
+				})
+				if err != nil {
+					return err
+				}
+
+				// Run the pass body while the pass is open.
+				return v.inBlockPass(ctx, actual, func() error {
+					// Mark the blocks the roots reach.
+					mark, err := actual.MarkBlocksScan(ctx)
+					if err != nil {
+						return err
+					}
+
+					// A write names the hole from the parent after the mark.
+					edge := block_gc.RefEdge{Subject: block_gc.BlockIRI(parent.Entries[0].Ref), Object: block_gc.BlockIRI(hole.Ref)}
+					if err := rg.ApplyRefBatch(ctx, []block_gc.RefEdge{edge}, nil); err != nil {
+						return err
+					}
+
+					// Sweep, which must settle the hole, and promote.
+					complete, err := v.sweepUnreached(ctx, mark, &stats)
+					if err != nil || !complete {
+						t.Fatalf("complete=%v err=%v stats=%+v", complete, err, stats)
+					}
+					return v.promoteYoung(ctx, mark, bound)
+				})
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// The pass settled the hole and swept the released block.
+			if stats.AbsentBlocks != 1 || stats.UnknownBlocks != 0 || stats.BlocksSwept != 1 {
+				t.Fatalf("major pass stats=%+v", stats)
+			}
+			assertPublishedBlock(t, v, released, false)
+
+			// Minor passes run before and after a write stores the hole,
+			// and keep it and its child once stored.
+			minorPass := func(step string) {
+				// Run one minor pass.
+				t.Helper()
+				var minor block_gc.Stats
+				if err := v.SweepYoungBlocks(ctx, rg, &minor); err != nil {
+					t.Fatal(err)
+				}
+				if minor.MinorPasses != 1 {
+					t.Fatalf("%s: minor pass did not run: stats=%+v", step, minor)
+				}
+
+				// The hole and its child survive once stored, and the
+				// parent stays published.
+				for _, e := range []*block.PutBatchEntry{hole, child} {
+					if _, found, err := v.GetBlock(ctx, e.Ref); err != nil {
+						t.Fatal(err)
+					} else if !found && step != "before fill" {
+						t.Fatalf("%s: block a live parent names swept: swept=%d", step, minor.BlocksSwept)
+					}
+				}
+				assertPublishedBlock(t, v, parent, true)
+			}
+
+			// A minor pass runs before the fill, then a write stores the hole
+			// and its child, and two minor passes keep them.
+			minorPass("before fill")
+			w.write(t, v, rg, child, hole)
+			minorPass("after fill")
+			minorPass("after fill")
+		})
+	}
+}
+
 // TestMajorPassSettlesWithNothingUnreached checks that a major pass whose mark
 // reaches a hole and leaves nothing unreached settles the hole and promotes,
 // so minor passes run.

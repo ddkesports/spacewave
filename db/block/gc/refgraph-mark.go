@@ -30,8 +30,9 @@ type BlockMark struct {
 	// UnknownSample lists up to unknownSample of those blocks.
 	UnknownSample []string
 	// UnknownNamers lists, for each block in UnknownSample, the node whose
-	// record made it live: a root, an owner or a parent block, or empty for
-	// a block a write adopted during the pass.
+	// record made it live: a root, an owner or a parent block, or for a
+	// block a write adopted during the pass its first incoming record, or
+	// empty when only a parent's list holds it.
 	UnknownNamers []string
 	// Scans counts the scans of the child lists a scan mark made, zero for
 	// a walk.
@@ -143,20 +144,27 @@ func (m *BlockMark) noteUnknown(b namedNode) {
 type BlocksStored func(ctx context.Context, nodes []string) ([]bool, error)
 
 // SettleAbsent stops counting each listed unknown block that a parent block's
-// list named and that stored reports absent from the block store, and reports
-// how many it settled. Such a block is a hole, as a copy that found no source
-// for it leaves: it names nothing a reader can reach through it, so the mark
-// treats it as a leaf. A block an owner or a write adopted stays unknown,
-// since its write may still be storing it. It settles only a mark that lists
-// all its unknown blocks. The caller checks presence in the transaction that
-// sweeps, so no write stores the block in between; a block stored later logs
-// the blocks it adopts, as any write after the mark does.
+// list named, or that a write adopted during the pass through a parent's list
+// alone, and that stored reports absent from the block store, and reports how
+// many it settled. Such a block is a hole, as a copy that found no source for
+// it leaves: it names nothing a reader can reach through it, so the mark
+// treats it as a leaf. A block an owner or a staging edge holds stays unknown,
+// since its write may still be storing it: the walk names such a block by
+// that record.
+// It settles only a mark that lists all its unknown blocks. The caller checks
+// presence in the transaction that sweeps, so no write stores the block in
+// between; a block stored later logs the blocks it adopts, as any write after
+// the mark does.
 //
 // A settled hole stays named by its parent while the store lacks it, and a
 // later write that stores it creates its list as a young block that the
 // parent, possibly old, names through no record. The caller logs the namers
 // with LogSettled in the same transaction, so minor passes reach the hole
-// from them.
+// from them. A hole a write adopted during the pass has no namer to log and
+// needs none: the write that adopted it logged the parent list it changed in
+// the young log, after the position the pass promotes to. A lazy replica's
+// cache fill of a parent whose children it did not fetch adopts such holes
+// during every pass.
 func (m *BlockMark) SettleAbsent(stored func(node string) (bool, error)) (int, error) {
 	// Leave a mark that could not list its unknown blocks.
 	if m.Unknown == 0 || !m.Awaitable() {
@@ -182,11 +190,11 @@ func (m *BlockMark) SettleAbsent(stored func(node string) (bool, error)) (int, e
 // named and that stored reports absent, as SettleAbsent describes, and
 // reports how many it settled. It leaves the count to the caller.
 func (m *BlockMark) settleAbsent(stored func(nodes []string) ([]bool, error)) (int, error) {
-	// Ask the store about the blocks parent blocks named. A block an owner
-	// or a write adopted stays unknown.
+	// Ask the store about the blocks parent blocks named or writes adopted.
+	// A block an owner named stays unknown.
 	var named []string
 	for _, b := range m.awaiting {
-		if isBlockNode(b.namer) {
+		if settleable(b.namer) {
 			named = append(named, b.node)
 		}
 	}
@@ -198,13 +206,12 @@ func (m *BlockMark) settleAbsent(stored func(nodes []string) ([]bool, error)) (i
 		return 0, err
 	}
 
-	// Keep the blocks an owner or a write adopted, and those the store
-	// holds.
+	// Keep the blocks an owner named, and those the store holds.
 	kept := make([]namedNode, 0, len(m.awaiting))
 	var absent []namedNode
 	var i int
 	for _, b := range m.awaiting {
-		if !isBlockNode(b.namer) {
+		if !settleable(b.namer) {
 			kept = append(kept, b)
 			continue
 		}
@@ -226,7 +233,9 @@ func (m *BlockMark) settleAbsent(stored func(nodes []string) ([]bool, error)) (i
 	}
 	for _, b := range absent {
 		m.settled.Add(b.node)
-		m.settledNamers = append(m.settledNamers, b.namer)
+		if b.namer != "" {
+			m.settledNamers = append(m.settledNamers, b.namer)
+		}
 	}
 	m.awaiting = kept
 	m.UnknownSample, m.UnknownNamers = nil, nil
@@ -235,6 +244,13 @@ func (m *BlockMark) settleAbsent(stored func(nodes []string) ([]bool, error)) (i
 		m.UnknownNamers = append(m.UnknownNamers, b.namer)
 	}
 	return settled, nil
+}
+
+// settleable reports whether an absent block reached through namer may settle
+// as a hole: one a parent block named, or one a write adopted during the pass
+// that no incoming record holds, which has no namer.
+func settleable(namer string) bool {
+	return namer == "" || isBlockNode(namer)
 }
 
 // takeAwaiting returns the listed unknown blocks for a walk to read again and
@@ -420,9 +436,20 @@ func walkRecordsTx(ctx context.Context, tx kvtx.Tx, r walkRecord, visit func(nod
 			return err
 		}
 		if !found {
-			if untracked != nil {
-				untracked(r.node)
+			if untracked == nil {
+				return nil
 			}
+			// Name a block a write adopted by its first incoming record,
+			// so it settles as a hole only when no owner or staging edge
+			// holds it and a parent's list alone named it.
+			n := r.node
+			if n.namer == "" {
+				var err error
+				if n.namer, err = firstIncomingTx(ctx, tx, n.node); err != nil {
+					return err
+				}
+			}
+			untracked(n)
 			return nil
 		}
 		if r.old {
@@ -443,6 +470,19 @@ func walkRecordsTx(ctx context.Context, tx kvtx.Tx, r walkRecord, visit func(nod
 		visit(lastNode(r.key, record), r.node.node)
 		return nil
 	})
+}
+
+// firstIncomingTx returns the subject of node's first incoming record, the
+// unreferenced queue included, or empty when it has none.
+func firstIncomingTx(ctx context.Context, tx kvtx.Tx, node string) (string, error) {
+	// Read the first record under the node's incoming prefix.
+	prefix := graphKey(kindIncoming, node)
+	it := tx.Iterate(ctx, prefix, true, false)
+	defer it.Close()
+	if it.Next() {
+		return lastNode(prefix, it.Key()), nil
+	}
+	return "", it.Err()
 }
 
 // passKey marks a running block pass. Its value is the pass's adopt log
