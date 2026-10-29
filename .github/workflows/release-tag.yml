@@ -1,0 +1,79 @@
+name: release tag
+
+# Creates a release tag as the spacewave-ci App, the only actor the v* tag
+# ruleset lets create one. Pushing the tag starts the npm release and the tag
+# asset builds. The release pipeline dispatches this workflow; it refuses a
+# commit outside master and release, an existing tag, and a tag that differs
+# from the commit's application version.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, such as v1.2.3
+        required: true
+      sha:
+        description: Full commit SHA to tag
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-tag-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: Tag ${{ inputs.tag }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # licenses-update holds the spacewave-ci App key and runs only on master.
+    environment: licenses-update
+    steps:
+      - name: Create spacewave-ci app token
+        id: app_token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.SPACEWAVE_CI_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SPACEWAVE_CI_APP_PRIVATE_KEY }}
+          owner: s4wave
+          repositories: spacewave
+          permission-contents: write
+
+      - name: Check and create the tag
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+          SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "bad tag: $TAG"; exit 1; }
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "bad sha: $SHA"; exit 1; }
+
+          # The commit must be on master or release.
+          on_branch=
+          for branch in master release; do
+            status=$(gh api "repos/$REPO/compare/$SHA...$branch" --jq .status)
+            if [ "$status" = identical ] || [ "$status" = ahead ]; then
+              on_branch=$branch
+            fi
+          done
+          [ -n "$on_branch" ] || { echo "$SHA is on neither master nor release"; exit 1; }
+
+          # The tag must name the commit's application version.
+          version=$(gh api "repos/$REPO/contents/core/appversion/version.txt?ref=$SHA" \
+            -H 'Accept: application/vnd.github.raw' | tr -d '[:space:]')
+          [ "v$version" = "$TAG" ] || { echo "$SHA has version $version, not $TAG"; exit 1; }
+
+          # The tag must not exist yet.
+          if gh api "repos/$REPO/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            echo "$TAG already exists"
+            exit 1
+          fi
+
+          object=$(gh api "repos/$REPO/git/tags" -f tag="$TAG" \
+            -f message="Spacewave $TAG" -f object="$SHA" -f type=commit --jq .sha)
+          gh api "repos/$REPO/git/refs" -f ref="refs/tags/$TAG" -f sha="$object" >/dev/null
+          echo "Tagged $SHA as $TAG"
