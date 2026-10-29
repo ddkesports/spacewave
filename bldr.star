@@ -18,6 +18,7 @@ CORE_GO_PKGS = [
     "./core/space/http/download",
     "./core/space/http/export",
     "./core/space/world/blocktype",
+    "./core/alarm/watch",
     "github.com/s4wave/spacewave/db/object/peer",
 ]
 
