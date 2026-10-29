@@ -1,10 +1,9 @@
 package forge_lib_docker
 
 import (
+	"bytes"
 	"context"
 	"os"
-	"strconv"
-	"strings"
 
 	"github.com/aperturerobotics/controllerbus/bus"
 	"github.com/aperturerobotics/controllerbus/controller"
@@ -105,19 +104,17 @@ func (c *Controller) Execute(ctx context.Context) (retErr error) {
 	// Debit a deterministic runtime name and launch the container under it.
 	// Reserve waits while the Worker admits no work. A drain that fences the
 	// launch voids the debit, so release it and reserve again.
-	dockerPath := c.dockerPath()
-	dockerEnv := BuildDockerEnv(c.conf)
 	var (
-		grant       Reservation
-		containerID string
-		err         error
+		grant Reservation
+		ctr   *Container
+		err   error
 	)
 	for {
 		grant, err = c.admission.Reserve(ctx, c.handle.GetExecutionObjectKey(), c.conf)
 		if err != nil {
 			return errors.Wrap(err, "reserve docker capacity")
 		}
-		containerID, err = c.launch(ctx, grant, dockerPath, dockerEnv, outputDir)
+		ctr, err = c.launch(ctx, grant, outputDir)
 		if !errors.Is(err, forge_runtime.ErrCapacityDraining) {
 			break
 		}
@@ -139,39 +136,31 @@ func (c *Controller) Execute(ctx context.Context) (retErr error) {
 	}
 
 	// Wait for the container to exit or the execution context to be cancelled.
-	out, err := c.runner.Run(ctx, dockerPath, []string{"wait", containerID}, dockerEnv)
-	if err != nil {
-		if ctx.Err() != nil {
-			return context.Canceled
-		}
-		return errors.Wrap(err, "docker wait")
-	}
-	if err := ctx.Err(); err != nil {
+	status, err := ctr.Wait(ctx)
+	if ctx.Err() != nil {
 		return context.Canceled
+	}
+	if err != nil {
+		return err
 	}
 
 	// Retain both container output streams before recording the exit status.
-	stdout, stderr, err := c.runner.Logs(ctx, dockerPath, containerID, dockerEnv)
-	if err != nil {
-		return errors.Wrap(err, "docker logs")
+	var stdout, stderr bytes.Buffer
+	if err := ctr.Logs(ctx, false, &stdout, &stderr); err != nil {
+		return err
 	}
-	if len(stdout) != 0 {
-		if err := c.handle.WriteLog(ctx, "info", string(stdout)); err != nil {
+	if stdout.Len() != 0 {
+		if err := c.handle.WriteLog(ctx, "info", stdout.String()); err != nil {
 			return errors.Wrap(err, "retain docker stdout")
 		}
 	}
-	if len(stderr) != 0 {
-		if err := c.handle.WriteLog(ctx, "error", string(stderr)); err != nil {
+	if stderr.Len() != 0 {
+		if err := c.handle.WriteLog(ctx, "error", stderr.String()); err != nil {
 			return errors.Wrap(err, "retain docker stderr")
 		}
 	}
 
 	// Fail on a nonzero exit status, then publish the declared outputs.
-	statusText := strings.TrimSpace(string(out))
-	status, err := strconv.Atoi(statusText)
-	if err != nil {
-		return errors.Wrap(err, "parse docker wait status")
-	}
 	if status != 0 {
 		return errors.Errorf("docker container exited with status %d", status)
 	}
@@ -179,30 +168,17 @@ func (c *Controller) Execute(ctx context.Context) (retErr error) {
 }
 
 // launch creates and starts the container under the reservation's runtime name.
-func (c *Controller) launch(ctx context.Context, grant Reservation, dockerPath string, dockerEnv []string, outputDir string) (string, error) {
-	var containerID string
+func (c *Controller) launch(ctx context.Context, grant Reservation, outputDir string) (*Container, error) {
+	var ctr *Container
 	err := grant.Launch(ctx, func(name string) error {
-		// Create the container with its output mount and start it.
-		out, err := c.runner.Run(ctx, dockerPath, buildCreateArgs(c.conf, name, outputDir), dockerEnv)
+		var err error
+		ctr, err = CreateContainer(ctx, c.runner, c.conf, name, outputDir)
 		if err != nil {
-			return errors.Wrap(err, "docker create")
+			return err
 		}
-		containerID = strings.TrimSpace(string(out))
-		if containerID == "" {
-			return errors.New("docker create returned empty container id")
-		}
-		_, err = c.runner.Run(ctx, dockerPath, []string{"start", containerID}, dockerEnv)
-		return errors.Wrap(err, "docker start")
+		return ctr.Start(ctx)
 	})
-	return containerID, err
-}
-
-// dockerPath resolves the configured Docker CLI executable.
-func (c *Controller) dockerPath() string {
-	if path := c.conf.GetDockerPath(); path != "" {
-		return path
-	}
-	return "docker"
+	return ctr, err
 }
 
 // HandleDirective asks if the handler can resolve the directive.

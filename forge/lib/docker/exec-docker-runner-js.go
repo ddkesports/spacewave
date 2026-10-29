@@ -4,6 +4,7 @@ package forge_lib_docker
 
 import (
 	"context"
+	"io"
 
 	"github.com/pkg/errors"
 )
@@ -25,9 +26,9 @@ func (r *ExecDockerRunner) Run(context.Context, string, []string, []string) ([]b
 	return nil, ErrDockerUnavailable
 }
 
-// Logs returns ErrDockerUnavailable.
-func (r *ExecDockerRunner) Logs(context.Context, string, string, []string) ([]byte, []byte, error) {
-	return nil, nil, ErrDockerUnavailable
+// Stream returns ErrDockerUnavailable.
+func (r *ExecDockerRunner) Stream(context.Context, string, []string, []string, io.Writer, io.Writer) error {
+	return ErrDockerUnavailable
 }
 
 // _ is a type assertion

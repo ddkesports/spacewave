@@ -2,6 +2,7 @@ package forge_lib_docker
 
 import (
 	"context"
+	"io"
 	"slices"
 )
 
@@ -31,10 +32,19 @@ type recordingRunner struct {
 	waitCancel func()
 }
 
-// Logs records the Docker log read and returns its separate output streams.
-func (r *recordingRunner) Logs(ctx context.Context, name, containerID string, env []string) ([]byte, []byte, error) {
-	stdout, err := r.Run(ctx, name, []string{"logs", containerID}, env)
-	return stdout, r.stderr, err
+// Stream records the command and writes its configured output and the
+// separate error stream.
+func (r *recordingRunner) Stream(ctx context.Context, name string, args []string, env []string, stdout, stderr io.Writer) error {
+	// Record the command and write its configured streams.
+	out, err := r.Run(ctx, name, args, env)
+	if err != nil {
+		return err
+	}
+	if _, err := stdout.Write(out); err != nil {
+		return err
+	}
+	_, err = stderr.Write(r.stderr)
+	return err
 }
 
 // Run records the command and applies its configured output, error, or cancellation gate.
