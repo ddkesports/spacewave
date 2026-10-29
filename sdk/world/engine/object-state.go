@@ -70,6 +70,16 @@ func (os *SDKObjectState) GetRootRef(ctx context.Context) (*bucket.ObjectRef, ui
 	return resp.RootRef, resp.Rev, nil
 }
 
+// GetModSeqno returns the World seqno after the last commit that changed the
+// object.
+func (os *SDKObjectState) GetModSeqno(ctx context.Context) (uint64, error) {
+	resp, err := os.service.GetModSeqno(ctx, &s4wave_world.GetModSeqnoRequest{})
+	if err != nil {
+		return 0, err
+	}
+	return resp.GetModSeqno(), nil
+}
+
 // SetRootRef changes the root reference of the object.
 // Increments the revision of the object if changed.
 // Returns revision just after the change was applied.
@@ -157,4 +167,7 @@ func (os *SDKObjectState) WaitRev(ctx context.Context, rev uint64, ignoreNotFoun
 }
 
 // _ is a type assertion.
-var _ world.ObjectState = (*SDKObjectState)(nil)
+var (
+	_ world.ObjectState          = (*SDKObjectState)(nil)
+	_ world.ObjectModSeqnoReader = (*SDKObjectState)(nil)
+)

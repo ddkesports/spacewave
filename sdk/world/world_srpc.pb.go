@@ -2757,6 +2757,9 @@ type SRPCObjectStateResourceServiceClient interface {
 	GetKey(ctx context.Context, in *GetKeyRequest) (*GetKeyResponse, error)
 
 	GetRootRef(ctx context.Context, in *GetRootRefRequest) (*GetRootRefResponse, error)
+	// GetModSeqno returns the World seqno after the last commit that changed
+	// the object.
+	GetModSeqno(ctx context.Context, in *GetModSeqnoRequest) (*GetModSeqnoResponse, error)
 
 	SetRootRef(ctx context.Context, in *SetRootRefRequest) (*SetRootRefResponse, error)
 
@@ -2799,6 +2802,15 @@ func (c *srpcObjectStateResourceServiceClient) GetKey(ctx context.Context, in *G
 func (c *srpcObjectStateResourceServiceClient) GetRootRef(ctx context.Context, in *GetRootRefRequest) (*GetRootRefResponse, error) {
 	out := new(GetRootRefResponse)
 	err := c.cc.ExecCall(ctx, c.serviceID, "GetRootRef", in, out)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *srpcObjectStateResourceServiceClient) GetModSeqno(ctx context.Context, in *GetModSeqnoRequest) (*GetModSeqnoResponse, error) {
+	out := new(GetModSeqnoResponse)
+	err := c.cc.ExecCall(ctx, c.serviceID, "GetModSeqno", in, out)
 	if err != nil {
 		return nil, err
 	}
@@ -2854,6 +2866,9 @@ type SRPCObjectStateResourceServiceServer interface {
 	GetKey(context.Context, *GetKeyRequest) (*GetKeyResponse, error)
 
 	GetRootRef(context.Context, *GetRootRefRequest) (*GetRootRefResponse, error)
+	// GetModSeqno returns the World seqno after the last commit that changed
+	// the object.
+	GetModSeqno(context.Context, *GetModSeqnoRequest) (*GetModSeqnoResponse, error)
 
 	SetRootRef(context.Context, *SetRootRefRequest) (*SetRootRefResponse, error)
 
@@ -2894,6 +2909,7 @@ func (SRPCObjectStateResourceServiceHandler) GetMethodIDs() []string {
 	return []string{
 		"GetKey",
 		"GetRootRef",
+		"GetModSeqno",
 		"SetRootRef",
 		"AccessWorldState",
 		"ApplyObjectOp",
@@ -2915,6 +2931,8 @@ func (d *SRPCObjectStateResourceServiceHandler) InvokeMethod(
 		return true, d.InvokeMethod_GetKey(d.impl, strm)
 	case "GetRootRef":
 		return true, d.InvokeMethod_GetRootRef(d.impl, strm)
+	case "GetModSeqno":
+		return true, d.InvokeMethod_GetModSeqno(d.impl, strm)
 	case "SetRootRef":
 		return true, d.InvokeMethod_SetRootRef(d.impl, strm)
 	case "AccessWorldState":
@@ -2948,6 +2966,18 @@ func (SRPCObjectStateResourceServiceHandler) InvokeMethod_GetRootRef(impl SRPCOb
 		return err
 	}
 	out, err := impl.GetRootRef(strm.Context(), req)
+	if err != nil {
+		return err
+	}
+	return strm.MsgSend(out)
+}
+
+func (SRPCObjectStateResourceServiceHandler) InvokeMethod_GetModSeqno(impl SRPCObjectStateResourceServiceServer, strm srpc.Stream) error {
+	req := new(GetModSeqnoRequest)
+	if err := strm.MsgRecv(req); err != nil {
+		return err
+	}
+	out, err := impl.GetModSeqno(strm.Context(), req)
 	if err != nil {
 		return err
 	}
@@ -3027,6 +3057,14 @@ type SRPCObjectStateResourceService_GetRootRefStream interface {
 }
 
 type srpcObjectStateResourceService_GetRootRefStream struct {
+	srpc.Stream
+}
+
+type SRPCObjectStateResourceService_GetModSeqnoStream interface {
+	srpc.Stream
+}
+
+type srpcObjectStateResourceService_GetModSeqnoStream struct {
 	srpc.Stream
 }
 

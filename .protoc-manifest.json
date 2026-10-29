@@ -3914,6 +3914,20 @@
         "sdk/git/worktree.proto"
       ]
     },
+    "github.com/s4wave/spacewave/sdk/k8s": {
+      "hash": "d70416f2c451f083338fee39d954856b67409e2c3eb0f7c435a55adf155af4e2",
+      "generatedFiles": [
+        "sdk/k8s/k8s.pb.go",
+        "sdk/k8s/k8s.pb.ts",
+        "sdk/k8s/k8s_srpc.pb.go",
+        "sdk/k8s/k8s_srpc.pb.ts",
+        "sdk/k8s/k8s_typeid.pb.go",
+        "sdk/k8s/k8s_typeid.pb.ts"
+      ],
+      "protoFiles": [
+        "sdk/k8s/k8s.proto"
+      ]
+    },
     "github.com/s4wave/spacewave/sdk/kv/world": {
       "hash": "ef8aafdc9feb9f50edd89a40c9897e735a30ce413fc715b2789fc84809356c21",
       "generatedFiles": [
@@ -4409,7 +4423,7 @@
       ]
     },
     "github.com/s4wave/spacewave/sdk/world": {
-      "hash": "bdd70bd4c52ea2072713d9173458d31b045ddcd3b9c5dbce6bf74c4efceeafb9",
+      "hash": "a2acb10e38f2f782c981dcc0354d02b10e166976a22a6731f55d68ff5343add4",
       "generatedFiles": [
         "sdk/world/world.pb.go",
         "sdk/world/world.pb.ts",

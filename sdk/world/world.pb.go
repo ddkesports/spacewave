@@ -2834,6 +2834,38 @@ func (x *GetRootRefResponse) GetRev() uint64 {
 	return 0
 }
 
+// GetModSeqnoRequest is the request type for GetModSeqno.
+type GetModSeqnoRequest struct {
+	unknownFields []byte
+}
+
+func (x *GetModSeqnoRequest) Reset() {
+	*x = GetModSeqnoRequest{}
+}
+
+func (*GetModSeqnoRequest) ProtoMessage() {}
+
+// GetModSeqnoResponse is the response type for GetModSeqno.
+type GetModSeqnoResponse struct {
+	unknownFields []byte
+	// ModSeqno is the World seqno after the last commit that changed the
+	// object. Zero when the World cannot report it.
+	ModSeqno uint64 `protobuf:"varint,1,opt,name=mod_seqno,json=modSeqno,proto3" json:"modSeqno,omitempty"`
+}
+
+func (x *GetModSeqnoResponse) Reset() {
+	*x = GetModSeqnoResponse{}
+}
+
+func (*GetModSeqnoResponse) ProtoMessage() {}
+
+func (x *GetModSeqnoResponse) GetModSeqno() uint64 {
+	if x != nil {
+		return x.ModSeqno
+	}
+	return 0
+}
+
 // SetRootRefRequest is the request type for SetRootRef.
 type SetRootRefRequest struct {
 	unknownFields []byte
@@ -5163,6 +5195,37 @@ func (m *GetRootRefResponse) CloneVT() *GetRootRefResponse {
 }
 
 func (m *GetRootRefResponse) CloneMessageVT() protobuf_go_lite.CloneMessage {
+	return m.CloneVT()
+}
+
+func (m *GetModSeqnoRequest) CloneVT() *GetModSeqnoRequest {
+	if m == nil {
+		return (*GetModSeqnoRequest)(nil)
+	}
+	r := new(GetModSeqnoRequest)
+	if len(m.unknownFields) > 0 {
+		r.unknownFields = slices.Clone(m.unknownFields)
+	}
+	return r
+}
+
+func (m *GetModSeqnoRequest) CloneMessageVT() protobuf_go_lite.CloneMessage {
+	return m.CloneVT()
+}
+
+func (m *GetModSeqnoResponse) CloneVT() *GetModSeqnoResponse {
+	if m == nil {
+		return (*GetModSeqnoResponse)(nil)
+	}
+	r := new(GetModSeqnoResponse)
+	r.ModSeqno = m.ModSeqno
+	if len(m.unknownFields) > 0 {
+		r.unknownFields = slices.Clone(m.unknownFields)
+	}
+	return r
+}
+
+func (m *GetModSeqnoResponse) CloneMessageVT() protobuf_go_lite.CloneMessage {
 	return m.CloneVT()
 }
 
@@ -7873,6 +7936,43 @@ func (this *GetRootRefResponse) EqualVT(that *GetRootRefResponse) bool {
 
 func (this *GetRootRefResponse) EqualMessageVT(thatMsg any) bool {
 	that, ok := thatMsg.(*GetRootRefResponse)
+	if !ok {
+		return false
+	}
+	return this.EqualVT(that)
+}
+
+func (this *GetModSeqnoRequest) EqualVT(that *GetModSeqnoRequest) bool {
+	if this == that {
+		return true
+	} else if this == nil || that == nil {
+		return false
+	}
+	return string(this.unknownFields) == string(that.unknownFields)
+}
+
+func (this *GetModSeqnoRequest) EqualMessageVT(thatMsg any) bool {
+	that, ok := thatMsg.(*GetModSeqnoRequest)
+	if !ok {
+		return false
+	}
+	return this.EqualVT(that)
+}
+
+func (this *GetModSeqnoResponse) EqualVT(that *GetModSeqnoResponse) bool {
+	if this == that {
+		return true
+	} else if this == nil || that == nil {
+		return false
+	}
+	if this.ModSeqno != that.ModSeqno {
+		return false
+	}
+	return string(this.unknownFields) == string(that.unknownFields)
+}
+
+func (this *GetModSeqnoResponse) EqualMessageVT(thatMsg any) bool {
+	that, ok := thatMsg.(*GetModSeqnoResponse)
 	if !ok {
 		return false
 	}
@@ -13688,6 +13788,78 @@ func (x *GetRootRefResponse) UnmarshalJSON(b []byte) error {
 	return json.DefaultUnmarshalerConfig.Unmarshal(b, x)
 }
 
+// MarshalProtoJSON marshals the GetModSeqnoRequest message to JSON.
+func (x *GetModSeqnoRequest) MarshalProtoJSON(s *json.MarshalState) {
+	if x == nil {
+		s.WriteNil()
+		return
+	}
+	s.WriteObjectStart()
+	s.WriteObjectEnd()
+}
+
+// MarshalJSON marshals the GetModSeqnoRequest to JSON.
+func (x *GetModSeqnoRequest) MarshalJSON() ([]byte, error) {
+	return json.DefaultMarshalerConfig.Marshal(x)
+}
+
+// UnmarshalProtoJSON unmarshals the GetModSeqnoRequest message from JSON.
+func (x *GetModSeqnoRequest) UnmarshalProtoJSON(s *json.UnmarshalState) {
+	if s.ReadNil() {
+		return
+	}
+	s.ReadObject(func(key string) {
+		// no fields
+	})
+}
+
+// UnmarshalJSON unmarshals the GetModSeqnoRequest from JSON.
+func (x *GetModSeqnoRequest) UnmarshalJSON(b []byte) error {
+	return json.DefaultUnmarshalerConfig.Unmarshal(b, x)
+}
+
+// MarshalProtoJSON marshals the GetModSeqnoResponse message to JSON.
+func (x *GetModSeqnoResponse) MarshalProtoJSON(s *json.MarshalState) {
+	if x == nil {
+		s.WriteNil()
+		return
+	}
+	s.WriteObjectStart()
+	var wroteField bool
+	if x.ModSeqno != 0 || s.HasField("modSeqno") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("modSeqno")
+		s.WriteUint64(x.ModSeqno)
+	}
+	s.WriteObjectEnd()
+}
+
+// MarshalJSON marshals the GetModSeqnoResponse to JSON.
+func (x *GetModSeqnoResponse) MarshalJSON() ([]byte, error) {
+	return json.DefaultMarshalerConfig.Marshal(x)
+}
+
+// UnmarshalProtoJSON unmarshals the GetModSeqnoResponse message from JSON.
+func (x *GetModSeqnoResponse) UnmarshalProtoJSON(s *json.UnmarshalState) {
+	if s.ReadNil() {
+		return
+	}
+	s.ReadObject(func(key string) {
+		switch key {
+		default:
+			s.Skip() // ignore unknown field
+		case "mod_seqno", "modSeqno":
+			s.AddField("mod_seqno")
+			x.ModSeqno = s.ReadUint64()
+		}
+	})
+}
+
+// UnmarshalJSON unmarshals the GetModSeqnoResponse from JSON.
+func (x *GetModSeqnoResponse) UnmarshalJSON(b []byte) error {
+	return json.DefaultUnmarshalerConfig.Unmarshal(b, x)
+}
+
 // MarshalProtoJSON marshals the SetRootRefRequest message to JSON.
 func (x *SetRootRefRequest) MarshalProtoJSON(s *json.MarshalState) {
 	if x == nil {
@@ -19142,6 +19314,75 @@ func (m *GetRootRefResponse) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
+func (m *GetModSeqnoRequest) MarshalVT() (dAtA []byte, err error) {
+	if m == nil {
+		return nil, nil
+	}
+	size := m.SizeVT()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBufferVT(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *GetModSeqnoRequest) MarshalToVT(dAtA []byte) (int, error) {
+	size := m.SizeVT()
+	return m.MarshalToSizedBufferVT(dAtA[:size])
+}
+
+func (m *GetModSeqnoRequest) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
+	if m == nil {
+		return 0, nil
+	}
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.unknownFields != nil {
+		i = protobuf_go_lite.EncodeRawBytes(dAtA, i, m.unknownFields)
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *GetModSeqnoResponse) MarshalVT() (dAtA []byte, err error) {
+	if m == nil {
+		return nil, nil
+	}
+	size := m.SizeVT()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBufferVT(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *GetModSeqnoResponse) MarshalToVT(dAtA []byte) (int, error) {
+	size := m.SizeVT()
+	return m.MarshalToSizedBufferVT(dAtA[:size])
+}
+
+func (m *GetModSeqnoResponse) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
+	if m == nil {
+		return 0, nil
+	}
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.unknownFields != nil {
+		i = protobuf_go_lite.EncodeRawBytes(dAtA, i, m.unknownFields)
+	}
+	if m.ModSeqno != 0 {
+		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(m.ModSeqno))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
 func (m *SetRootRefRequest) MarshalVT() (dAtA []byte, err error) {
 	if m == nil {
 		return nil, nil
@@ -21260,6 +21501,27 @@ func (m *GetRootRefResponse) SizeVT() (n int) {
 	return n
 }
 
+func (m *GetModSeqnoRequest) SizeVT() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	n += len(m.unknownFields)
+	return n
+}
+
+func (m *GetModSeqnoResponse) SizeVT() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	n += protobuf_go_lite.SizeVarintNonZero(1, m.ModSeqno)
+	n += len(m.unknownFields)
+	return n
+}
+
 func (m *SetRootRefRequest) SizeVT() (n int) {
 	if m == nil {
 		return 0
@@ -23373,6 +23635,30 @@ func (x *GetRootRefResponse) MarshalProtoText() string {
 }
 
 func (x *GetRootRefResponse) String() string {
+	return x.MarshalProtoText()
+}
+
+func (x *GetModSeqnoRequest) MarshalProtoText() string {
+	var sb protobuf_go_lite.TextBuilder
+	protobuf_go_lite.TextStartMessage(&sb, "GetModSeqnoRequest")
+	return protobuf_go_lite.TextFinishMessage(&sb)
+}
+
+func (x *GetModSeqnoRequest) String() string {
+	return x.MarshalProtoText()
+}
+
+func (x *GetModSeqnoResponse) MarshalProtoText() string {
+	var sb protobuf_go_lite.TextBuilder
+	initialLen := protobuf_go_lite.TextStartMessage(&sb, "GetModSeqnoResponse")
+	if x.ModSeqno != 0 {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "mod_seqno")
+		protobuf_go_lite.TextWriteUint(&sb, x.ModSeqno)
+	}
+	return protobuf_go_lite.TextFinishMessage(&sb)
+}
+
+func (x *GetModSeqnoResponse) String() string {
 	return x.MarshalProtoText()
 }
 
@@ -30053,6 +30339,101 @@ func (m *GetRootRefResponse) UnmarshalVT(dAtA []byte) error {
 			}
 			m.Rev = 0
 			m.Rev, iNdEx, err = protobuf_go_lite.DecodeVarint(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+		default:
+			iNdEx = preIndex
+			skippy, err := protobuf_go_lite.Skip(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return protobuf_go_lite.ErrInvalidLength
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.unknownFields = append(m.unknownFields, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+
+func (m *GetModSeqnoRequest) UnmarshalVT(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	var err error
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		wire, iNdEx, err = protobuf_go_lite.DecodeVarint(dAtA, iNdEx)
+		if err != nil {
+			return err
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: GetModSeqnoRequest: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: GetModSeqnoRequest: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		default:
+			iNdEx = preIndex
+			skippy, err := protobuf_go_lite.Skip(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return protobuf_go_lite.ErrInvalidLength
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.unknownFields = append(m.unknownFields, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+
+func (m *GetModSeqnoResponse) UnmarshalVT(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	var err error
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		wire, iNdEx, err = protobuf_go_lite.DecodeVarint(dAtA, iNdEx)
+		if err != nil {
+			return err
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: GetModSeqnoResponse: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: GetModSeqnoResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ModSeqno", wireType)
+			}
+			m.ModSeqno = 0
+			m.ModSeqno, iNdEx, err = protobuf_go_lite.DecodeVarint(dAtA, iNdEx)
 			if err != nil {
 				return err
 			}

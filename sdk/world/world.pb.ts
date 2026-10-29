@@ -2437,6 +2437,38 @@ export const GetRootRefResponse: MessageType<GetRootRefResponse> =
   )
 
 /**
+ * GetModSeqnoRequest is the request type for GetModSeqno.
+ *
+ * @generated from message s4wave.world.GetModSeqnoRequest
+ */
+export interface GetModSeqnoRequest {}
+
+export const GetModSeqnoRequest: MessageType<GetModSeqnoRequest> =
+  /* @__PURE__ */ createMessageType<GetModSeqnoRequest>(
+    's4wave.world.GetModSeqnoRequest',
+    () => [],
+  )
+
+/**
+ * GetModSeqnoResponse is the response type for GetModSeqno.
+ *
+ * @generated from message s4wave.world.GetModSeqnoResponse
+ */
+export interface GetModSeqnoResponse {
+  /**
+   * ModSeqno is the World seqno after the last commit that changed the
+   * object. Zero when the World cannot report it.
+   */
+  modSeqno?: bigint
+}
+
+export const GetModSeqnoResponse: MessageType<GetModSeqnoResponse> =
+  /* @__PURE__ */ createMessageType<GetModSeqnoResponse>(
+    's4wave.world.GetModSeqnoResponse',
+    () => [[1, 'mod_seqno', 4]],
+  )
+
+/**
  * SetRootRefRequest is the request type for SetRootRef.
  *
  * @generated from message s4wave.world.SetRootRefRequest

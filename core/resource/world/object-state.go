@@ -54,6 +54,16 @@ func (r *ObjectStateResource) GetRootRef(ctx context.Context, req *s4wave_world.
 	return &s4wave_world.GetRootRefResponse{RootRef: ref, Rev: rev}, nil
 }
 
+// GetModSeqno returns the World seqno after the last commit that changed the
+// object, or zero when its World cannot report it.
+func (r *ObjectStateResource) GetModSeqno(ctx context.Context, _ *s4wave_world.GetModSeqnoRequest) (*s4wave_world.GetModSeqnoResponse, error) {
+	seqno, err := world.GetObjectModSeqno(ctx, r.obj)
+	if err != nil {
+		return nil, err
+	}
+	return &s4wave_world.GetModSeqnoResponse{ModSeqno: seqno}, nil
+}
+
 // SetRootRef updates the root reference of the object.
 func (r *ObjectStateResource) SetRootRef(ctx context.Context, req *s4wave_world.SetRootRefRequest) (*s4wave_world.SetRootRefResponse, error) {
 	// Write the new root reference and read back the revision.

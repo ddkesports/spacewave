@@ -71,6 +71,16 @@ func (os *ObjectState) GetRootRef(ctx context.Context) (*bucket.ObjectRef, uint6
 	return resp.RootRef, resp.Rev, nil
 }
 
+// GetModSeqno returns the World seqno after the last commit that changed the
+// object.
+func (os *ObjectState) GetModSeqno(ctx context.Context) (uint64, error) {
+	resp, err := os.service.GetModSeqno(ctx, &GetModSeqnoRequest{})
+	if err != nil {
+		return 0, err
+	}
+	return resp.GetModSeqno(), nil
+}
+
 // SetRootRef changes the root reference of the object.
 // Increments the revision of the object if changed.
 // Returns revision just after the change was applied.
@@ -148,4 +158,7 @@ func (os *ObjectState) WaitRev(ctx context.Context, rev uint64, ignoreNotFound b
 	return resp.Rev, nil
 }
 
-var _ world.ObjectState = (*ObjectState)(nil)
+var (
+	_ world.ObjectState          = (*ObjectState)(nil)
+	_ world.ObjectModSeqnoReader = (*ObjectState)(nil)
+)

@@ -958,6 +958,10 @@ service ObjectStateResourceService {
 
   rpc GetRootRef(GetRootRefRequest) returns (GetRootRefResponse);
 
+  // GetModSeqno returns the World seqno after the last commit that changed
+  // the object.
+  rpc GetModSeqno(GetModSeqnoRequest) returns (GetModSeqnoResponse);
+
   rpc SetRootRef(SetRootRefRequest) returns (SetRootRefResponse);
 
   rpc AccessWorldState(AccessWorldStateRequest) returns (AccessWorldStateResponse);
@@ -987,6 +991,16 @@ message GetRootRefResponse {
   .bucket.ObjectRef root_ref = 1;
   // Rev is the revision number when this reference was retrieved.
   uint64 rev = 2;
+}
+
+// GetModSeqnoRequest is the request type for GetModSeqno.
+message GetModSeqnoRequest {}
+
+// GetModSeqnoResponse is the response type for GetModSeqno.
+message GetModSeqnoResponse {
+  // ModSeqno is the World seqno after the last commit that changed the
+  // object. Zero when the World cannot report it.
+  uint64 mod_seqno = 1;
 }
 
 // SetRootRefRequest is the request type for SetRootRef.

@@ -39,6 +39,8 @@ import {
   GetEngineInfoResponse,
   GetKeyRequest,
   GetKeyResponse,
+  GetModSeqnoRequest,
+  GetModSeqnoResponse,
   GetObjectBodiesBatchRequest,
   GetObjectBodiesBatchResponse,
   GetObjectMetadataBatchRequest,
@@ -3074,6 +3076,18 @@ export const ObjectStateResourceServiceDefinition = {
       kind: MethodKind.Unary,
     },
     /**
+     * GetModSeqno returns the World seqno after the last commit that changed
+     * the object.
+     *
+     * @generated from rpc s4wave.world.ObjectStateResourceService.GetModSeqno
+     */
+    GetModSeqno: {
+      name: 'GetModSeqno',
+      I: GetModSeqnoRequest,
+      O: GetModSeqnoResponse,
+      kind: MethodKind.Unary,
+    },
+    /**
      * @generated from rpc s4wave.world.ObjectStateResourceService.SetRootRef
      */
     SetRootRef: {
@@ -3142,6 +3156,17 @@ export interface ObjectStateResourceService {
   ): Promise<GetRootRefResponse>
 
   /**
+   * GetModSeqno returns the World seqno after the last commit that changed
+   * the object.
+   *
+   * @generated from rpc s4wave.world.ObjectStateResourceService.GetModSeqno
+   */
+  GetModSeqno(
+    request: GetModSeqnoRequest,
+    abortSignal?: AbortSignal,
+  ): Promise<GetModSeqnoResponse>
+
+  /**
    * @generated from rpc s4wave.world.ObjectStateResourceService.SetRootRef
    */
   SetRootRef(
@@ -3205,6 +3230,18 @@ export interface ObjectStateResourceServiceHandler {
   ): Promise<GetRootRefResponse>
 
   /**
+   * GetModSeqno returns the World seqno after the last commit that changed
+   * the object.
+   *
+   * @generated from rpc s4wave.world.ObjectStateResourceService.GetModSeqno
+   */
+  GetModSeqno(
+    request: GetModSeqnoRequest,
+    abortSignal: AbortSignal,
+    context: ServerContext,
+  ): Promise<GetModSeqnoResponse>
+
+  /**
    * @generated from rpc s4wave.world.ObjectStateResourceService.SetRootRef
    */
   SetRootRef(
@@ -3261,6 +3298,7 @@ export class ObjectStateResourceServiceClient implements ObjectStateResourceServ
     this.rpc = rpc
     this.GetKey = this.GetKey.bind(this)
     this.GetRootRef = this.GetRootRef.bind(this)
+    this.GetModSeqno = this.GetModSeqno.bind(this)
     this.SetRootRef = this.SetRootRef.bind(this)
     this.AccessWorldState = this.AccessWorldState.bind(this)
     this.ApplyObjectOp = this.ApplyObjectOp.bind(this)
@@ -3299,6 +3337,26 @@ export class ObjectStateResourceServiceClient implements ObjectStateResourceServ
       abortSignal || undefined,
     )
     return GetRootRefResponse.fromBinary(result)
+  }
+
+  /**
+   * GetModSeqno returns the World seqno after the last commit that changed
+   * the object.
+   *
+   * @generated from rpc s4wave.world.ObjectStateResourceService.GetModSeqno
+   */
+  async GetModSeqno(
+    request: GetModSeqnoRequest,
+    abortSignal?: AbortSignal,
+  ): Promise<GetModSeqnoResponse> {
+    const requestMsg = GetModSeqnoRequest.create(request)
+    const result = await this.rpc.request(
+      this.service,
+      ObjectStateResourceServiceDefinition.methods.GetModSeqno.name,
+      GetModSeqnoRequest.toBinary(requestMsg),
+      abortSignal || undefined,
+    )
+    return GetModSeqnoResponse.fromBinary(result)
   }
 
   /**

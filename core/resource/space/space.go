@@ -608,10 +608,15 @@ func (r *SpaceResource) NewWorldEngineResource() (*resource_world.EngineResource
 		engineInfo,
 		resource_world.WithSessionPeerID(sessionPeerID),
 		resource_world.WithCallerParticipantLookup(func(ctx context.Context, caller peer.ID) (*sobject.SOParticipantConfig, error) {
-			// Resolve caller identity from the mounted SharedObject's accepted config.
+			// Resolve caller identity from the mounted SharedObject's accepted
+			// config. The mounting session acts through the SharedObject's
+			// own peer, which a local Space keeps apart from the session peer.
 			sharedObject := r.space.GetSharedObject()
 			if sharedObject == nil {
 				return nil, nil
+			}
+			if caller == sessionPeerID {
+				caller = sharedObject.GetPeerID()
 			}
 			state, err := sharedObject.GetSharedObjectState(ctx)
 			if err != nil {

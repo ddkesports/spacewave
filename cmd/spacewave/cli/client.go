@@ -775,6 +775,7 @@ type objectMount struct {
 	client      *sdkClient
 	sess        *s4wave_session.Session
 	spaceSvc    s4wave_space.SRPCSpaceResourceServiceClient
+	spaceID     string
 	engineRef   resource_client.ResourceRef
 	engine      *sdk_engine.SDKEngine
 	typedRef    resource_client.ResourceRef
@@ -880,6 +881,7 @@ func mountObjectChain(
 		client:        client,
 		sess:          sess,
 		spaceSvc:      spaceSvc,
+		spaceID:       spaceID,
 		engineRef:     engineRef,
 		engine:        engine,
 		typedClient:   typedClient,
