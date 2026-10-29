@@ -16,7 +16,6 @@ import (
 	sql_mysql "github.com/s4wave/spacewave/db/sql/mysql"
 	"github.com/s4wave/spacewave/db/world"
 	world_types "github.com/s4wave/spacewave/db/world/types"
-	"github.com/s4wave/spacewave/net/peer"
 	s4wave_objecttype_registry "github.com/s4wave/spacewave/sdk/objecttype/registry"
 	s4wave_quickstart_registry "github.com/s4wave/spacewave/sdk/quickstart/registry"
 	s4wave_sql_query "github.com/s4wave/spacewave/sdk/sql/query"
@@ -31,9 +30,7 @@ import (
 	s4wave_sql_workbench_world "github.com/s4wave/spacewave/sdk/sql/workbench/world"
 	s4wave_sql_world "github.com/s4wave/spacewave/sdk/sql/world"
 	s4wave_viewer_registry "github.com/s4wave/spacewave/sdk/viewer/registry"
-	s4wave_world "github.com/s4wave/spacewave/sdk/world"
 	sdk_world_engine "github.com/s4wave/spacewave/sdk/world/engine"
-	s4wave_worldop_registry "github.com/s4wave/spacewave/sdk/worldop/registry"
 	"github.com/sirupsen/logrus"
 )
 
@@ -65,7 +62,7 @@ var sqlWorldOpIDs = []string{
 
 var sqlViewerRegistrations []*s4wave_viewer_registry.ViewerRegistration
 
-// SQLHandler serves SQL plugin ObjectType, WorldOp, and Quickstart RPCs.
+// SQLHandler serves SQL plugin ObjectType and Quickstart RPCs.
 type SQLHandler struct {
 	le *logrus.Entry
 	b  bus.Bus
@@ -135,132 +132,6 @@ func (h *SQLHandler) openObjectType(
 	default:
 		return nil, nil, errors.Errorf("sql plugin: unhandled object type %s", typeID)
 	}
-}
-
-// ApplyWorldOp applies a SQL world operation through the attached WorldState.
-func (h *SQLHandler) ApplyWorldOp(
-	ctx context.Context,
-	req *s4wave_worldop_registry.ApplyWorldOpRequest,
-) (*s4wave_worldop_registry.ApplyWorldOpResponse, error) {
-	// Require an attached WorldState before applying a SQL operation.
-	if req.GetAttachedWorldStateResourceId() == 0 {
-		return nil, errors.New("sql plugin: attached world state resource is required")
-	}
-
-	// Attach the requested WorldState and release it after the operation.
-	resourceCtx, err := resource_server.MustGetResourceClientContext(ctx)
-	if err != nil {
-		return nil, err
-	}
-	client := sdk_world_engine.NewAttachedResourceClient(resourceCtx)
-	ref := client.CreateResourceReference(req.GetAttachedWorldStateResourceId())
-	ws, err := sdk_world_engine.NewSDKWorldState(client, ref, false)
-	if err != nil {
-		ref.Release()
-		return nil, err
-	}
-	defer ws.Release()
-
-	// Decode and apply the SQL operation to the attached WorldState.
-	op, err := h.unmarshalSQLOp(ctx, req.GetOperationTypeId(), req.GetOpData())
-	if err != nil {
-		return nil, err
-	}
-	sysErr, err := op.ApplyWorldOp(ctx, h.le, ws, peer.ID(""))
-	if err != nil {
-		return nil, err
-	}
-	return &s4wave_worldop_registry.ApplyWorldOpResponse{SystemError: sysErr}, nil
-}
-
-// ApplyWorldObjectOp applies a SQL operation through the attached ObjectState.
-func (h *SQLHandler) ApplyWorldObjectOp(
-	ctx context.Context,
-	req *s4wave_worldop_registry.ApplyWorldObjectOpRequest,
-) (*s4wave_worldop_registry.ApplyWorldObjectOpResponse, error) {
-	// Require an attached ObjectState before applying a SQL operation.
-	if req.GetAttachedObjectStateResourceId() == 0 {
-		return nil, errors.New("sql plugin: attached object state resource is required")
-	}
-
-	// Resolve the attached object resource client.
-	resourceCtx, err := resource_server.MustGetResourceClientContext(ctx)
-	if err != nil {
-		return nil, err
-	}
-	client := sdk_world_engine.NewAttachedResourceClient(resourceCtx)
-	ref := client.CreateResourceReference(req.GetAttachedObjectStateResourceId())
-	objectClient, err := ref.GetClient()
-	if err != nil {
-		ref.Release()
-		return nil, err
-	}
-
-	// Read the attached object key and verify the requested target.
-	objectSvc := s4wave_world.NewSRPCObjectStateResourceServiceClient(objectClient)
-	keyResp, err := objectSvc.GetKey(ctx, &s4wave_world.GetKeyRequest{})
-	if err != nil {
-		ref.Release()
-		return nil, err
-	}
-	objectKey := keyResp.GetObjectKey()
-	if req.GetObjectKey() != objectKey {
-		ref.Release()
-		return nil, errors.Errorf("sql plugin: attached object key %q does not match request key %q", objectKey, req.GetObjectKey())
-	}
-
-	// Wrap the mutable object attached by the admitted write operation.
-	os, err := sdk_world_engine.NewSDKObjectState(client, ref, objectKey, false)
-	if err != nil {
-		ref.Release()
-		return nil, err
-	}
-	defer os.Release()
-
-	// Decode and apply the SQL operation to the attached ObjectState.
-	op, err := h.unmarshalSQLOp(ctx, req.GetOperationTypeId(), req.GetOpData())
-	if err != nil {
-		return nil, err
-	}
-	sysErr, err := world.ApplyWorldObjectOp(ctx, h.le, op, os, peer.ID(""))
-	if err != nil {
-		return nil, err
-	}
-	return &s4wave_worldop_registry.ApplyWorldObjectOpResponse{SystemError: sysErr}, nil
-}
-
-// ValidateOp validates a SQL operation payload.
-func (h *SQLHandler) ValidateOp(
-	ctx context.Context,
-	req *s4wave_worldop_registry.ValidateOpRequest,
-) (*s4wave_worldop_registry.ValidateOpResponse, error) {
-	op, err := h.unmarshalSQLOp(ctx, req.GetOperationTypeId(), req.GetOpData())
-	if err != nil {
-		return &s4wave_worldop_registry.ValidateOpResponse{Error: err.Error()}, nil
-	}
-	if err := world.ValidateOp(op); err != nil {
-		return &s4wave_worldop_registry.ValidateOpResponse{Error: err.Error()}, nil
-	}
-	return &s4wave_worldop_registry.ValidateOpResponse{}, nil
-}
-
-func (h *SQLHandler) unmarshalSQLOp(ctx context.Context, opTypeID string, data []byte) (world.Operation, error) {
-	// Resolve the SQL operation type and decode its block payload.
-	op, err := lookupSQLWorldOp(ctx, opTypeID)
-	if err != nil {
-		return nil, errors.Wrapf(err, "lookup SQL world op %s", opTypeID)
-	}
-	if op == nil {
-		return nil, errors.Errorf("lookup SQL world op %s: unhandled operation type", opTypeID)
-	}
-	if err := op.UnmarshalVT(data); err != nil {
-		return nil, err
-	}
-	return op, nil
-}
-
-func lookupSQLWorldOp(ctx context.Context, opTypeID string) (world.Operation, error) {
-	return sqlSchema.LookupOp(ctx, opTypeID)
 }
 
 // sqlSchema declares the SQL world operations and block types.
@@ -440,9 +311,6 @@ func execSQLTx(ctx context.Context, store s4wave_sql.SqlStore, dsn string, state
 
 // _ is a type assertion.
 var _ s4wave_objecttype_registry.SRPCObjectTypeHandlerServiceServer = (*SQLHandler)(nil)
-
-// _ is a type assertion.
-var _ s4wave_worldop_registry.SRPCWorldOpHandlerServiceServer = (*SQLHandler)(nil)
 
 // _ is a type assertion.
 var _ s4wave_quickstart_registry.SRPCQuickstartHandlerServiceServer = (*SQLHandler)(nil)

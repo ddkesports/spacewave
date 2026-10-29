@@ -128,7 +128,7 @@ func TestSQLHandlerValidateOpUnmarshalsEverySQLOperation(t *testing.T) {
 			}
 
 			// Validate the encoded SQL operation through the handler.
-			h := &SQLHandler{}
+			h := s4wave_worldop_registry.NewHandler(nil, sqlSchema.LookupOp)
 			resp, err := h.ValidateOp(context.Background(), &s4wave_worldop_registry.ValidateOpRequest{
 				OperationTypeId: tc.op.TypeID(),
 				OpData:          data,
@@ -143,9 +143,12 @@ func TestSQLHandlerValidateOpUnmarshalsEverySQLOperation(t *testing.T) {
 			}
 
 			// Decode the SQL operation for contract checks.
-			decoded, err := h.unmarshalSQLOp(context.Background(), tc.op.TypeID(), data)
+			decoded, err := sqlSchema.LookupOp(context.Background(), tc.op.TypeID())
+			if err == nil {
+				err = decoded.UnmarshalVT(data)
+			}
 			if err != nil {
-				t.Fatalf("unmarshalSQLOp(%s): %v", tc.op.TypeID(), err)
+				t.Fatalf("decode %s: %v", tc.op.TypeID(), err)
 			}
 
 			// Check the decoded operation identity and initialization mode.
@@ -169,8 +172,8 @@ func TestSQLHandlerValidateOpUnmarshalsEverySQLOperation(t *testing.T) {
 	}
 }
 
-func TestSQLHandlerValidateOpReportsLookupUnmarshalAndValidationErrors(t *testing.T) {
-	h := &SQLHandler{}
+func TestSQLValidateOpReportsLookupUnmarshalAndValidationErrors(t *testing.T) {
+	h := s4wave_worldop_registry.NewHandler(nil, sqlSchema.LookupOp)
 	for _, tc := range []struct {
 		name    string
 		opID    string
@@ -180,7 +183,7 @@ func TestSQLHandlerValidateOpReportsLookupUnmarshalAndValidationErrors(t *testin
 		{
 			name:    "unknown operation type",
 			opID:    "sql/missing/set-root",
-			wantErr: "unhandled operation type",
+			wantErr: "operation type was not handled",
 		},
 		{
 			name:    "invalid protobuf payload",
@@ -775,7 +778,7 @@ func newSQLPluginClient(t *testing.T, handler *SQLHandler) srpc.Client {
 	if err := s4wave_objecttype_registry.SRPCRegisterObjectTypeHandlerService(rootMux, handler); err != nil {
 		t.Fatalf("register SQL object type handler: %v", err)
 	}
-	if err := s4wave_worldop_registry.SRPCRegisterWorldOpHandlerService(rootMux, handler); err != nil {
+	if err := s4wave_worldop_registry.SRPCRegisterWorldOpHandlerService(rootMux, s4wave_worldop_registry.NewHandler(handler.le, sqlSchema.LookupOp)); err != nil {
 		t.Fatalf("register SQL world op handler: %v", err)
 	}
 

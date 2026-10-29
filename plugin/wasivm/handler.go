@@ -6,20 +6,16 @@ import (
 	"github.com/aperturerobotics/controllerbus/bus"
 	"github.com/aperturerobotics/starpc/srpc"
 	"github.com/pkg/errors"
-	resource_client "github.com/s4wave/spacewave/bldr/resource/client"
 	resource_server "github.com/s4wave/spacewave/bldr/resource/server"
 	"github.com/s4wave/spacewave/db/world"
-	"github.com/s4wave/spacewave/net/peer"
 	s4wave_objecttype_registry "github.com/s4wave/spacewave/sdk/objecttype/registry"
 	s4wave_process "github.com/s4wave/spacewave/sdk/process"
 	s4wave_vm "github.com/s4wave/spacewave/sdk/vm"
-	s4wave_world "github.com/s4wave/spacewave/sdk/world"
 	sdk_world_engine "github.com/s4wave/spacewave/sdk/world/engine"
-	s4wave_worldop_registry "github.com/s4wave/spacewave/sdk/worldop/registry"
 	"github.com/sirupsen/logrus"
 )
 
-// handler serves the WasiVM ObjectType and operations to the core plugin.
+// handler serves the WasiVM ObjectType to the core plugin.
 type handler struct {
 	le *logrus.Entry
 	// b mounts the CDN Spaces of published images.
@@ -83,138 +79,8 @@ func (h *handler) InvokeObjectType(
 	return &s4wave_objecttype_registry.InvokeObjectTypeResponse{ResourceId: resourceID}, nil
 }
 
-// ApplyWorldOp applies a WasiVM operation to the attached world state.
-func (h *handler) ApplyWorldOp(
-	ctx context.Context,
-	req *s4wave_worldop_registry.ApplyWorldOpRequest,
-) (*s4wave_worldop_registry.ApplyWorldOpResponse, error) {
-	// Decode the operation.
-	if req.GetAttachedWorldStateResourceId() == 0 {
-		return nil, errors.New("wasivm plugin: attached world state resource is required")
-	}
-	op, err := unmarshalOp(ctx, req.GetOperationTypeId(), req.GetOpData())
-	if err != nil {
-		return nil, err
-	}
-
-	// Open the attached world state.
-	resourceCtx, err := resource_server.MustGetResourceClientContext(ctx)
-	if err != nil {
-		return nil, err
-	}
-	client := sdk_world_engine.NewAttachedResourceClient(resourceCtx)
-	ref := client.CreateResourceReference(req.GetAttachedWorldStateResourceId())
-	ws, err := sdk_world_engine.NewSDKWorldState(client, ref, false)
-	if err != nil {
-		ref.Release()
-		return nil, err
-	}
-	defer ws.Release()
-
-	// Apply the operation to it.
-	sysErr, err := op.ApplyWorldOp(ctx, h.le, ws, peer.ID(""))
-	if err != nil {
-		return nil, err
-	}
-	return &s4wave_worldop_registry.ApplyWorldOpResponse{SystemError: sysErr}, nil
-}
-
-// ApplyWorldObjectOp applies a WasiVM operation to the attached object.
-func (h *handler) ApplyWorldObjectOp(
-	ctx context.Context,
-	req *s4wave_worldop_registry.ApplyWorldObjectOpRequest,
-) (*s4wave_worldop_registry.ApplyWorldObjectOpResponse, error) {
-	// Decode the operation.
-	if req.GetAttachedObjectStateResourceId() == 0 {
-		return nil, errors.New("wasivm plugin: attached object state resource is required")
-	}
-	op, err := unmarshalOp(ctx, req.GetOperationTypeId(), req.GetOpData())
-	if err != nil {
-		return nil, err
-	}
-
-	// Reference the attached object.
-	resourceCtx, err := resource_server.MustGetResourceClientContext(ctx)
-	if err != nil {
-		return nil, err
-	}
-	client := sdk_world_engine.NewAttachedResourceClient(resourceCtx)
-	ref := client.CreateResourceReference(req.GetAttachedObjectStateResourceId())
-
-	// Open it, checking it is the object the request names.
-	objectKey, err := attachedObjectKey(ctx, ref)
-	if err == nil && objectKey != req.GetObjectKey() {
-		err = errors.Errorf("wasivm plugin: attached object %q is not %q", objectKey, req.GetObjectKey())
-	}
-	if err != nil {
-		ref.Release()
-		return nil, err
-	}
-	os, err := sdk_world_engine.NewSDKObjectState(client, ref, objectKey, false)
-	if err != nil {
-		ref.Release()
-		return nil, err
-	}
-	defer os.Release()
-
-	// Apply the operation to it.
-	sysErr, err := world.ApplyWorldObjectOp(ctx, h.le, op, os, peer.ID(""))
-	if err != nil {
-		return nil, err
-	}
-	return &s4wave_worldop_registry.ApplyWorldObjectOpResponse{SystemError: sysErr}, nil
-}
-
-// ValidateOp validates a WasiVM operation.
-func (h *handler) ValidateOp(
-	ctx context.Context,
-	req *s4wave_worldop_registry.ValidateOpRequest,
-) (*s4wave_worldop_registry.ValidateOpResponse, error) {
-	op, err := unmarshalOp(ctx, req.GetOperationTypeId(), req.GetOpData())
-	if err == nil {
-		err = world.ValidateOp(op)
-	}
-	if err != nil {
-		return &s4wave_worldop_registry.ValidateOpResponse{Error: err.Error()}, nil
-	}
-	return &s4wave_worldop_registry.ValidateOpResponse{}, nil
-}
-
-// attachedObjectKey reads the key of the attached object ref.
-func attachedObjectKey(ctx context.Context, ref resource_client.ResourceRef) (string, error) {
-	// Ask the object state resource for its key.
-	client, err := ref.GetClient()
-	if err != nil {
-		return "", err
-	}
-	resp, err := s4wave_world.NewSRPCObjectStateResourceServiceClient(client).GetKey(ctx, &s4wave_world.GetKeyRequest{})
-	if err != nil {
-		return "", err
-	}
-	return resp.GetObjectKey(), nil
-}
-
 // wasiVMSchema declares the WasiVM world operations.
 var wasiVMSchema = world.NewSchema(s4wave_vm.WasivmTypes)
 
-// unmarshalOp decodes a WasiVM operation.
-func unmarshalOp(ctx context.Context, opTypeID string, data []byte) (world.Operation, error) {
-	// Construct the operation of the type, then decode its data.
-	op, err := wasiVMSchema.LookupOp(ctx, opTypeID)
-	if err == nil && op == nil {
-		err = errors.New("unhandled operation type")
-	}
-	if err != nil {
-		return nil, errors.Wrapf(err, "wasivm plugin: operation %s", opTypeID)
-	}
-	if err := op.UnmarshalVT(data); err != nil {
-		return nil, err
-	}
-	return op, nil
-}
-
 // _ is a type assertion.
-var (
-	_ s4wave_objecttype_registry.SRPCObjectTypeHandlerServiceServer = (*handler)(nil)
-	_ s4wave_worldop_registry.SRPCWorldOpHandlerServiceServer       = (*handler)(nil)
-)
+var _ s4wave_objecttype_registry.SRPCObjectTypeHandlerServiceServer = (*handler)(nil)

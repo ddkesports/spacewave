@@ -78,7 +78,7 @@ func NewFactory(b bus.Bus) controller.Factory {
 					return s4wave_objecttype_registry.SRPCRegisterObjectTypeHandlerService(mux, h)
 				},
 				func(mux srpc.Mux) error {
-					return s4wave_worldop_registry.SRPCRegisterWorldOpHandlerService(mux, h)
+					return s4wave_worldop_registry.SRPCRegisterWorldOpHandlerService(mux, s4wave_worldop_registry.NewHandler(base.GetLogger(), wasiVMSchema.LookupOp))
 				},
 			)
 
