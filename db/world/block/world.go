@@ -74,6 +74,12 @@ type WorldState struct {
 	objectExistsMemo map[string]struct{}
 
 	pendingChanges []*block.Cursor // *WorldChange
+	// pendingEntries is how many seqnos the flush of pendingChanges adds: one
+	// per change with the changelog off, and one per run of changes of one
+	// type with it on, since the flush batches each run into one entry.
+	pendingEntries uint64
+	// pendingType is the type of the last pending change.
+	pendingType WorldChangeType
 	// modObjects holds the record cursors of each object written since the last
 	// Commit, which stamps them with the seqno it reaches. The last cursor of a
 	// key holds the record in the tree; earlier ones back changelog entries.

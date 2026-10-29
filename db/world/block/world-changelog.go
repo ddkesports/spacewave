@@ -27,13 +27,19 @@ func (t *WorldState) queueWorldChange(ctx context.Context, w *WorldChange) (*blo
 		return nil, err
 	}
 
-	// Stage the change block unless the changelog is disabled.
+	// Stage the change block unless the changelog is disabled, counting the
+	// seqnos the flush will add for it.
 	var changeBcs *block.Cursor
-	if !r.GetLastChangeDisable() {
+	disabled := r.GetLastChangeDisable()
+	if !disabled {
 		changeBcs = t.bcs.Detach(false)
 		changeBcs.SetBlock(w, true)
 	}
+	if disabled || len(t.pendingChanges) == 0 || w.GetChangeType() != t.pendingType {
+		t.pendingEntries++
+	}
 	t.pendingChanges = append(t.pendingChanges, changeBcs)
+	t.pendingType = w.GetChangeType()
 
 	// Update the sequence number and return the change cursor.
 	t.updateSeqno(r)
@@ -42,9 +48,9 @@ func (t *WorldState) queueWorldChange(ctx context.Context, w *WorldChange) (*blo
 
 // updateSeqno computes the latest sequence number and updates t.seqno.
 func (t *WorldState) updateSeqno(r *World) {
-	// estimate next sequence number
+	// Add the seqnos the pending changes will reach.
 	currSeqno := r.GetLastChange().GetSeqno()
-	nextSeqno := currSeqno + uint64(len(t.pendingChanges))
+	nextSeqno := currSeqno + t.pendingEntries
 	t.seqnoBcast.HoldLock(func(broadcast func(), getWaitCh func() <-chan struct{}) {
 		if t.seqno != nextSeqno {
 			t.seqno = nextSeqno
@@ -105,7 +111,7 @@ func (t *WorldState) flushWorldChanges(ctx context.Context, w *World) error {
 
 	// Take the pending change queue.
 	queue := t.pendingChanges
-	t.pendingChanges = nil
+	t.pendingChanges, t.pendingEntries = nil, 0
 
 	// Advance a disabled changelog's seqno without recording entries.
 	taskCtx, subtask := trace.NewTask(ctx, "hydra/world-block/world-state/flush-world-changes/get-root")

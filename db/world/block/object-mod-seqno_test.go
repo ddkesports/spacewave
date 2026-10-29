@@ -123,9 +123,20 @@ func testObjectModSeqno(t *testing.T, impl kvtx_block.KVImplType) {
 		return s
 	}
 
-	// Two creates in one commit carry its seqno.
-	commit(func(tx *world_block.EngineTx) { create(tx, "a", "b") })
+	// Two creates in one commit carry its seqno, which the transaction
+	// reports before it commits: the flush writes both into one entry.
+	var pending uint64
+	commit(func(tx *world_block.EngineTx) {
+		create(tx, "a", "b")
+		var err error
+		if pending, err = tx.GetSeqno(ctx); err != nil {
+			t.Fatal(err)
+		}
+	})
 	s1 := seqno()
+	if pending != s1 {
+		t.Fatalf("transaction reported seqno %d, commit reached %d", pending, s1)
+	}
 	want["a"], want["b"] = entry{s1, 1}, entry{s1, 1}
 	check("create")
 
