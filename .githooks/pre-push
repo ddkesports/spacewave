@@ -1,0 +1,30 @@
+#!/bin/sh
+set -e
+
+# A v* tag is a Spacewave release: pushing one starts the npm release workflow
+# and names the source the release pipeline built and staged. Only the release
+# pipeline creates, moves or deletes one. A dependent that needs unreleased
+# code pins a pseudo-version of the commit on master instead.
+#
+# The pipeline marks its push by setting SPACEWAVE_RELEASE_TAG to the exact tag
+# it pushes; any other push of a v* tag is refused. Git feeds one line per ref:
+# <local ref> <local sha> <remote ref> <remote sha>.
+status=0
+while read -r _ _ remote_ref _; do
+	case $remote_ref in
+	refs/tags/v*) ;;
+	*) continue ;;
+	esac
+	tag=${remote_ref#refs/tags/}
+	if [ "${SPACEWAVE_RELEASE_TAG:-}" != "$tag" ]; then
+		printf 'pre-push: refusing to push release tag %s\n' "$tag" >&2
+		status=1
+	fi
+done
+if [ "$status" -ne 0 ]; then
+	printf '%s\n' \
+		'Release tags come only from the release pipeline, which sets' \
+		'SPACEWAVE_RELEASE_TAG=<tag>. To use unreleased code from another module,' \
+		'pin a pseudo-version of the commit on master instead.' >&2
+fi
+exit "$status"
