@@ -262,12 +262,20 @@ export interface WatchObjectTypesResponse {
    * Registrations is the current set of registered ObjectTypes.
    */
   registrations?: ObjectTypeRegistration[]
+  /**
+   * BuiltInTypeIds lists the ObjectTypes compiled into the host, which have
+   * no registration, sorted.
+   */
+  builtInTypeIds?: string[]
 }
 
 export const WatchObjectTypesResponse: MessageType<WatchObjectTypesResponse> =
   /* @__PURE__ */ createMessageType<WatchObjectTypesResponse>(
     's4wave.objecttype.registry.WatchObjectTypesResponse',
-    () => [[1, 'registrations', 11, 1, ObjectTypeRegistration.codec]],
+    () => [
+      [1, 'registrations', 11, 1, ObjectTypeRegistration.codec],
+      [2, 'built_in_type_ids', 9, 1],
+    ],
   )
 
 /**
@@ -316,4 +324,48 @@ export const InvokeObjectTypeResponse: MessageType<InvokeObjectTypeResponse> =
   /* @__PURE__ */ createMessageType<InvokeObjectTypeResponse>(
     's4wave.objecttype.registry.InvokeObjectTypeResponse',
     () => [[1, 'resource_id', 13]],
+  )
+
+/**
+ * MarshalBodiesJSONRequest is the request for MarshalBodiesJSON.
+ *
+ * @generated from message s4wave.objecttype.registry.MarshalBodiesJSONRequest
+ */
+export interface MarshalBodiesJSONRequest {
+  /**
+   * TypeId is the ObjectType ID of every body.
+   */
+  typeId?: string
+  /**
+   * Bodies are root block bodies as World stores them.
+   */
+  bodies?: Uint8Array[]
+}
+
+export const MarshalBodiesJSONRequest: MessageType<MarshalBodiesJSONRequest> =
+  /* @__PURE__ */ createMessageType<MarshalBodiesJSONRequest>(
+    's4wave.objecttype.registry.MarshalBodiesJSONRequest',
+    () => [
+      [1, 'type_id', 9],
+      [2, 'bodies', 12, 1],
+    ],
+  )
+
+/**
+ * MarshalBodiesJSONResponse is the response for MarshalBodiesJSON.
+ *
+ * @generated from message s4wave.objecttype.registry.MarshalBodiesJSONResponse
+ */
+export interface MarshalBodiesJSONResponse {
+  /**
+   * BodiesJson preserves the request body order. An empty string marks a
+   * body the plugin could not render.
+   */
+  bodiesJson?: string[]
+}
+
+export const MarshalBodiesJSONResponse: MessageType<MarshalBodiesJSONResponse> =
+  /* @__PURE__ */ createMessageType<MarshalBodiesJSONResponse>(
+    's4wave.objecttype.registry.MarshalBodiesJSONResponse',
+    () => [[1, 'bodies_json', 9, 1]],
   )

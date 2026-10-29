@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/aperturerobotics/controllerbus/bus"
+	"github.com/s4wave/spacewave/core/space/world/objecttypes"
 	world_testbed "github.com/s4wave/spacewave/db/world/testbed"
 	s4wave_objecttype_registry "github.com/s4wave/spacewave/sdk/objecttype/registry"
 	"github.com/sirupsen/logrus"
@@ -18,7 +20,7 @@ import (
 // WatchObjectTypes, and checks the lookup is empty once the registration is
 // released.
 func TestRegisteredObjectTypeDeclaresPorts(t *testing.T) {
-	// Start the registry, its bridge controller, and a caller resource client.
+	// Start the World testbed whose bus hosts the bridge.
 	ctx := t.Context()
 	le := logrus.NewEntry(logrus.New())
 	tb, err := world_testbed.Default(ctx)
@@ -26,6 +28,8 @@ func TestRegisteredObjectTypeDeclaresPorts(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(tb.Release)
+
+	// Start the registry, its bridge controller, and a caller resource client.
 	registry, resources, registryClient := newRegistryResourceClient(t, ctx)
 	defer resources.Release()
 	rel, err := tb.Bus.AddController(ctx, NewBridgeController(le, tb.Bus, registry), nil)
@@ -83,11 +87,16 @@ func TestRegisteredObjectTypeDeclaresPorts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("watch recv: %v", err)
 	}
+
+	// The message carries the registration's ports and the host's built-in types.
 	if len(msg.GetRegistrations()) != 1 {
 		t.Fatalf("watched registrations = %d, want 1", len(msg.GetRegistrations()))
 	}
 	if err := comparePorts(msg.GetRegistrations()[0].GetMetadata().GetPorts(), ports); err != nil {
 		t.Fatalf("watched ports: %v", err)
+	}
+	if !slices.Equal(msg.GetBuiltInTypeIds(), objecttypes.BuiltInObjectTypeIDs()) || len(msg.GetBuiltInTypeIds()) == 0 {
+		t.Fatalf("watched built-in types = %v", msg.GetBuiltInTypeIds())
 	}
 
 	// Release the registration resource and wait for the watch to show it gone.

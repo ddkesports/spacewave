@@ -5,6 +5,8 @@
 import {
   InvokeObjectTypeRequest,
   InvokeObjectTypeResponse,
+  MarshalBodiesJSONRequest,
+  MarshalBodiesJSONResponse,
   RegisterObjectTypeRequest,
   RegisterObjectTypeResponse,
   WatchObjectTypesRequest,
@@ -207,5 +209,98 @@ export class ObjectTypeHandlerServiceClient implements ObjectTypeHandlerService 
       abortSignal || undefined,
     )
     return InvokeObjectTypeResponse.fromBinary(result)
+  }
+}
+/**
+ * ObjectTypeBodyService renders a plugin's object bodies as JSON. A plugin
+ * serves it on its handler root beside ObjectTypeHandlerService; the host
+ * leaves the bodies of a plugin that does not serve it without JSON.
+ *
+ * @generated from service s4wave.objecttype.registry.ObjectTypeBodyService
+ */
+export const ObjectTypeBodyServiceDefinition = {
+  typeName: 's4wave.objecttype.registry.ObjectTypeBodyService',
+  methods: {
+    /**
+     * MarshalBodiesJSON renders root block bodies of one ObjectType as JSON.
+     *
+     * @generated from rpc s4wave.objecttype.registry.ObjectTypeBodyService.MarshalBodiesJSON
+     */
+    MarshalBodiesJSON: {
+      name: 'MarshalBodiesJSON',
+      I: MarshalBodiesJSONRequest,
+      O: MarshalBodiesJSONResponse,
+      kind: MethodKind.Unary,
+    },
+  },
+} as const
+
+/**
+ * ObjectTypeBodyService renders a plugin's object bodies as JSON. A plugin
+ * serves it on its handler root beside ObjectTypeHandlerService; the host
+ * leaves the bodies of a plugin that does not serve it without JSON.
+ *
+ * @generated from service s4wave.objecttype.registry.ObjectTypeBodyService
+ */
+export interface ObjectTypeBodyService {
+  /**
+   * MarshalBodiesJSON renders root block bodies of one ObjectType as JSON.
+   *
+   * @generated from rpc s4wave.objecttype.registry.ObjectTypeBodyService.MarshalBodiesJSON
+   */
+  MarshalBodiesJSON(
+    request: MarshalBodiesJSONRequest,
+    abortSignal?: AbortSignal,
+  ): Promise<MarshalBodiesJSONResponse>
+}
+
+/**
+ * ObjectTypeBodyService renders a plugin's object bodies as JSON. A plugin
+ * serves it on its handler root beside ObjectTypeHandlerService; the host
+ * leaves the bodies of a plugin that does not serve it without JSON.
+ *
+ * @generated from service s4wave.objecttype.registry.ObjectTypeBodyService
+ */
+export interface ObjectTypeBodyServiceHandler {
+  /**
+   * MarshalBodiesJSON renders root block bodies of one ObjectType as JSON.
+   *
+   * @generated from rpc s4wave.objecttype.registry.ObjectTypeBodyService.MarshalBodiesJSON
+   */
+  MarshalBodiesJSON(
+    request: MarshalBodiesJSONRequest,
+    abortSignal: AbortSignal,
+    context: ServerContext,
+  ): Promise<MarshalBodiesJSONResponse>
+}
+
+export const ObjectTypeBodyServiceServiceName =
+  ObjectTypeBodyServiceDefinition.typeName
+
+export class ObjectTypeBodyServiceClient implements ObjectTypeBodyService {
+  private readonly rpc: ProtoRpc
+  private readonly service: string
+  constructor(rpc: ProtoRpc, opts?: { service?: string }) {
+    this.service = opts?.service || ObjectTypeBodyServiceServiceName
+    this.rpc = rpc
+    this.MarshalBodiesJSON = this.MarshalBodiesJSON.bind(this)
+  }
+  /**
+   * MarshalBodiesJSON renders root block bodies of one ObjectType as JSON.
+   *
+   * @generated from rpc s4wave.objecttype.registry.ObjectTypeBodyService.MarshalBodiesJSON
+   */
+  async MarshalBodiesJSON(
+    request: MarshalBodiesJSONRequest,
+    abortSignal?: AbortSignal,
+  ): Promise<MarshalBodiesJSONResponse> {
+    const requestMsg = MarshalBodiesJSONRequest.create(request)
+    const result = await this.rpc.request(
+      this.service,
+      ObjectTypeBodyServiceDefinition.methods.MarshalBodiesJSON.name,
+      MarshalBodiesJSONRequest.toBinary(requestMsg),
+      abortSignal || undefined,
+    )
+    return MarshalBodiesJSONResponse.fromBinary(result)
   }
 }

@@ -13,6 +13,15 @@ service ObjectTypeHandlerService {
     returns (InvokeObjectTypeResponse);
 }
 
+// ObjectTypeBodyService renders a plugin's object bodies as JSON. A plugin
+// serves it on its handler root beside ObjectTypeHandlerService; the host
+// leaves the bodies of a plugin that does not serve it without JSON.
+service ObjectTypeBodyService {
+  // MarshalBodiesJSON renders root block bodies of one ObjectType as JSON.
+  rpc MarshalBodiesJSON(MarshalBodiesJSONRequest)
+    returns (MarshalBodiesJSONResponse);
+}
+
 // ObjectTypeVisibility controls where an ObjectType should appear.
 enum ObjectTypeVisibility {
   // OBJECT_TYPE_VISIBILITY_UNSPECIFIED uses the default visible behavior.
@@ -101,6 +110,9 @@ message WatchObjectTypesRequest {
 message WatchObjectTypesResponse {
   // Registrations is the current set of registered ObjectTypes.
   repeated ObjectTypeRegistration registrations = 1;
+  // BuiltInTypeIds lists the ObjectTypes compiled into the host, which have
+  // no registration, sorted.
+  repeated string built_in_type_ids = 2;
 }
 
 // InvokeObjectTypeRequest is the request for InvokeObjectType.
@@ -117,4 +129,19 @@ message InvokeObjectTypeRequest {
 message InvokeObjectTypeResponse {
   // ResourceId is the child resource serving the ObjectType's RPCs.
   uint32 resource_id = 1;
+}
+
+// MarshalBodiesJSONRequest is the request for MarshalBodiesJSON.
+message MarshalBodiesJSONRequest {
+  // TypeId is the ObjectType ID of every body.
+  string type_id = 1;
+  // Bodies are root block bodies as World stores them.
+  repeated bytes bodies = 2;
+}
+
+// MarshalBodiesJSONResponse is the response for MarshalBodiesJSON.
+message MarshalBodiesJSONResponse {
+  // BodiesJson preserves the request body order. An empty string marks a
+  // body the plugin could not render.
+  repeated string bodies_json = 1;
 }

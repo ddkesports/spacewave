@@ -2,6 +2,7 @@ package resource_objecttype_registry
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -12,8 +13,13 @@ import (
 	bldr_plugin "github.com/s4wave/spacewave/bldr/plugin"
 	"github.com/s4wave/spacewave/bldr/resource"
 	resource_server "github.com/s4wave/spacewave/bldr/resource/server"
+	resource_world "github.com/s4wave/spacewave/core/resource/world"
+	"github.com/s4wave/spacewave/db/block"
+	"github.com/s4wave/spacewave/db/blocktype"
+	blocktype_controller "github.com/s4wave/spacewave/db/blocktype/controller"
 	"github.com/s4wave/spacewave/db/world"
 	world_testbed "github.com/s4wave/spacewave/db/world/testbed"
+	world_types "github.com/s4wave/spacewave/db/world/types"
 	s4wave_objecttype_registry "github.com/s4wave/spacewave/sdk/objecttype/registry"
 	s4wave_world "github.com/s4wave/spacewave/sdk/world"
 	"github.com/s4wave/spacewave/sdk/world/objecttype"
@@ -576,3 +582,135 @@ var _ s4wave_objecttype_registry.SRPCObjectTypeHandlerServiceServer = (*testObje
 
 // _ is a type assertion
 var _ resource_server.ResourceClientContext = (*testResourceClientContext)(nil)
+
+func TestWorldStateRendersBodiesJSONThroughHostAndPlugin(t *testing.T) {
+	// Create the World testbed for host and plugin object types.
+	ctx := t.Context()
+	le := logrus.NewEntry(logrus.New())
+	tb, err := world_testbed.Default(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(tb.Release)
+
+	// Serve host/type from the host block type lookup.
+	hostTypes := blocktype_controller.NewController(func(_ context.Context, typeID string) (blocktype.BlockType, error) {
+		if typeID == "host/type" {
+			return blocktype.New[s4wave_world.EngineInfo](typeID), nil
+		}
+		return nil, nil
+	})
+	rel, err := tb.Bus.AddController(ctx, hostTypes, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rel()
+
+	// Serve plugin/type bodies from a plugin root with the body service.
+	pluginRoot := srpc.NewMux()
+	if err := s4wave_objecttype_registry.SRPCRegisterObjectTypeHandlerService(pluginRoot, &testReconnectObjectTypeHandler{}); err != nil {
+		t.Fatal(err)
+	}
+	bodies := s4wave_objecttype_registry.NewBodyHandler(func(_ context.Context, typeID string) (blocktype.BlockType, error) {
+		if typeID == "plugin/type" {
+			return blocktype.New[s4wave_world.ObjectMetadata](typeID), nil
+		}
+		return nil, nil
+	})
+	if err := s4wave_objecttype_registry.SRPCRegisterObjectTypeBodyService(pluginRoot, bodies); err != nil {
+		t.Fatal(err)
+	}
+
+	// Load the plugin root through its resource server.
+	pluginResourceMux := srpc.NewMux()
+	if err := resource_server.NewResourceServer(pluginRoot).Register(pluginResourceMux); err != nil {
+		t.Fatal(err)
+	}
+	pluginLoader := &testPluginLoadController{client: srpc.NewClient(srpc.NewServerPipe(srpc.NewServer(pluginResourceMux)))}
+	rel, err = tb.Bus.AddController(ctx, pluginLoader, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rel()
+
+	// Register plugin/type and bridge it onto the bus.
+	registry := NewObjectTypeRegistryResource(nil)
+	registry.registrations[1] = &objectTypeRegistration{registration: &s4wave_objecttype_registry.ObjectTypeRegistration{
+		TypeId:         "plugin/type",
+		RegistrationId: 1,
+		PluginId:       "test-plugin",
+	}}
+	rel, err = tb.Bus.AddController(ctx, NewBridgeController(le, tb.Bus, registry), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rel()
+
+	// Seed one object of each type and one of a type nobody renders.
+	for _, obj := range []struct {
+		key, typeID string
+		body        block.Block
+	}{
+		{key: "obj/host", typeID: "host/type", body: &s4wave_world.EngineInfo{EngineId: "engine-1"}},
+		{key: "obj/plugin", typeID: "plugin/type", body: &s4wave_world.ObjectMetadata{ObjectKey: "inner-key"}},
+		{key: "obj/other", typeID: "other/type", body: &s4wave_world.EngineInfo{EngineId: "hidden"}},
+	} {
+		state, _, err := world.CreateWorldObject(ctx, tb.WorldState, obj.key, func(bcs *block.Cursor) error {
+			bcs.SetBlock(obj.body, true)
+			return nil
+		})
+		world.ReleaseObjectState(state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := world_types.SetObjectType(ctx, tb.WorldState, obj.key, obj.typeID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Read the bodies as JSON through the World state Resource.
+	mux := srpc.NewMux()
+	if err := s4wave_world.SRPCRegisterWorldStateResourceService(mux, resource_world.NewWorldStateResource(le, tb.Bus, tb.WorldState, nil)); err != nil {
+		t.Fatal(err)
+	}
+	service := s4wave_world.NewSRPCWorldStateResourceServiceClient(srpc.NewClient(srpc.NewServerPipe(srpc.NewServer(mux))))
+	read := func() map[string]*s4wave_world.ObjectBody {
+		out := make(map[string]*s4wave_world.ObjectBody)
+		err := s4wave_world.ForEachObjectBodyJSONPage(ctx, service, []string{"obj/plugin", "obj/missing", "obj/host", "obj/other"}, func(page []*s4wave_world.ObjectBody) error {
+			for _, body := range page {
+				out[body.GetObjectKey()] = body
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+
+	// The host renders host/type, the plugin renders plugin/type, and the
+	// unknown type and the missing key carry no JSON.
+	got := read()
+	if b := got["obj/host"]; b.GetTypeId() != "host/type" || !strings.Contains(b.GetBodyJson(), `"engine-1"`) {
+		t.Fatalf("host body = %+v", b)
+	}
+	if b := got["obj/plugin"]; b.GetTypeId() != "plugin/type" || !strings.Contains(b.GetBodyJson(), `"inner-key"`) {
+		t.Fatalf("plugin body = %+v", b)
+	}
+	if b := got["obj/other"]; b.GetTypeId() != "other/type" || b.GetBodyJson() != "" || len(b.GetBody()) == 0 {
+		t.Fatalf("unrendered body = %+v", b)
+	}
+	if b := got["obj/missing"]; b.GetExists() || b.GetTypeId() != "" || b.GetBodyJson() != "" {
+		t.Fatalf("missing body = %+v", b)
+	}
+
+	// A plugin without the body service leaves its bodies without JSON.
+	pluginLoader.SetClient(newTestObjectTypePluginClient(t, &testReconnectObjectTypeHandler{}))
+	got = read()
+	if b := got["obj/plugin"]; b.GetTypeId() != "plugin/type" || b.GetBodyJson() != "" {
+		t.Fatalf("plugin body without body service = %+v", b)
+	}
+	if b := got["obj/host"]; !strings.Contains(b.GetBodyJson(), `"engine-1"`) {
+		t.Fatalf("host body beside a plugin without body service = %+v", b)
+	}
+}

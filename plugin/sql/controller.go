@@ -52,7 +52,8 @@ func NewFactory(b bus.Bus) controller.Factory {
 			return &Config{}
 		},
 		func(base *bus.BusController[*Config]) (*Controller, error) {
-			// Build the SQL handler mux for object types, world operations, and quickstarts.
+			// Build the SQL handler mux for object types and their bodies, world
+			// operations, and quickstarts.
 			handler := &SQLHandler{le: base.GetLogger(), b: b}
 			rootMux := resource_server.NewResourceMux(
 				func(mux srpc.Mux) error {
@@ -60,6 +61,9 @@ func NewFactory(b bus.Bus) controller.Factory {
 				},
 				func(mux srpc.Mux) error {
 					return s4wave_worldop_registry.SRPCRegisterWorldOpHandlerService(mux, s4wave_worldop_registry.NewHandler(base.GetLogger(), sqlSchema.LookupOp))
+				},
+				func(mux srpc.Mux) error {
+					return s4wave_objecttype_registry.SRPCRegisterObjectTypeBodyService(mux, s4wave_objecttype_registry.NewBodyHandler(sqlSchema.LookupBlockType))
 				},
 				func(mux srpc.Mux) error {
 					return s4wave_quickstart_registry.SRPCRegisterQuickstartHandlerService(mux, handler)

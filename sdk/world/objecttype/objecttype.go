@@ -40,6 +40,14 @@ type ObjectType interface {
 	GetFactory() ObjectTypeFactory
 }
 
+// BodyMarshaler is an ObjectType whose owner renders its object bodies as
+// JSON, such as a plugin type the host cannot decode.
+type BodyMarshaler interface {
+	// MarshalBodiesJSON renders root block bodies as JSON, preserving order.
+	// An empty string marks a body the owner could not render.
+	MarshalBodiesJSON(ctx context.Context, bodies [][]byte) ([]string, error)
+}
+
 // objectType implements ObjectType using generics.
 type objectType struct {
 	typeID  string

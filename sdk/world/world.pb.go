@@ -2141,6 +2141,12 @@ type ObjectBody struct {
 	// ModSeqno is the World seqno after the last commit that changed the
 	// object. Zero when the World cannot report it.
 	ModSeqno uint64 `protobuf:"varint,5,opt,name=mod_seqno,json=modSeqno,proto3" json:"modSeqno,omitempty"`
+	// TypeId is the object's ObjectType ID, set when the request asked for
+	// JSON.
+	TypeId string `protobuf:"bytes,6,opt,name=type_id,json=typeId,proto3" json:"typeId,omitempty"`
+	// BodyJson is body rendered as JSON, set when the request asked for JSON
+	// and the type's owner, the host or its plugin, can render it.
+	BodyJson string `protobuf:"bytes,7,opt,name=body_json,json=bodyJson,proto3" json:"bodyJson,omitempty"`
 }
 
 func (x *ObjectBody) Reset() {
@@ -2184,12 +2190,28 @@ func (x *ObjectBody) GetModSeqno() uint64 {
 	return 0
 }
 
+func (x *ObjectBody) GetTypeId() string {
+	if x != nil {
+		return x.TypeId
+	}
+	return ""
+}
+
+func (x *ObjectBody) GetBodyJson() string {
+	if x != nil {
+		return x.BodyJson
+	}
+	return ""
+}
+
 // GetObjectBodiesBatchRequest is the request type for
 // GetObjectBodiesBatch.
 type GetObjectBodiesBatchRequest struct {
 	unknownFields []byte
 	// ObjectKeys is the list of object keys to inspect.
 	ObjectKeys []string `protobuf:"bytes,1,rep,name=object_keys,json=objectKeys,proto3" json:"objectKeys,omitempty"`
+	// Json asks for each body's type ID and JSON rendering.
+	Json bool `protobuf:"varint,2,opt,name=json,proto3" json:"json,omitempty"`
 }
 
 func (x *GetObjectBodiesBatchRequest) Reset() {
@@ -2203,6 +2225,13 @@ func (x *GetObjectBodiesBatchRequest) GetObjectKeys() []string {
 		return x.ObjectKeys
 	}
 	return nil
+}
+
+func (x *GetObjectBodiesBatchRequest) GetJson() bool {
+	if x != nil {
+		return x.Json
+	}
+	return false
 }
 
 // GetObjectBodiesBatchResponse is one page of GetObjectBodiesBatch.
@@ -4689,6 +4718,8 @@ func (m *ObjectBody) CloneVT() *ObjectBody {
 	r.Exists = m.Exists
 	r.Rev = m.Rev
 	r.ModSeqno = m.ModSeqno
+	r.TypeId = m.TypeId
+	r.BodyJson = m.BodyJson
 	r.Body = protobuf_go_lite.CloneBytes(m.Body)
 	if len(m.unknownFields) > 0 {
 		r.unknownFields = slices.Clone(m.unknownFields)
@@ -4705,6 +4736,7 @@ func (m *GetObjectBodiesBatchRequest) CloneVT() *GetObjectBodiesBatchRequest {
 		return (*GetObjectBodiesBatchRequest)(nil)
 	}
 	r := new(GetObjectBodiesBatchRequest)
+	r.Json = m.Json
 	r.ObjectKeys = protobuf_go_lite.CloneSlice(m.ObjectKeys)
 	if len(m.unknownFields) > 0 {
 		r.unknownFields = slices.Clone(m.unknownFields)
@@ -7305,6 +7337,12 @@ func (this *ObjectBody) EqualVT(that *ObjectBody) bool {
 	if this.ModSeqno != that.ModSeqno {
 		return false
 	}
+	if this.TypeId != that.TypeId {
+		return false
+	}
+	if this.BodyJson != that.BodyJson {
+		return false
+	}
 	return string(this.unknownFields) == string(that.unknownFields)
 }
 
@@ -7323,6 +7361,9 @@ func (this *GetObjectBodiesBatchRequest) EqualVT(that *GetObjectBodiesBatchReque
 		return false
 	}
 	if !protobuf_go_lite.EqualSlice(this.ObjectKeys, that.ObjectKeys) {
+		return false
+	}
+	if this.Json != that.Json {
 		return false
 	}
 	return string(this.unknownFields) == string(that.unknownFields)
@@ -12406,6 +12447,16 @@ func (x *ObjectBody) MarshalProtoJSON(s *json.MarshalState) {
 		s.WriteObjectField("modSeqno")
 		s.WriteUint64(x.ModSeqno)
 	}
+	if x.TypeId != "" || s.HasField("typeId") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("typeId")
+		s.WriteString(x.TypeId)
+	}
+	if x.BodyJson != "" || s.HasField("bodyJson") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("bodyJson")
+		s.WriteString(x.BodyJson)
+	}
 	s.WriteObjectEnd()
 }
 
@@ -12438,6 +12489,12 @@ func (x *ObjectBody) UnmarshalProtoJSON(s *json.UnmarshalState) {
 		case "mod_seqno", "modSeqno":
 			s.AddField("mod_seqno")
 			x.ModSeqno = s.ReadUint64()
+		case "type_id", "typeId":
+			s.AddField("type_id")
+			x.TypeId = s.ReadString()
+		case "body_json", "bodyJson":
+			s.AddField("body_json")
+			x.BodyJson = s.ReadString()
 		}
 	})
 }
@@ -12459,6 +12516,11 @@ func (x *GetObjectBodiesBatchRequest) MarshalProtoJSON(s *json.MarshalState) {
 		s.WriteMoreIf(&wroteField)
 		s.WriteObjectField("objectKeys")
 		s.WriteStringArray(x.ObjectKeys)
+	}
+	if x.Json || s.HasField("json") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("json")
+		s.WriteBool(x.Json)
 	}
 	s.WriteObjectEnd()
 }
@@ -12484,6 +12546,9 @@ func (x *GetObjectBodiesBatchRequest) UnmarshalProtoJSON(s *json.UnmarshalState)
 				return
 			}
 			x.ObjectKeys = s.ReadStringArray()
+		case "json":
+			s.AddField("json")
+			x.Json = s.ReadBool()
 		}
 	})
 }
@@ -18097,6 +18162,16 @@ func (m *ObjectBody) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	if m.unknownFields != nil {
 		i = protobuf_go_lite.EncodeRawBytes(dAtA, i, m.unknownFields)
 	}
+	if len(m.BodyJson) > 0 {
+		i = protobuf_go_lite.EncodeString(dAtA, i, m.BodyJson)
+		i--
+		dAtA[i] = 0x3a
+	}
+	if len(m.TypeId) > 0 {
+		i = protobuf_go_lite.EncodeString(dAtA, i, m.TypeId)
+		i--
+		dAtA[i] = 0x32
+	}
 	if m.ModSeqno != 0 {
 		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(m.ModSeqno))
 		i--
@@ -18153,6 +18228,11 @@ func (m *GetObjectBodiesBatchRequest) MarshalToSizedBufferVT(dAtA []byte) (int, 
 	_ = l
 	if m.unknownFields != nil {
 		i = protobuf_go_lite.EncodeRawBytes(dAtA, i, m.unknownFields)
+	}
+	if m.Json {
+		i = protobuf_go_lite.EncodeBool(dAtA, i, m.Json)
+		i--
+		dAtA[i] = 0x10
 	}
 	if len(m.ObjectKeys) > 0 {
 		for iNdEx := len(m.ObjectKeys) - 1; iNdEx >= 0; iNdEx-- {
@@ -21142,6 +21222,8 @@ func (m *ObjectBody) SizeVT() (n int) {
 	n += protobuf_go_lite.SizeBoolNonZero(1, m.Exists)
 	n += protobuf_go_lite.SizeVarintNonZero(1, m.Rev)
 	n += protobuf_go_lite.SizeVarintNonZero(1, m.ModSeqno)
+	n += protobuf_go_lite.SizeStringNonEmpty(1, m.TypeId)
+	n += protobuf_go_lite.SizeStringNonEmpty(1, m.BodyJson)
 	n += len(m.unknownFields)
 	return n
 }
@@ -21153,6 +21235,7 @@ func (m *GetObjectBodiesBatchRequest) SizeVT() (n int) {
 	var l int
 	_ = l
 	n += protobuf_go_lite.SizeStringSlice(1, m.ObjectKeys)
+	n += protobuf_go_lite.SizeBoolNonZero(1, m.Json)
 	n += len(m.unknownFields)
 	return n
 }
@@ -23153,6 +23236,14 @@ func (x *ObjectBody) MarshalProtoText() string {
 		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "mod_seqno")
 		protobuf_go_lite.TextWriteUint(&sb, x.ModSeqno)
 	}
+	if x.TypeId != "" {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "type_id")
+		protobuf_go_lite.TextWriteString(&sb, x.TypeId)
+	}
+	if x.BodyJson != "" {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "body_json")
+		protobuf_go_lite.TextWriteString(&sb, x.BodyJson)
+	}
 	return protobuf_go_lite.TextFinishMessage(&sb)
 }
 
@@ -23170,6 +23261,10 @@ func (x *GetObjectBodiesBatchRequest) MarshalProtoText() string {
 			protobuf_go_lite.TextWriteString(&sb, v)
 		}
 		protobuf_go_lite.TextWriteListEnd(&sb)
+	}
+	if x.Json != false {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "json")
+		protobuf_go_lite.TextWriteBool(&sb, x.Json)
 	}
 	return protobuf_go_lite.TextFinishMessage(&sb)
 }
@@ -28673,6 +28768,26 @@ func (m *ObjectBody) UnmarshalVT(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
+		case 6:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TypeId", wireType)
+			}
+			var v string
+			v, iNdEx, err = protobuf_go_lite.DecodeString(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			m.TypeId = v
+		case 7:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field BodyJson", wireType)
+			}
+			var v string
+			v, iNdEx, err = protobuf_go_lite.DecodeString(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			m.BodyJson = v
 		default:
 			iNdEx = preIndex
 			skippy, err := protobuf_go_lite.Skip(dAtA[iNdEx:])
@@ -28726,6 +28841,16 @@ func (m *GetObjectBodiesBatchRequest) UnmarshalVT(dAtA []byte) error {
 				return err
 			}
 			m.ObjectKeys = append(m.ObjectKeys, v)
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Json", wireType)
+			}
+			var v bool
+			v, iNdEx, err = protobuf_go_lite.DecodeVarintBool(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			m.Json = bool(v)
 		default:
 			iNdEx = preIndex
 			skippy, err := protobuf_go_lite.Skip(dAtA[iNdEx:])

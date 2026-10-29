@@ -8,6 +8,7 @@ import (
 	"github.com/aperturerobotics/controllerbus/controller"
 	"github.com/aperturerobotics/controllerbus/directive"
 	"github.com/aperturerobotics/starpc/srpc"
+	"github.com/pkg/errors"
 	resource "github.com/s4wave/spacewave/bldr/resource"
 	resource_client "github.com/s4wave/spacewave/bldr/resource/client"
 	resource_server "github.com/s4wave/spacewave/bldr/resource/server"
@@ -195,7 +196,95 @@ func (r *registrationFactory) objectType() objecttype.ObjectType {
 		}
 		return r.invokePlugin(ctx, objectKey, engine)
 	}
-	return objecttype.NewObjectType(r.reg.registration.GetTypeId(), factory)
+	return &bridgeObjectType{
+		ObjectType: objecttype.NewObjectType(r.reg.registration.GetTypeId(), factory),
+		r:          r,
+	}
+}
+
+// openResources opens a Resource client generation to the handler serving
+// the registration: the caller-attached handler, or the plugin instance under
+// ctx.
+func (r *registrationFactory) openResources(ctx context.Context) (*resource_client.Client, func(), func() bool, error) {
+	if r.reg.attached != nil {
+		return openAttachedResources(r.reg.attached)
+	}
+	return openPluginResources(ctx, r.b, r.reg.registration.GetPluginId(), r.instanceKey)
+}
+
+// bridgeObjectType is a registered ObjectType whose handler renders its
+// bodies through ObjectTypeBodyService.
+type bridgeObjectType struct {
+	objecttype.ObjectType
+	// r is the admitted registration the type was built from.
+	r *registrationFactory
+}
+
+// MarshalBodiesJSON asks the handler's ObjectTypeBodyService to render
+// bodies. A handler that does not serve it leaves every body without JSON.
+// Each call opens and releases one Resource client generation.
+func (t *bridgeObjectType) MarshalBodiesJSON(ctx context.Context, bodies [][]byte) ([]string, error) {
+	// Reach the handler root on a fresh Resource client generation.
+	client, release, _, err := t.r.openResources(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	rootRef := client.AccessRootResource()
+	defer rootRef.Release()
+	rootClient, err := rootRef.GetClient()
+	if err != nil {
+		return nil, err
+	}
+
+	// Render the bodies, treating a handler without the service as no JSON.
+	resp, err := s4wave_objecttype_registry.NewSRPCObjectTypeBodyServiceClient(rootClient).MarshalBodiesJSON(ctx, &s4wave_objecttype_registry.MarshalBodiesJSONRequest{
+		TypeId: t.GetObjectTypeID(),
+		Bodies: bodies,
+	})
+	if err != nil {
+		if err.Error() == srpc.ErrUnimplemented.Error() {
+			return make([]string, len(bodies)), nil
+		}
+		return nil, err
+	}
+	if len(resp.GetBodiesJson()) != len(bodies) {
+		return nil, errors.Errorf("object type %s rendered %d of %d bodies", t.GetObjectTypeID(), len(resp.GetBodiesJson()), len(bodies))
+	}
+	return resp.GetBodiesJson(), nil
+}
+
+// openAttachedResources opens a Resource client generation on a
+// caller-attached handler. The generation lives until released or until the
+// caller generation that supplied the handler ends.
+func openAttachedResources(handler *attachedObjectTypeHandler) (*resource_client.Client, func(), func() bool, error) {
+	client, err := resource_client.NewClient(
+		handler.ctx,
+		resource.NewSRPCResourceServiceClient(handler.client),
+	)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return client, client.Release, nil, nil
+}
+
+// openPluginResources opens a Resource client generation on the plugin
+// instance. The alive callback reports whether the plugin runtime still holds
+// the generation.
+func openPluginResources(ctx context.Context, b bus.Bus, pluginID, instanceKey string) (*resource_client.Client, func(), func() bool, error) {
+	resources, err := s4wave_plugin.ConnectPluginInstanceResources(ctx, b, pluginID, instanceKey)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	alive := func() bool {
+		select {
+		case <-resources.Client.Done():
+			return false
+		default:
+			return true
+		}
+	}
+	return resources.Client, resources.Release, alive, nil
 }
 
 // invokeAttached creates an ObjectType proxy through a caller-attached handler.
@@ -449,14 +538,7 @@ func newAttachedObjectTypeInvoker(
 		caller:    caller,
 		detachCtx: handler.ctx,
 		openResources: func(_ context.Context) (*resource_client.Client, func(), func() bool, error) {
-			client, err := resource_client.NewClient(
-				handler.ctx,
-				resource.NewSRPCResourceServiceClient(handler.client),
-			)
-			if err != nil {
-				return nil, nil, nil, err
-			}
-			return client, client.Release, nil, nil
+			return openAttachedResources(handler)
 		},
 	}
 	return i
@@ -512,19 +594,7 @@ func newPluginObjectTypeInvoker(
 		caller:    caller,
 		detachCtx: resourceClientCtx,
 		openResources: func(_ context.Context) (*resource_client.Client, func(), func() bool, error) {
-			resources, err := s4wave_plugin.ConnectPluginInstanceResources(resourceClientCtx, b, reg.GetPluginId(), instanceKey)
-			if err != nil {
-				return nil, nil, nil, err
-			}
-			alive := func() bool {
-				select {
-				case <-resources.Client.Done():
-					return false
-				default:
-					return true
-				}
-			}
-			return resources.Client, resources.Release, alive, nil
+			return openPluginResources(resourceClientCtx, b, reg.GetPluginId(), instanceKey)
 		},
 	}
 	return i
@@ -554,4 +624,7 @@ func (i *pluginObjectTypeInvoker) Close() {
 }
 
 // _ is a type assertion
-var _ controller.Controller = (*BridgeController)(nil)
+var (
+	_ controller.Controller    = (*BridgeController)(nil)
+	_ objecttype.BodyMarshaler = (*bridgeObjectType)(nil)
+)

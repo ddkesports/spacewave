@@ -71,7 +71,7 @@ func NewFactory(b bus.Bus) controller.Factory {
 			return &Config{}
 		},
 		func(base *bus.BusController[*Config]) (*Controller, error) {
-			// Serve the ObjectType and operations of WasiVM.
+			// Serve the ObjectType, its bodies and the operations of WasiVM.
 			h := newHandler(base.GetLogger(), base.GetBus())
 			rootMux := resource_server.NewResourceMux(
 				func(mux srpc.Mux) error {
@@ -79,6 +79,9 @@ func NewFactory(b bus.Bus) controller.Factory {
 				},
 				func(mux srpc.Mux) error {
 					return s4wave_worldop_registry.SRPCRegisterWorldOpHandlerService(mux, s4wave_worldop_registry.NewHandler(base.GetLogger(), wasiVMSchema.LookupOp))
+				},
+				func(mux srpc.Mux) error {
+					return s4wave_objecttype_registry.SRPCRegisterObjectTypeBodyService(mux, s4wave_objecttype_registry.NewBodyHandler(wasiVMSchema.LookupBlockType))
 				},
 			)
 

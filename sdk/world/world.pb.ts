@@ -1828,6 +1828,16 @@ export interface ObjectBody {
    * object. Zero when the World cannot report it.
    */
   modSeqno?: bigint
+  /**
+   * TypeId is the object's ObjectType ID, set when the request asked for
+   * JSON.
+   */
+  typeId?: string
+  /**
+   * BodyJson is body rendered as JSON, set when the request asked for JSON
+   * and the type's owner, the host or its plugin, can render it.
+   */
+  bodyJson?: string
 }
 
 export const ObjectBody: MessageType<ObjectBody> =
@@ -1839,6 +1849,8 @@ export const ObjectBody: MessageType<ObjectBody> =
       [3, 'exists', 8],
       [4, 'rev', 4],
       [5, 'mod_seqno', 4],
+      [6, 'type_id', 9],
+      [7, 'body_json', 9],
     ],
   )
 
@@ -1853,12 +1865,19 @@ export interface GetObjectBodiesBatchRequest {
    * ObjectKeys is the list of object keys to inspect.
    */
   objectKeys?: string[]
+  /**
+   * Json asks for each body's type ID and JSON rendering.
+   */
+  json?: boolean
 }
 
 export const GetObjectBodiesBatchRequest: MessageType<GetObjectBodiesBatchRequest> =
   /* @__PURE__ */ createMessageType<GetObjectBodiesBatchRequest>(
     's4wave.world.GetObjectBodiesBatchRequest',
-    () => [[1, 'object_keys', 9, 1]],
+    () => [
+      [1, 'object_keys', 9, 1],
+      [2, 'json', 8],
+    ],
   )
 
 /**

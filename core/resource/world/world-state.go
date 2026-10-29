@@ -14,12 +14,14 @@ import (
 	"github.com/s4wave/spacewave/core/sobject"
 	"github.com/s4wave/spacewave/db/block"
 	"github.com/s4wave/spacewave/db/block/quad"
+	"github.com/s4wave/spacewave/db/blocktype"
 	bucket_lookup "github.com/s4wave/spacewave/db/bucket/lookup"
 	"github.com/s4wave/spacewave/db/world"
 	world_block "github.com/s4wave/spacewave/db/world/block"
 	world_types "github.com/s4wave/spacewave/db/world/types"
 	"github.com/s4wave/spacewave/net/peer"
 	s4wave_world "github.com/s4wave/spacewave/sdk/world"
+	"github.com/s4wave/spacewave/sdk/world/objecttype"
 	"github.com/sirupsen/logrus"
 )
 
@@ -772,6 +774,11 @@ func (r *WorldStateResource) GetObjectBodiesBatch(
 		r.observeOperation(record, started, retErr)
 	}()
 
+	// Render JSON under the mount's registry scope, as typed access does.
+	if r.engineIDBound {
+		ctx = objecttype.WithEngineID(ctx, r.engineID)
+	}
+
 	// Stream object body pages and count existing objects.
 	retErr = streamObjectBodyPages(
 		ctx,
@@ -784,10 +791,108 @@ func (r *WorldStateResource) GetObjectBodiesBatch(
 					record.ResultObjectCount++
 				}
 			}
+			if req.GetJson() {
+				if err := r.renderBodiesJSON(ctx, resp.GetBodies()); err != nil {
+					return err
+				}
+			}
 			return strm.Send(resp)
 		},
 	)
 	return retErr
+}
+
+// renderBodiesJSON sets the type ID and JSON of each existing body. The host
+// renders the types its block type lookup knows; the plugin that registered
+// a type renders the rest. A body neither can render keeps empty JSON.
+func (r *WorldStateResource) renderBodiesJSON(ctx context.Context, bodies []*s4wave_world.ObjectBody) error {
+	// Read the type of every existing object.
+	keys := make([]string, 0, len(bodies))
+	idx := make([]int, 0, len(bodies))
+	for i, body := range bodies {
+		if body.GetExists() {
+			keys = append(keys, body.GetObjectKey())
+			idx = append(idx, i)
+		}
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	metadata, err := world_types.GetObjectMetadataBatch(ctx, r.ws, keys)
+	if err != nil {
+		return err
+	}
+
+	// Group the bodies by type, keeping the page order within each type.
+	byType := make(map[string][]int)
+	var typeIDs []string
+	for j, md := range metadata {
+		body := bodies[idx[j]]
+		body.TypeId = md.TypeID
+		if md.TypeID == "" {
+			continue
+		}
+		if _, ok := byType[md.TypeID]; !ok {
+			typeIDs = append(typeIDs, md.TypeID)
+		}
+		byType[md.TypeID] = append(byType[md.TypeID], idx[j])
+	}
+
+	// Render each type's bodies with one lookup and at most one plugin call.
+	for _, typeID := range typeIDs {
+		members := byType[typeID]
+		raw := make([][]byte, len(members))
+		for k, i := range members {
+			raw[k] = bodies[i].GetBody()
+		}
+		rendered, err := renderTypeJSON(ctx, r.le, r.b, typeID, raw)
+		if err != nil {
+			return err
+		}
+		for k, i := range members {
+			bodies[i].BodyJson = rendered[k]
+		}
+	}
+	return nil
+}
+
+// renderTypeJSON renders bodies of typeID as JSON through the host block
+// type lookup, or else through the registered ObjectType's owner. It returns
+// empty strings when neither knows the type or the owner fails, so one
+// failing plugin leaves only its own bodies without JSON.
+func renderTypeJSON(ctx context.Context, le *logrus.Entry, b bus.Bus, typeID string, bodies [][]byte) ([]string, error) {
+	// Decode in the host when its block types include typeID.
+	btv, _, btRef, err := bus.ExecOneOffTyped[blocktype.LookupBlockTypeValue](ctx, b, blocktype.NewLookupBlockType(typeID), bus.ReturnWhenIdle(), nil)
+	if err != nil {
+		return nil, err
+	}
+	if btv != nil {
+		defer btRef.Release()
+		return blocktype.RenderJSON(btv.GetValue(), bodies), nil
+	}
+	if btRef != nil {
+		btRef.Release()
+	}
+
+	// Ask the plugin that registered typeID.
+	ot, otRef, err := objecttype.ExLookupObjectType(ctx, b, typeID)
+	if err != nil {
+		return nil, err
+	}
+	if otRef != nil {
+		defer otRef.Release()
+	}
+	if m, ok := ot.(objecttype.BodyMarshaler); ok {
+		rendered, err := m.MarshalBodiesJSON(ctx, bodies)
+		if err == nil {
+			return rendered, nil
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		le.WithError(err).WithField("type-id", typeID).Warn("object type owner could not render bodies as JSON")
+	}
+	return make([]string, len(bodies)), nil
 }
 
 // objectBodiesBatchBudget bounds encoded object bodies in each Resource response.

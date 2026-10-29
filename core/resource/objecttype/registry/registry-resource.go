@@ -8,6 +8,7 @@ import (
 	"github.com/aperturerobotics/util/broadcast"
 	resource_server "github.com/s4wave/spacewave/bldr/resource/server"
 	"github.com/s4wave/spacewave/core/resource/registration"
+	"github.com/s4wave/spacewave/core/space/world/objecttypes"
 	s4wave_objecttype_registry "github.com/s4wave/spacewave/sdk/objecttype/registry"
 )
 
@@ -21,6 +22,8 @@ type ObjectTypeRegistryResource struct {
 	bcast         *broadcast.Broadcast
 	nextID        uint32
 	registrations map[uint32]*objectTypeRegistration
+	// builtInTypeIDs lists the host's compiled ObjectTypes, sorted.
+	builtInTypeIDs []string
 }
 
 // objectTypeRegistration keeps private handler capability state beside the
@@ -43,10 +46,11 @@ func NewObjectTypeRegistryResource(generations *registration.Registry) *ObjectTy
 		generations = registration.NewRegistry()
 	}
 	r := &ObjectTypeRegistryResource{
-		generations:   generations,
-		bcast:         generations.Broadcast(),
-		nextID:        1,
-		registrations: make(map[uint32]*objectTypeRegistration),
+		generations:    generations,
+		bcast:          generations.Broadcast(),
+		nextID:         1,
+		registrations:  make(map[uint32]*objectTypeRegistration),
+		builtInTypeIDs: objecttypes.BuiltInObjectTypeIDs(),
 	}
 	mux := srpc.NewMux()
 	_ = s4wave_objecttype_registry.SRPCRegisterObjectTypeRegistryResourceService(mux, r)
@@ -186,7 +190,8 @@ func (r *ObjectTypeRegistryResource) WatchObjectTypes(
 		})
 
 		if err := strm.Send(&s4wave_objecttype_registry.WatchObjectTypesResponse{
-			Registrations: regs,
+			Registrations:  regs,
+			BuiltInTypeIds: r.builtInTypeIDs,
 		}); err != nil {
 			return err
 		}

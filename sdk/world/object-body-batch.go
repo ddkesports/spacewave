@@ -30,15 +30,57 @@ func ForEachObjectBodyPage(
 	keys []string,
 	cb func([]*world.ObjectBody) error,
 ) error {
-	// Require object keys and a callback before opening page streams.
-	if len(keys) == 0 {
-		return nil
-	}
 	if cb == nil {
 		return errors.New("object body page callback is nil")
 	}
+	return forEachObjectBodiesResponse(ctx, service, keys, false, func(resp *GetObjectBodiesBatchResponse) error {
+		// Copy the page's object bodies before invoking the callback.
+		page := make([]*world.ObjectBody, len(resp.GetBodies()))
+		for i, body := range resp.GetBodies() {
+			page[i] = &world.ObjectBody{
+				ObjectKey: body.GetObjectKey(),
+				Body:      append([]byte(nil), body.GetBody()...),
+				Exists:    body.GetExists(),
+				Rev:       body.GetRev(),
+				ModSeqno:  body.GetModSeqno(),
+			}
+		}
+		return cb(page)
+	})
+}
 
+// ForEachObjectBodyJSONPage calls cb with each page of object bodies carrying
+// their type IDs and, where the host or the type's plugin can render them,
+// JSON. The page belongs to cb. Returns ObjectBodiesBatchRevisionError when
+// pages come from different World revisions.
+func ForEachObjectBodyJSONPage(
+	ctx context.Context,
+	service ObjectBodiesBatchService,
+	keys []string,
+	cb func([]*ObjectBody) error,
+) error {
+	if cb == nil {
+		return errors.New("object body page callback is nil")
+	}
+	return forEachObjectBodiesResponse(ctx, service, keys, true, func(resp *GetObjectBodiesBatchResponse) error {
+		return cb(resp.GetBodies())
+	})
+}
+
+// forEachObjectBodiesResponse streams the GetObjectBodiesBatch pages for keys
+// to cb, in key chunks that fit the request budget, and requires every page
+// to come from the first page's World revision.
+func forEachObjectBodiesResponse(
+	ctx context.Context,
+	service ObjectBodiesBatchService,
+	keys []string,
+	json bool,
+	cb func(*GetObjectBodiesBatchResponse) error,
+) error {
 	// Split the object keys into requests that fit the byte budget.
+	if len(keys) == 0 {
+		return nil
+	}
 	chunks, err := chunkObjectBodyKeys(keys)
 	if err != nil {
 		return err
@@ -49,7 +91,7 @@ func ForEachObjectBodyPage(
 	var haveWorldSeqno bool
 	for _, chunk := range chunks {
 		// Open the object body stream for this key chunk.
-		strm, err := service.GetObjectBodiesBatch(ctx, &GetObjectBodiesBatchRequest{ObjectKeys: chunk})
+		strm, err := service.GetObjectBodiesBatch(ctx, &GetObjectBodiesBatchRequest{ObjectKeys: chunk, Json: json})
 		if err != nil {
 			return err
 		}
@@ -79,19 +121,7 @@ func ForEachObjectBodyPage(
 						Got:      pageSeqno,
 					}
 				}
-
-				// Copy the page's object bodies before invoking the callback.
-				page := make([]*world.ObjectBody, len(resp.GetBodies()))
-				for i, body := range resp.GetBodies() {
-					page[i] = &world.ObjectBody{
-						ObjectKey: body.GetObjectKey(),
-						Body:      append([]byte(nil), body.GetBody()...),
-						Exists:    body.GetExists(),
-						Rev:       body.GetRev(),
-						ModSeqno:  body.GetModSeqno(),
-					}
-				}
-				if err := cb(page); err != nil {
+				if err := cb(resp); err != nil {
 					return err
 				}
 			}

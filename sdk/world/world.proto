@@ -736,6 +736,12 @@ message ObjectBody {
   // ModSeqno is the World seqno after the last commit that changed the
   // object. Zero when the World cannot report it.
   uint64 mod_seqno = 5;
+  // TypeId is the object's ObjectType ID, set when the request asked for
+  // JSON.
+  string type_id = 6;
+  // BodyJson is body rendered as JSON, set when the request asked for JSON
+  // and the type's owner, the host or its plugin, can render it.
+  string body_json = 7;
 }
 
 // GetObjectBodiesBatchRequest is the request type for
@@ -743,6 +749,8 @@ message ObjectBody {
 message GetObjectBodiesBatchRequest {
   // ObjectKeys is the list of object keys to inspect.
   repeated string object_keys = 1;
+  // Json asks for each body's type ID and JSON rendering.
+  bool json = 2;
 }
 
 // GetObjectBodiesBatchResponse is one page of GetObjectBodiesBatch.
