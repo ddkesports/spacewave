@@ -733,6 +733,9 @@ message ObjectBody {
   bool exists = 3;
   // Rev is the object revision observed with body.
   uint64 rev = 4;
+  // ModSeqno is the World seqno after the last commit that changed the
+  // object. Zero when the World cannot report it.
+  uint64 mod_seqno = 5;
 }
 
 // GetObjectBodiesBatchRequest is the request type for

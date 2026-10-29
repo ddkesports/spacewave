@@ -143,6 +143,12 @@ export interface Object$ {
    * Incremented when adding or removing a graph quad referencing Object.
    */
   rev?: bigint
+  /**
+   * ModSeqno is the World seqno after the last commit that wrote this Object
+   * record. Rev counts this Object's own changes; ModSeqno orders them with
+   * every other change in the World.
+   */
+  modSeqno?: bigint
 }
 
 export const Object$: MessageType<Object$> =
@@ -150,6 +156,7 @@ export const Object$: MessageType<Object$> =
     [1, 'key', 9],
     [2, 'root_ref', 11, 0, ObjectRef.codec],
     [3, 'rev', 4],
+    [4, 'mod_seqno', 4],
   ])
 
 /**

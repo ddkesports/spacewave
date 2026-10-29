@@ -59,6 +59,10 @@ message Object {
   // Incremented when root_ref is changed (SetRootRef).
   // Incremented when adding or removing a graph quad referencing Object.
   uint64 rev = 3;
+  // ModSeqno is the World seqno after the last commit that wrote this Object
+  // record. Rev counts this Object's own changes; ModSeqno orders them with
+  // every other change in the World.
+  uint64 mod_seqno = 4;
 }
 
 // WorldChange is an entry in the changelog.

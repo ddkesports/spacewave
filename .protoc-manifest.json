@@ -2575,7 +2575,7 @@
       ]
     },
     "github.com/s4wave/spacewave/db/world/block": {
-      "hash": "cd79c9c3313a2fd2363a9f2cc252334a9a1f384cfe57bbbbad6c3b2ffcfe50a3",
+      "hash": "a5fe25600deca2ca429a09c0db02e16a5a93422ea191a519ed0477fb2cdce17a",
       "generatedFiles": [
         "db/world/block/nested-world.pb.go",
         "db/world/block/nested-world.pb.ts",
@@ -4409,7 +4409,7 @@
       ]
     },
     "github.com/s4wave/spacewave/sdk/world": {
-      "hash": "dfc63b03fc5f3f3623a430a3f3168edc916420d5ff9dd521c3d912c46fe3e42b",
+      "hash": "bdd70bd4c52ea2072713d9173458d31b045ddcd3b9c5dbce6bf74c4efceeafb9",
       "generatedFiles": [
         "sdk/world/world.pb.go",
         "sdk/world/world.pb.ts",

@@ -1823,6 +1823,11 @@ export interface ObjectBody {
    * Rev is the object revision observed with body.
    */
   rev?: bigint
+  /**
+   * ModSeqno is the World seqno after the last commit that changed the
+   * object. Zero when the World cannot report it.
+   */
+  modSeqno?: bigint
 }
 
 export const ObjectBody: MessageType<ObjectBody> =
@@ -1833,6 +1838,7 @@ export const ObjectBody: MessageType<ObjectBody> =
       [2, 'body', 12],
       [3, 'exists', 8],
       [4, 'rev', 4],
+      [5, 'mod_seqno', 4],
     ],
   )
 

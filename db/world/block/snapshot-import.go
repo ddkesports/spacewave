@@ -136,10 +136,14 @@ func importWorld(
 				bodyErr = errors.Wrapf(bodyErr, "write object %s", key)
 				return
 			}
+			// Number the objects in import order. The import's history
+			// starts after its last change, so these need only precede that
+			// seqno; they do not match a replay of the source World.
+			count++
 			obj := NewObject(key, ref)
 			obj.Rev += ends[key]
+			obj.ModSeqno = count
 			delete(ends, key)
-			count++
 			if !yield([]byte(objectKeyPrefix+key), obj) {
 				return
 			}

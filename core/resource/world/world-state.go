@@ -815,6 +815,7 @@ func streamObjectBodyPages(
 				Body:      body.Body,
 				Exists:    body.Exists,
 				Rev:       body.Rev,
+				ModSeqno:  body.ModSeqno,
 			}
 		}
 		err = send(&s4wave_world.GetObjectBodiesBatchResponse{

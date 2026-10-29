@@ -21,6 +21,9 @@ type ObjectBody struct {
 	Body []byte
 	// Rev is the object revision observed with Body.
 	Rev uint64
+	// ModSeqno is the World seqno after the last commit that changed the
+	// object. Zero when the object state does not report it.
+	ModSeqno uint64
 	// Exists reports whether the object key exists.
 	Exists bool
 }
@@ -79,16 +82,11 @@ func GetObjectBodiesBatch(ctx context.Context, ws WorldState, keys []string) ([]
 	// Read each object body and preserve the requested key order.
 	out := make([]*ObjectBody, len(keys))
 	for i, key := range keys {
-		body, rev, exists, err := LookupObjectBodyBytesWithRev(ctx, ws, key)
+		body, err := LookupObjectBodyEntry(ctx, ws, key)
 		if err != nil {
 			return nil, err
 		}
-		out[i] = &ObjectBody{
-			ObjectKey: key,
-			Body:      body,
-			Rev:       rev,
-			Exists:    exists,
-		}
+		out[i] = body
 	}
 	return out, nil
 }
@@ -107,8 +105,8 @@ func GetObjectBodiesBatchPage(
 		return pager.GetObjectBodiesBatchPage(ctx, keys, byteBudget)
 	}
 
-	return getObjectBodiesBatchPage(ctx, keys, byteBudget, func(ctx context.Context, key string) ([]byte, uint64, bool, error) {
-		return LookupObjectBodyBytesWithRev(ctx, ws, key)
+	return getObjectBodiesBatchPage(ctx, keys, byteBudget, func(ctx context.Context, key string) (*ObjectBody, error) {
+		return LookupObjectBodyEntry(ctx, ws, key)
 	})
 }
 
@@ -116,7 +114,7 @@ func getObjectBodiesBatchPage(
 	ctx context.Context,
 	keys []string,
 	byteBudget int,
-	lookup func(context.Context, string) ([]byte, uint64, bool, error),
+	lookup func(context.Context, string) (*ObjectBody, error),
 ) ([]*ObjectBody, uint32, error) {
 	out := make([]*ObjectBody, 0, len(keys))
 	encodedSize := 0
@@ -124,15 +122,9 @@ func getObjectBodiesBatchPage(
 		if len(out) > 0 && encodedSize >= byteBudget {
 			return out, uint32(i), nil
 		}
-		body, rev, exists, err := lookup(ctx, key)
+		result, err := lookup(ctx, key)
 		if err != nil {
 			return nil, 0, err
-		}
-		result := &ObjectBody{
-			ObjectKey: key,
-			Body:      body,
-			Rev:       rev,
-			Exists:    exists,
 		}
 		resultSize := objectBodyEncodedSize(result)
 		if resultSize > byteBudget {
@@ -167,7 +159,7 @@ func GetObjectBodiesBatchPageWithSeqno(
 
 // objectBodyEncodedSize matches the generated protobuf size of one repeated
 // ObjectBody response entry, including its key, body, exists flag, revision,
-// and the enclosing repeated-message tag and length.
+// ModSeqno, and the enclosing repeated-message tag and length.
 func objectBodyEncodedSize(body *ObjectBody) int {
 	// Measure the object body fields and their enclosing protobuf entry.
 	if body == nil {
@@ -185,6 +177,9 @@ func objectBodyEncodedSize(body *ObjectBody) int {
 	}
 	if body.Rev != 0 {
 		bodySize += 1 + protoVarintSize(body.Rev)
+	}
+	if body.ModSeqno != 0 {
+		bodySize += 1 + protoVarintSize(body.ModSeqno)
 	}
 	return 1 + protoVarintSize(uint64(bodySize)) + bodySize
 }

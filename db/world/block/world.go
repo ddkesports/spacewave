@@ -74,6 +74,10 @@ type WorldState struct {
 	objectExistsMemo map[string]struct{}
 
 	pendingChanges []*block.Cursor // *WorldChange
+	// modObjects holds the record cursors of each object written since the last
+	// Commit, which stamps them with the seqno it reaches. The last cursor of a
+	// key holds the record in the tree; earlier ones back changelog entries.
+	modObjects map[string][]*block.Cursor
 
 	// seqnoBcast guards below fields
 	seqnoBcast broadcast.Broadcast
@@ -489,6 +493,7 @@ func (t *WorldState) setBlockTransaction(
 
 	// The rebuilt block state supersedes any transaction-local object memo.
 	t.objectExistsMemo = nil
+	t.modObjects = nil
 	subtask.End()
 
 	// Update the sequence number from the new root.
@@ -527,6 +532,7 @@ func (t *WorldState) Discard() {
 		t.readRelease = nil
 	}
 	t.objectExistsMemo = nil
+	t.modObjects = nil
 	t.seqnoBcast.HoldLock(func(broadcast func(), getWaitCh func() <-chan struct{}) {
 		broadcast()
 	})
@@ -574,7 +580,16 @@ func (t *WorldState) Commit(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("world change log: %w", err)
 	}
+
+	// Stamp the written objects with the seqno this commit reaches.
+	taskCtx, subtask = trace.NewTask(ctx, "hydra/world-block/world-state/commit/stamp-mod-seqno")
+	err = t.stampModSeqno(taskCtx, w.GetLastChange().GetSeqno())
+	subtask.End()
+	if err != nil {
+		return fmt.Errorf("object mod seqno: %w", err)
+	}
 	if t.btx == nil {
+		t.modObjects = nil
 		return nil
 	}
 

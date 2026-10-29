@@ -491,12 +491,15 @@ func (t *WorldState) IsWrite() bool {
 // store lacks gets a readable record again. The object keeps its graph quads.
 // Appends an OBJECT_SET change to the changelog.
 func (t *WorldState) ReplaceObjectRecord(ctx context.Context, key string, rootRef *bucket.ObjectRef) error {
+	// Require an open write transaction.
 	if !t.write {
 		return tx.ErrNotWrite
 	}
 	if t.discarded.Load() {
 		return tx.ErrDiscarded
 	}
+
+	// Write the new record over whatever the tree holds at key.
 	k := []byte(objectKeyPrefix + key)
 	obj := NewObject(key, t.localObjectRef(rootRef))
 	nbcs := t.bcs.Detach(false)
@@ -505,6 +508,9 @@ func (t *WorldState) ReplaceObjectRecord(ctx context.Context, key string, rootRe
 	if err := t.objTree.SetCursorAtKey(ctx, k, nbcs, false); err != nil {
 		return err
 	}
+	t.markObjectWritten(key, nbcs)
+
+	// Record the write in the changelog and the existence memo.
 	changeBcs, err := t.queueWorldChange(ctx, &WorldChange{
 		Key:        key,
 		ChangeType: WorldChangeType_WorldChange_OBJECT_SET,

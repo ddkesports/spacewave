@@ -36,6 +36,14 @@ func (o *ObjectState) le() *logrus.Entry {
 	return o.ble.WithField("object-key", objectKeyForLogging(o.GetKey()))
 }
 
+// GetModSeqno returns the wrapped object's ModSeqno.
+func (o *ObjectState) GetModSeqno(ctx context.Context) (seqno uint64, err error) {
+	defer func() {
+		o.le().Debugf("GetModSeqno() => seqno(%v) err(%v)", seqno, err)
+	}()
+	return world.GetObjectModSeqno(ctx, o.ObjectState)
+}
+
 // GetRootRef returns the root reference.
 // Returns the revision number.
 func (o *ObjectState) GetRootRef(ctx context.Context) (ref *bucket.ObjectRef, rev uint64, err error) {

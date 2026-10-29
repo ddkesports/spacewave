@@ -163,45 +163,52 @@ func LookupObjectBodyBytes(
 	ws WorldState,
 	objKey string,
 ) ([]byte, bool, error) {
-	body, _, exists, err := LookupObjectBodyBytesWithRev(ctx, ws, objKey)
-	return body, exists, err
+	body, err := LookupObjectBodyEntry(ctx, ws, objKey)
+	if err != nil {
+		return nil, false, err
+	}
+	return body.Body, body.Exists, nil
 }
 
-// LookupObjectBodyBytesWithRev looks up the transformed root body and revision
-// for an object. It returns nil, 0, false, nil when the object does not exist.
-func LookupObjectBodyBytesWithRev(
-	ctx context.Context,
-	ws WorldState,
-	objKey string,
-) ([]byte, uint64, bool, error) {
+// LookupObjectBodyEntry looks up the transformed root body of an object with
+// its revision and, when the object state reports it, its ModSeqno. A missing
+// object returns a body with Exists unset.
+func LookupObjectBodyEntry(ctx context.Context, ws WorldState, objKey string) (*ObjectBody, error) {
 	// Acquire the requested object state for the body read.
+	out := &ObjectBody{ObjectKey: objKey}
 	obj, found, err := ws.GetObject(ctx, objKey)
 	if err != nil {
 		ReleaseObjectState(obj)
-		return nil, 0, false, err
+		return nil, err
 	}
 	if !found {
-		return nil, 0, false, nil
+		return out, nil
 	}
 	defer ReleaseObjectState(obj)
 
-	// Read the object root and its corresponding revision.
+	// Read the object root, its revision and its ModSeqno.
 	rootRef, rev, err := obj.GetRootRef(ctx)
 	if err != nil {
-		return nil, 0, false, err
+		return nil, err
+	}
+	out.Rev, out.Exists = rev, true
+	out.ModSeqno, err = GetObjectModSeqno(ctx, obj)
+	if err != nil {
+		return nil, err
 	}
 
 	// Fetch the root block bytes through the object storage cursor.
-	var body []byte
 	_, err = AccessObject(ctx, obj.AccessWorldState, rootRef, func(bcs *block.Cursor) error {
-		var found bool
-		body, found, err = bcs.Fetch(ctx)
-		if err == nil && !found {
-			body = nil
+		body, found, err := bcs.Fetch(ctx)
+		if found {
+			out.Body = body
 		}
 		return err
 	})
-	return body, rev, true, err
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // LookupObjectRef looks up & unmarshals an object ref from the world.

@@ -13,7 +13,7 @@ import (
 func TestObjectBodyEncodedSizeMatchesGeneratedProto(t *testing.T) {
 	cases := []*world.ObjectBody{
 		{ObjectKey: "obj/a", Body: []byte("payload"), Rev: 7, Exists: true},
-		{ObjectKey: "obj/b", Rev: 1 << 40, Exists: true},
+		{ObjectKey: "obj/b", Rev: 1 << 40, ModSeqno: 1 << 33, Exists: true},
 		{ObjectKey: "obj/missing"},
 	}
 	for _, body := range cases {
@@ -21,6 +21,7 @@ func TestObjectBodyEncodedSizeMatchesGeneratedProto(t *testing.T) {
 			ObjectKey: body.ObjectKey,
 			Body:      body.Body,
 			Rev:       body.Rev,
+			ModSeqno:  body.ModSeqno,
 			Exists:    body.Exists,
 		}
 		size := wire.SizeVT()

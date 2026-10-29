@@ -88,6 +88,7 @@ func ForEachObjectBodyPage(
 						Body:      append([]byte(nil), body.GetBody()...),
 						Exists:    body.GetExists(),
 						Rev:       body.GetRev(),
+						ModSeqno:  body.GetModSeqno(),
 					}
 				}
 				if err := cb(page); err != nil {

@@ -17,8 +17,8 @@ func TestGetObjectBodiesBatchPageRejectsOversizedFirstBody(t *testing.T) {
 		context.Background(),
 		[]string{key},
 		byteBudget,
-		func(context.Context, string) ([]byte, uint64, bool, error) {
-			return body, 1, true, nil
+		func(_ context.Context, key string) (*ObjectBody, error) {
+			return &ObjectBody{ObjectKey: key, Body: body, Rev: 1, Exists: true}, nil
 		},
 	)
 

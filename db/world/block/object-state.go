@@ -207,6 +207,7 @@ func (o *ObjectState) setRoot(ctx context.Context, root *Object) error {
 	}
 	cursor.SetBlock(root, true)
 	o.bcs = cursor
+	o.w.markObjectWritten(o.key, cursor)
 	if _, packed := o.w.objTree.(*kvtx_block_okra.Tx); packed {
 		return o.w.objTree.SetCursorAtKey(ctx, []byte(objectKeyPrefix+o.key), cursor, false)
 	}

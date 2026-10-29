@@ -53,6 +53,21 @@ func (t *TxObjectState) GetRootRef(ctx context.Context) (*bucket.ObjectRef, uint
 	return t.o.GetRootRef(ctx)
 }
 
+// GetModSeqno returns the World seqno after the last commit that changed the
+// object.
+func (t *TxObjectState) GetModSeqno(ctx context.Context) (uint64, error) {
+	// Read under the transaction lock unless the transaction is gone.
+	unlock, err := t.tx.rmtx.Lock(ctx, false)
+	if err != nil {
+		return 0, err
+	}
+	defer unlock()
+	if t.tx.state.discarded.Load() {
+		return 0, tx.ErrDiscarded
+	}
+	return world.GetObjectModSeqno(ctx, t.o)
+}
+
 // AccessWorldState builds a bucket lookup cursor with an optional ref.
 // If the ref is empty, will default to the object RootRef.
 // If the ref Bucket ID is empty, uses the same bucket + volume as the world.

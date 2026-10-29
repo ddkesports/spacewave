@@ -100,6 +100,9 @@ func (t *WorldState) CreateObject(ctx context.Context, key string, rootRef *buck
 	if err != nil {
 		return nil, err
 	}
+
+	// Stamp the record at Commit and open its state.
+	t.markObjectWritten(key, nbcs)
 	objState, err := NewObjectState(ctx, t, nbcs)
 	if err != nil {
 		return nil, err
@@ -184,6 +187,7 @@ func (t *WorldState) renameObjectSingle(ctx context.Context, oldKey, newKey stri
 	if err := ot.SetCursorAtKey(ctx, newTreeKey, newBcs, false); err != nil {
 		return nil, err
 	}
+	t.markObjectWritten(newKey, newBcs)
 
 	// Rewrite relationships before removing their original object entry.
 	if err := t.renameGraphObject(ctx, oldKey, newKey); err != nil {
@@ -195,6 +199,7 @@ func (t *WorldState) renameObjectSingle(ctx context.Context, oldKey, newKey stri
 	if err := ot.Delete(ctx, oldTreeKey); err != nil {
 		return nil, err
 	}
+	t.forgetObjectWritten(oldKey)
 
 	// The old key no longer resolves; drop any stale object memo entry.
 	t.forgetObject(oldKey)
@@ -375,6 +380,7 @@ func (t *WorldState) DeleteObject(ctx context.Context, key string) (bool, error)
 	if err != nil {
 		return true, err
 	}
+	t.forgetObjectWritten(key)
 
 	// A deleted object no longer exists; drop any stale object memo entry.
 	t.forgetObject(key)
@@ -422,6 +428,7 @@ func (t *WorldState) PurgeObject(ctx context.Context, key string) (bool, error) 
 		return false, err
 	}
 	t.forgetObject(key)
+	t.forgetObjectWritten(key)
 	if err := t.DeleteGraphObject(ctx, key); err != nil {
 		return true, err
 	}
