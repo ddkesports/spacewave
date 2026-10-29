@@ -830,7 +830,7 @@
     },
     {
       "name": "github.com/aperturerobotics/controllerbus",
-      "version": "v0.53.6-0.20261027053904-dd1f04e29852",
+      "version": "v0.53.6-0.20261029175750-384f96d17d5a",
       "spdx": "MIT",
       "source": "go",
       "repo": "https://github.com/aperturerobotics/controllerbus",
