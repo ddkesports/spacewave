@@ -27,8 +27,14 @@ func TestFetch(t *testing.T) {
 
 	// Serve the compressed WebAssembly fixture through the fetch RPC service.
 	fetchServer := NewFetchServer(func(rw http.ResponseWriter, req *http.Request) {
+		// Echo a posted body back to the caller.
+		if req.Method == http.MethodPost {
+			_, _ = io.Copy(rw, req.Body)
+			return
+		}
+
 		// Reject paths that do not select the WebAssembly fixture.
-		if req.URL.Path != testWasmFilename {
+		if strings.TrimPrefix(req.URL.Path, "/") != testWasmFilename {
 			rw.WriteHeader(404)
 			return
 		}
@@ -84,6 +90,33 @@ func TestFetch(t *testing.T) {
 	}
 	if contentEnc := res.Header.Get("content-encoding"); contentEnc != "br" {
 		t.Fatalf("incorrect content encoding: %s", contentEnc)
+	}
+
+	// Fetch the fixture through an http.Client over the Transport.
+	hc := &http.Client{Transport: NewTransport(fetchClient.Fetch)}
+	res, err = hc.Get("http://plugin/" + testWasmFilename)
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+	readData, err = io.ReadAll(res.Body)
+	_ = res.Body.Close()
+	if err != nil || res.StatusCode != 200 || !bytes.Equal(readData, testWasmBrData) {
+		t.Fatalf("transport get: status %d, err %v, data %#v", res.StatusCode, err, string(readData))
+	}
+	if contentType := res.Header.Get("content-type"); contentType != "application/wasm" {
+		t.Fatalf("transport get: incorrect content type: %s", contentType)
+	}
+
+	// Post a body larger than one data packet and read its echo.
+	posted := bytes.Repeat([]byte("spacewave"), 4096)
+	res, err = hc.Post("http://plugin/echo", "application/octet-stream", bytes.NewReader(posted))
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+	readData, err = io.ReadAll(res.Body)
+	_ = res.Body.Close()
+	if err != nil || !bytes.Equal(readData, posted) {
+		t.Fatalf("transport post: err %v, got %d bytes, want %d", err, len(readData), len(posted))
 	}
 }
 

@@ -13,104 +13,39 @@ import (
 // FetchCaller is a function which starts the Fetch call.
 type FetchCaller func(ctx context.Context) (SRPCFetchService_FetchClient, error)
 
-// Fetch executes a Fetch RPC stream with a remote.
-//
-// Returns once headers are received. Buffers response data.
+// Fetch executes a Fetch RPC stream with a remote and writes the response
+// to rw. Returns once the response body is complete.
 func Fetch(
 	ctx context.Context,
 	caller FetchCaller,
 	req *http.Request,
 	rw http.ResponseWriter,
 ) error {
-	// initialize the call
-	strm, err := caller(ctx)
+	// Send the request and wait for the response headers.
+	resp, err := roundTrip(ctx, caller, req)
 	if err != nil {
 		return err
 	}
-	defer strm.Close()
-
-	// send the request info
-	hasBody := req.Body != nil
-	err = strm.Send(NewFetchRequestWithInfo(req, "", hasBody))
-	if err != nil {
-		return err
-	}
-
-	// if we have a body, send it.
-	if hasBody {
-		buf := make([]byte, 2048)
-		for {
-			n, err := req.Body.Read(buf)
-			if err != nil && err != io.EOF {
-				return err
-			}
-			isEOF := err == io.EOF
-			if n != 0 || isEOF {
-				if werr := strm.Send(NewFetchRequestWithData(buf[:n], isEOF)); werr != nil {
-					return werr
-				}
-			}
-			if isEOF {
-				break
-			}
-		}
-	}
-
-	// wait for the response info
-	fetchResp, err := strm.Recv()
-	if err != nil {
-		return err
-	}
+	defer resp.Body.Close()
 
 	// Apply the response status and headers to the writer.
-	info := fetchResp.GetResponseInfo()
-	statusCode := info.GetStatus()
-	if statusCode == 0 {
-		statusCode = 500
+	for k, vs := range resp.Header {
+		rw.Header()[k] = append(rw.Header()[k], vs...)
 	}
-	SetHeaders(info.GetHeaders(), rw.Header())
-	rw.WriteHeader(int(statusCode))
+	rw.WriteHeader(resp.StatusCode)
 
 	// Headers are forwarded; the response can no longer be repaired with an
-	// error status. Any failure below poisons the response body via Abort so
+	// error status. A failure below poisons the response body via Abort so
 	// the remote observes an error instead of a truncated body that ends
 	// cleanly with a done packet.
-	abortBody := func(err error) error {
+	if _, err := io.Copy(rw, resp.Body); err != nil {
 		err = errors.Wrap(err, "fetch response body")
 		if aborter, ok := rw.(BodyAborter); ok {
 			aborter.Abort(err)
 		}
 		return err
 	}
-	for {
-		fetchResp, err := strm.Recv()
-		if err != nil {
-			// The remote always sends a final ResponseData packet with done=true
-			// after the last body bytes. Stream EOF before that packet means the
-			// response body is incomplete.
-			if err == io.EOF {
-				err = io.ErrUnexpectedEOF
-			}
-			return abortBody(err)
-		}
-		switch body := fetchResp.GetBody().(type) {
-		case *FetchResponse_ResponseData:
-			data := body.ResponseData.GetData()
-			written := 0
-			for written < len(data) {
-				nw, err := rw.Write(data[written:])
-				written += nw
-				if err != nil {
-					return abortBody(err)
-				}
-			}
-			if body.ResponseData.GetDone() {
-				return nil
-			}
-		default:
-			return abortBody(errors.New("unexpected non-data packet after info packet"))
-		}
-	}
+	return nil
 }
 
 // HandleFetch handles an incoming Fetch RPC stream with a http handler.
