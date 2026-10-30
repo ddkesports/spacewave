@@ -3,6 +3,7 @@ package flowgraph_plugin
 import (
 	"context"
 
+	"github.com/aperturerobotics/controllerbus/bus"
 	"github.com/aperturerobotics/starpc/srpc"
 	"github.com/pkg/errors"
 	resource_client "github.com/s4wave/spacewave/bldr/resource/client"
@@ -13,14 +14,20 @@ import (
 
 // Register publishes the Stream Echo compiler and editor through the core Resource client.
 // The returned release withdraws both registrations and detaches the compiler.
-func Register(ctx context.Context, client *resource_client.Client, root srpc.Client, editorPath string) (func() error, error) {
+func Register(ctx context.Context, b bus.Bus, client *resource_client.Client, root srpc.Client, editorPath string) (func() error, error) {
 	// Require the bundled editor before publishing the plugin's node type.
 	if editorPath == "" {
 		return nil, errors.New("Stream Echo editor bundle is unavailable")
 	}
 	nodeType := NewStreamEcho()
+	metadata := &flowgraph_registry.NodeType{
+		TypeId:      StreamEchoNodeTypeID,
+		DisplayName: nodeType.GetDisplayName(),
+		Ports:       nodeType.GetPorts(),
+		ConfigIds:   nodeType.GetConfigIDs(),
+	}
 	mux := srpc.NewMux()
-	if err := flowgraph_registry.SRPCRegisterNodeTypeResourceService(mux, flowgraph_registry.NewNodeTypeResource(StreamEchoNodeTypeID, nodeType)); err != nil {
+	if err := flowgraph_registry.SRPCRegisterNodeTypeResourceService(mux, flowgraph_registry.NewNodeTypeResource(b, metadata, nodeType)); err != nil {
 		return nil, err
 	}
 
@@ -55,12 +62,7 @@ func Register(ctx context.Context, client *resource_client.Client, root srpc.Cli
 
 	// Retain the compiler declaration until the plugin stops.
 	node, err := flowgraph_registry.NewSRPCNodeTypeRegistryResourceServiceClient(root).RegisterNodeType(ctx, &flowgraph_registry.RegisterNodeTypeRequest{
-		NodeType: &flowgraph_registry.NodeType{
-			TypeId:      StreamEchoNodeTypeID,
-			DisplayName: nodeType.GetDisplayName(),
-			Ports:       nodeType.GetPorts(),
-			ConfigIds:   nodeType.GetConfigIDs(),
-		},
+		NodeType:          metadata,
 		HandlerResourceId: attachment,
 	})
 	if err != nil {

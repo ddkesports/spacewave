@@ -8,7 +8,8 @@ import (
 	"github.com/pkg/errors"
 )
 
-// Validate requires a namespaced type ID, a display name and distinct config declarations.
+// Validate requires a namespaced type ID, a display name and distinct config
+// declarations, with the plugin config IDs a subset of the config IDs.
 //
 // A plugin type ID is a slash-separated path of nonempty segments, such as
 // "flowgraph/stream-echo". Core node type IDs are bare, so the slash keeps a
@@ -33,6 +34,18 @@ func (n *NodeType) Validate() error {
 			return errors.New("node type config IDs must be nonempty and distinct")
 		}
 		ids[id] = struct{}{}
+	}
+
+	// Run in the plugin only configs the compiler declares, each once.
+	plugin := make(map[string]struct{}, len(n.GetPluginConfigIds()))
+	for _, id := range n.GetPluginConfigIds() {
+		if _, declared := ids[id]; !declared {
+			return errors.Errorf("plugin config ID %q is not a declared config ID", id)
+		}
+		if _, exists := plugin[id]; exists {
+			return errors.Errorf("plugin config ID %q is listed twice", id)
+		}
+		plugin[id] = struct{}{}
 	}
 	return nil
 }

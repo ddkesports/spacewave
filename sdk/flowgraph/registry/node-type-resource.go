@@ -2,30 +2,36 @@ package flowgraph_registry
 
 import (
 	"context"
+	"slices"
 
+	"github.com/aperturerobotics/controllerbus/bus"
 	"github.com/aperturerobotics/controllerbus/controller/configset"
 	configset_proto "github.com/aperturerobotics/controllerbus/controller/configset/proto"
+	controller_exec "github.com/aperturerobotics/controllerbus/controller/exec"
 	"github.com/pkg/errors"
 	s4wave_flowgraph "github.com/s4wave/spacewave/sdk/flowgraph"
 )
 
-// NodeTypeResource serves one plugin node type's compiler.
+// NodeTypeResource serves one plugin node type's compiler and controllers.
 type NodeTypeResource struct {
-	// typeID selects the sole type this Resource compiles.
-	typeID string
+	// b is the plugin's bus, which holds the factories for the plugin config IDs.
+	b bus.Bus
+	// metadata is the declaration registered for this node type.
+	metadata *NodeType
 	// nodeType implements compilation inside the plugin.
 	nodeType s4wave_flowgraph.FlowgraphNodeType
 }
 
-// NewNodeTypeResource constructs a compiler Resource for one node type.
-func NewNodeTypeResource(typeID string, nodeType s4wave_flowgraph.FlowgraphNodeType) *NodeTypeResource {
-	return &NodeTypeResource{typeID: typeID, nodeType: nodeType}
+// NewNodeTypeResource constructs the Resource for the node type metadata
+// declares, running its plugin config IDs on b.
+func NewNodeTypeResource(b bus.Bus, metadata *NodeType, nodeType s4wave_flowgraph.FlowgraphNodeType) *NodeTypeResource {
+	return &NodeTypeResource{b: b, metadata: metadata.CloneVT(), nodeType: nodeType}
 }
 
 // Compile encodes the plugin's configs without assigning Device keys or revisions.
 func (r *NodeTypeResource) Compile(ctx context.Context, req *CompileRequest) (*CompileResponse, error) {
 	// Keep the granted compiler restricted to its declared node type.
-	if req.GetNode().GetTypeId() != r.typeID {
+	if req.GetNode().GetTypeId() != r.metadata.GetTypeId() {
 		return nil, errors.New("node type does not match compiler")
 	}
 	compiled, err := r.nodeType.Compile(ctx, req.PlacedNode())
@@ -43,6 +49,29 @@ func (r *NodeTypeResource) Compile(ctx context.Context, req *CompileRequest) (*C
 		entries[name] = encoded
 	}
 	return &CompileResponse{Entries: entries}, nil
+}
+
+// ExecController runs one declared plugin config on the plugin's bus and
+// streams its status until the host ends the call or the controller fails.
+func (r *NodeTypeResource) ExecController(req *ExecControllerRequest, strm SRPCNodeTypeResourceService_ExecControllerStream) error {
+	// Run only the configs this registration declares for the plugin.
+	encoded := req.GetConfig()
+	if !slices.Contains(r.metadata.GetPluginConfigIds(), encoded.GetId()) {
+		return errors.Errorf("config ID %q is not a plugin config of this node type", encoded.GetId())
+	}
+	ctx, cancel := context.WithCancel(strm.Context())
+	defer cancel()
+	resolved, err := encoded.Resolve(ctx, r.b)
+	if err != nil {
+		return err
+	}
+
+	// Report each status change; a host that stops reading stops the controller.
+	return controller_exec.ExecuteController(ctx, r.b, resolved.GetConfig(), func(status controller_exec.ControllerStatus) {
+		if err := strm.Send(&controller_exec.ExecControllerResponse{Id: encoded.GetId(), Status: status}); err != nil {
+			cancel()
+		}
+	})
 }
 
 // NewCompileRequest copies a placement into its RPC representation.

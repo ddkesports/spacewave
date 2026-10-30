@@ -3,6 +3,7 @@ package s4wave.flowgraph.registry;
 
 import "github.com/s4wave/spacewave/sdk/flowgraph/flowgraph.proto";
 import "github.com/aperturerobotics/controllerbus/controller/configset/proto/configset.proto";
+import "github.com/aperturerobotics/controllerbus/controller/exec/exec.proto";
 
 option go_package = "github.com/s4wave/spacewave/sdk/flowgraph/registry;flowgraph_registry";
 
@@ -17,6 +18,12 @@ message NodeType {
   repeated .s4wave.flowgraph.FlowgraphPort ports = 3;
   // ConfigIds lists every controller config the compiler may emit.
   repeated string config_ids = 4;
+  // PluginConfigIds lists the config_ids whose factories exist only in the
+  // plugin. While the registration lives, the host builds these configs as
+  // controllers that run inside the plugin through ExecController; the host
+  // builds the other config_ids itself. A config ID belongs to one
+  // registration at a time.
+  repeated string plugin_config_ids = 5;
 }
 
 // NodeTypeRegistryResourceService retains plugin compiler registrations.
@@ -43,6 +50,9 @@ message RegisterNodeTypeResponse {
 service NodeTypeResourceService {
   // Compile returns entries whose keys and revisions the Device assigns.
   rpc Compile(CompileRequest) returns (CompileResponse);
+  // ExecController runs one of the plugin_config_ids on the plugin's bus and
+  // streams its status until the call ends.
+  rpc ExecController(ExecControllerRequest) returns (stream .controller.exec.ExecControllerResponse);
 }
 
 // CompileRequest carries the placement context across the plugin boundary.
@@ -73,4 +83,10 @@ message PlacedConnection {
 message CompileResponse {
   // Entries contains configs by node-local entry name. The Device ignores Rev.
   map<string, .configset.proto.ControllerConfig> entries = 1;
+}
+
+// ExecControllerRequest runs one plugin controller.
+message ExecControllerRequest {
+  // Config is the controller config, encoded by ControllerBus's config codec.
+  .configset.proto.ControllerConfig config = 1;
 }

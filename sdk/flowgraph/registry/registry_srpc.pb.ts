@@ -5,11 +5,18 @@
 import {
   CompileRequest,
   CompileResponse,
+  ExecControllerRequest,
   RegisterNodeTypeRequest,
   RegisterNodeTypeResponse,
 } from './registry.pb.js'
 import { MethodKind } from '@aptre/protobuf-es-lite'
-import { ProtoRpc, ServerContext } from 'starpc'
+import {
+  buildDecodeMessageTransform,
+  MessageStream,
+  ProtoRpc,
+  ServerContext,
+} from 'starpc'
+import { ExecControllerResponse } from '@go/github.com/aperturerobotics/controllerbus/controller/exec/exec.pb.js'
 
 /**
  * NodeTypeRegistryResourceService retains plugin compiler registrations.
@@ -117,6 +124,18 @@ export const NodeTypeResourceServiceDefinition = {
       O: CompileResponse,
       kind: MethodKind.Unary,
     },
+    /**
+     * ExecController runs one of the plugin_config_ids on the plugin's bus and
+     * streams its status until the call ends.
+     *
+     * @generated from rpc s4wave.flowgraph.registry.NodeTypeResourceService.ExecController
+     */
+    ExecController: {
+      name: 'ExecController',
+      I: ExecControllerRequest,
+      O: ExecControllerResponse,
+      kind: MethodKind.ServerStreaming,
+    },
   },
 } as const
 
@@ -135,6 +154,17 @@ export interface NodeTypeResourceService {
     request: CompileRequest,
     abortSignal?: AbortSignal,
   ): Promise<CompileResponse>
+
+  /**
+   * ExecController runs one of the plugin_config_ids on the plugin's bus and
+   * streams its status until the call ends.
+   *
+   * @generated from rpc s4wave.flowgraph.registry.NodeTypeResourceService.ExecController
+   */
+  ExecController(
+    request: ExecControllerRequest,
+    abortSignal?: AbortSignal,
+  ): MessageStream<ExecControllerResponse>
 }
 
 /**
@@ -153,6 +183,18 @@ export interface NodeTypeResourceServiceHandler {
     abortSignal: AbortSignal,
     context: ServerContext,
   ): Promise<CompileResponse>
+
+  /**
+   * ExecController runs one of the plugin_config_ids on the plugin's bus and
+   * streams its status until the call ends.
+   *
+   * @generated from rpc s4wave.flowgraph.registry.NodeTypeResourceService.ExecController
+   */
+  ExecController(
+    request: ExecControllerRequest,
+    abortSignal: AbortSignal,
+    context: ServerContext,
+  ): MessageStream<ExecControllerResponse>
 }
 
 export const NodeTypeResourceServiceServiceName =
@@ -165,6 +207,7 @@ export class NodeTypeResourceServiceClient implements NodeTypeResourceService {
     this.service = opts?.service || NodeTypeResourceServiceServiceName
     this.rpc = rpc
     this.Compile = this.Compile.bind(this)
+    this.ExecController = this.ExecController.bind(this)
   }
   /**
    * Compile returns entries whose keys and revisions the Device assigns.
@@ -183,5 +226,25 @@ export class NodeTypeResourceServiceClient implements NodeTypeResourceService {
       abortSignal || undefined,
     )
     return CompileResponse.fromBinary(result)
+  }
+
+  /**
+   * ExecController runs one of the plugin_config_ids on the plugin's bus and
+   * streams its status until the call ends.
+   *
+   * @generated from rpc s4wave.flowgraph.registry.NodeTypeResourceService.ExecController
+   */
+  ExecController(
+    request: ExecControllerRequest,
+    abortSignal?: AbortSignal,
+  ): MessageStream<ExecControllerResponse> {
+    const requestMsg = ExecControllerRequest.create(request)
+    const result = this.rpc.serverStreamingRequest(
+      this.service,
+      NodeTypeResourceServiceDefinition.methods.ExecController.name,
+      ExecControllerRequest.toBinary(requestMsg),
+      abortSignal || undefined,
+    )
+    return buildDecodeMessageTransform(ExecControllerResponse)(result)
   }
 }

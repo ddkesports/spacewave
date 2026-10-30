@@ -17,6 +17,9 @@ type RegistryResource struct {
 	bcast broadcast.Broadcast
 	// registrations contains the sole compiler for each type ID under bcast.
 	registrations map[string]*nodeTypeRegistration
+	// pluginConfigs maps each plugin config ID to the registration that runs
+	// it, under bcast.
+	pluginConfigs map[string]*nodeTypeRegistration
 }
 
 // nodeTypeRegistration binds metadata and its compiler to one Resource lifetime.
@@ -31,7 +34,10 @@ type nodeTypeRegistration struct {
 
 // NewRegistryResource constructs an empty node type registry.
 func NewRegistryResource() *RegistryResource {
-	return &RegistryResource{registrations: make(map[string]*nodeTypeRegistration)}
+	return &RegistryResource{
+		registrations: make(map[string]*nodeTypeRegistration),
+		pluginConfigs: make(map[string]*nodeTypeRegistration),
+	}
 }
 
 // RegisterNodeType retains a caller-attached compiler until its Resource releases.
@@ -57,29 +63,46 @@ func (r *RegistryResource) RegisterNodeType(ctx context.Context, req *flowgraph_
 	lifetime, cancel := context.WithCancel(client.Context())
 	reg := &nodeTypeRegistration{metadata: metadata.CloneVT(), client: compiler, ctx: lifetime}
 
-	// Reject ambiguous compilers for the same node type.
-	var duplicate bool
+	// Reject ambiguous compilers and plugin controllers.
+	var conflict error
 	r.bcast.HoldLock(func(broadcast func(), _ func() <-chan struct{}) {
+		// Refuse a type ID or plugin config ID another registration holds.
 		if r.registrations[metadata.GetTypeId()] != nil {
-			duplicate = true
+			conflict = errors.New("node type already registered")
 			return
 		}
+		for _, id := range metadata.GetPluginConfigIds() {
+			if r.pluginConfigs[id] != nil {
+				conflict = errors.Errorf("plugin config ID %q already registered", id)
+				return
+			}
+		}
+
+		// Index the registration by type and by each plugin config ID.
 		r.registrations[metadata.GetTypeId()] = reg
+		for _, id := range metadata.GetPluginConfigIds() {
+			r.pluginConfigs[id] = reg
+		}
 		broadcast()
 	})
-	if duplicate {
+	if conflict != nil {
 		cancel()
-		return nil, errors.New("node type already registered")
+		return nil, conflict
 	}
 
-	// Withdraw the declaration and cancel in-flight compiles on Resource release.
+	// Withdraw the declaration and cancel in-flight compiles and plugin
+	// controllers on Resource release.
 	release := func() {
 		cancel()
 		r.bcast.HoldLock(func(broadcast func(), _ func() <-chan struct{}) {
-			if r.registrations[metadata.GetTypeId()] == reg {
-				delete(r.registrations, metadata.GetTypeId())
-				broadcast()
+			if r.registrations[metadata.GetTypeId()] != reg {
+				return
 			}
+			delete(r.registrations, metadata.GetTypeId())
+			for _, id := range metadata.GetPluginConfigIds() {
+				delete(r.pluginConfigs, id)
+			}
+			broadcast()
 		})
 	}
 	resourceID, err := client.AddResource(srpc.NewMux(), release)

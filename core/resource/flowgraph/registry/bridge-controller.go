@@ -5,11 +5,14 @@ import (
 
 	"github.com/aperturerobotics/controllerbus/bus"
 	"github.com/aperturerobotics/controllerbus/controller"
+	"github.com/aperturerobotics/controllerbus/controller/resolver"
 	"github.com/aperturerobotics/controllerbus/directive"
 	s4wave_flowgraph "github.com/s4wave/spacewave/sdk/flowgraph"
 )
 
-// BridgeController publishes compile proxies for registered plugin node types.
+// BridgeController publishes compile proxies for registered plugin node types,
+// and the constructors and factories that run their plugin config IDs inside
+// the plugin.
 type BridgeController struct {
 	// b resolves the compiled controller config constructors.
 	b bus.Bus
@@ -32,28 +35,50 @@ func (c *BridgeController) Execute(context.Context) error {
 	return nil
 }
 
-// HandleDirective follows registration arrival, withdrawal and replacement.
+// HandleDirective follows registration arrival, withdrawal and replacement
+// for node type lookups and for the plugin config IDs' constructors and
+// factories.
 func (c *BridgeController) HandleDirective(ctx context.Context, di directive.Instance) ([]directive.Resolver, error) {
 	// Match standing demand even when its plugin has not registered yet.
-	dir, ok := di.GetDirective().(s4wave_flowgraph.LookupFlowgraphNodeType)
-	if !ok {
-		return nil, nil
+	switch dir := di.GetDirective().(type) {
+	case s4wave_flowgraph.LookupFlowgraphNodeType:
+		typeID := dir.LookupFlowgraphNodeTypeID()
+		return c.watch(func() *nodeTypeRegistration { return c.registry.registrations[typeID] }, func(reg *nodeTypeRegistration) directive.Value {
+			return NewNodeTypeProxy(c.b, reg.metadata, reg.client, reg.ctx)
+		})
+	case resolver.LoadConfigConstructorByID:
+		configID := dir.LoadConfigConstructorByIDConfigID()
+		return c.watch(func() *nodeTypeRegistration { return c.registry.pluginConfigs[configID] }, func(*nodeTypeRegistration) directive.Value {
+			return pluginConfigConstructor(configID)
+		})
+	case resolver.LoadFactoryByConfig:
+		conf, ok := dir.LoadFactoryByConfig().(*pluginConfig)
+		if !ok {
+			return nil, nil
+		}
+		return c.watch(func() *nodeTypeRegistration { return c.registry.pluginConfigs[conf.configID] }, func(reg *nodeTypeRegistration) directive.Value {
+			return &pluginFactory{configID: conf.configID, reg: reg}
+		})
 	}
+	return nil, nil
+}
 
-	// Publish only this resolver's value as the compiler capability changes.
+// watch publishes the value for the registration lookup returns, replacing it
+// when the registration changes and withdrawing it when none remains.
+func (c *BridgeController) watch(lookup func() *nodeTypeRegistration, value func(*nodeTypeRegistration) directive.Value) ([]directive.Resolver, error) {
 	return directive.R(directive.NewFuncResolver(func(ctx context.Context, handler directive.ResolverHandler) error {
 		var current *nodeTypeRegistration
 		var valueID uint32
 		for {
-			// Read the compiler and its change notification together.
+			// Read the registration and its change notification together.
 			var next *nodeTypeRegistration
 			var wait <-chan struct{}
 			c.registry.bcast.HoldLock(func(_ func(), getWait func() <-chan struct{}) {
-				next = c.registry.registrations[dir.LookupFlowgraphNodeTypeID()]
+				next = lookup()
 				wait = getWait()
 			})
 
-			// Withdraw old proxies before publishing a replacement.
+			// Withdraw the old value before publishing a replacement.
 			if next != current {
 				if valueID != 0 {
 					handler.RemoveValue(valueID)
@@ -61,7 +86,7 @@ func (c *BridgeController) HandleDirective(ctx context.Context, di directive.Ins
 				}
 				current = next
 				if next != nil {
-					valueID, _ = handler.AddValue(NewNodeTypeProxy(c.b, next.metadata, next.client, next.ctx))
+					valueID, _ = handler.AddValue(value(next))
 				}
 			}
 

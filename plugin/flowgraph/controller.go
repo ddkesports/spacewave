@@ -60,7 +60,7 @@ func (c *Controller) Execute(ctx context.Context) error {
 	}
 
 	// Hold the registrations while this plugin instance runs.
-	release, err := Register(ctx, resources.Client, client, EditorEntrypoint.GetEntrypointHref())
+	release, err := Register(ctx, c.GetBus(), resources.Client, client, EditorEntrypoint.GetEntrypointHref())
 	if err != nil {
 		return err
 	}

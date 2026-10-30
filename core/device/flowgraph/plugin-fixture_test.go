@@ -10,12 +10,16 @@ import (
 	"time"
 
 	"github.com/aperturerobotics/controllerbus/bus"
+	"github.com/aperturerobotics/controllerbus/config"
 	"github.com/aperturerobotics/controllerbus/controller"
+	controllerbus_core "github.com/aperturerobotics/controllerbus/core"
+	"github.com/aperturerobotics/controllerbus/directive"
 	"github.com/aperturerobotics/starpc/srpc"
 	resource "github.com/s4wave/spacewave/bldr/resource"
 	resource_client "github.com/s4wave/spacewave/bldr/resource/client"
 	resource_server "github.com/s4wave/spacewave/bldr/resource/server"
 	device_policy "github.com/s4wave/spacewave/core/device/policy"
+	space_exec "github.com/s4wave/spacewave/core/forge/exec"
 	resource_configtype_registry "github.com/s4wave/spacewave/core/resource/configtype/registry"
 	resource_flowgraph_registry "github.com/s4wave/spacewave/core/resource/flowgraph/registry"
 	"github.com/s4wave/spacewave/core/transport"
@@ -34,6 +38,8 @@ import (
 
 // TestPluginNodeFixture runs an isolated Device through plugin arrival and withdrawal.
 // The compiler crosses a bidirectional Resource stream and never joins the Device bus.
+// A second node type's controller exists only on its plugin's bus: the Device runs
+// it there, restarts it on a changed config, and stops it when the plugin unloads.
 func TestPluginNodeFixture(t *testing.T) {
 	// Create an isolated Device World and an allowed plugin node placement.
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
@@ -68,7 +74,7 @@ func TestPluginNodeFixture(t *testing.T) {
 
 	// Allow the Device policy to run the plugin's node type.
 	stateRoot := t.TempDir()
-	if err := device_policy.WriteFile(stateRoot, &device_policy.DevicePolicy{NodeTypeId: []string{flowgraph_plugin.StreamEchoNodeTypeID}}); err != nil {
+	if err := device_policy.WriteFile(stateRoot, &device_policy.DevicePolicy{NodeTypeId: []string{flowgraph_plugin.StreamEchoNodeTypeID, pluginRunNodeTypeID}}); err != nil {
 		t.Fatal(err)
 	}
 	policy, err := device_policy.NewPolicyStore(stateRoot)
@@ -162,7 +168,7 @@ func TestPluginNodeFixture(t *testing.T) {
 
 	// Register the plugin's compiler and editor.
 	editorPath := "/p/spacewave-flowgraph/a/StreamEchoEditor.js"
-	release, err := flowgraph_plugin.Register(ctx, resources, rootClient, editorPath)
+	release, err := flowgraph_plugin.Register(ctx, b, resources, rootClient, editorPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,4 +216,202 @@ func TestPluginNodeFixture(t *testing.T) {
 	if _, err := nodeType.Compile(ctx, &s4wave_flowgraph.PlacedFlowgraphNode{Node: node, DevicePeerID: peerID}); err == nil {
 		t.Fatal("released compiler still accepts placements")
 	}
+
+	// A node whose controller exists only in its plugin waits for the plugin.
+	setPluginRunNode(t, ctx, tb.Engine, "one")
+	missing = waitCapabilities(t, ctx, tb.Engine, func(caps map[string]*s4wave_device.DeviceCapability) bool {
+		return capabilityState(caps, "run") == s4wave_device.DeviceCapabilityState_DEVICE_CAPABILITY_STATE_DECLARED
+	})
+	if detail := missing[capabilityID("run")].GetDetail(); !strings.Contains(detail, "Node type unavailable") {
+		t.Fatalf("missing plugin detail = %q", detail)
+	}
+
+	// Register a plugin whose own bus alone builds the node's controller.
+	pluginBus, pluginResolver, err := controllerbus_core.NewCoreBus(ctx, le)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs := make(chan string, 8)
+	pluginResolver.AddFactory(&pluginRunFactory{runs: runs})
+	releaseRun := registerPluginRun(t, ctx, resources, rootClient, pluginBus)
+
+	// The Device runs the controller in the plugin and shows it active.
+	expectRuns(t, ctx, runs, "start one")
+	waitCapabilities(t, ctx, tb.Engine, func(caps map[string]*s4wave_device.DeviceCapability) bool {
+		return capabilityState(caps, "run") == s4wave_device.DeviceCapabilityState_DEVICE_CAPABILITY_STATE_ACTIVE
+	})
+
+	// A changed setting restarts the plugin controller with the new config.
+	setPluginRunNode(t, ctx, tb.Engine, "two")
+	expectRuns(t, ctx, runs, "start two", "stop one")
+	waitCapabilities(t, ctx, tb.Engine, func(caps map[string]*s4wave_device.DeviceCapability) bool {
+		return capabilityState(caps, "run") == s4wave_device.DeviceCapabilityState_DEVICE_CAPABILITY_STATE_ACTIVE
+	})
+
+	// Unloading the plugin stops its controller and shows the node unavailable.
+	releaseRun()
+	expectRuns(t, ctx, runs, "stop two")
+	waitCapabilities(t, ctx, tb.Engine, func(caps map[string]*s4wave_device.DeviceCapability) bool {
+		return capabilityState(caps, "run") == s4wave_device.DeviceCapabilityState_DEVICE_CAPABILITY_STATE_DECLARED
+	})
+}
+
+// pluginRunNodeTypeID selects the fixture node whose controller runs in its plugin.
+const pluginRunNodeTypeID = "fixture/plugin-run"
+
+// pluginRunConfigID selects the controller only the fixture plugin's bus builds.
+const pluginRunConfigID = "fixture/plugin-run"
+
+// setPluginRunNode places the plugin run node on the Device with value as its config.
+func setPluginRunNode(t *testing.T, ctx context.Context, engine world.Engine, value string) {
+	commit(t, ctx, engine, func(tx world.Tx) error {
+		_, err := s4wave_flowgraph.UpdateFlowgraph(ctx, tx, testFlowgraphKey, &s4wave_flowgraph.UpdateFlowgraphRequest{
+			SetNodes:      map[string]*s4wave_flowgraph.FlowgraphNode{"run": {TypeId: pluginRunNodeTypeID, Parameters: map[string]string{"value": value}}},
+			SetPlacements: map[string]*s4wave_flowgraph.FlowgraphPlacement{"run": devicePlacement(testSelfKey)},
+		})
+		return err
+	})
+}
+
+// registerPluginRun registers the plugin run node type as a plugin does, with
+// its controller on b, and returns the function that unloads it.
+func registerPluginRun(t *testing.T, ctx context.Context, resources *resource_client.Client, root srpc.Client, b bus.Bus) func() {
+	// Attach the compiler and its plugin controllers.
+	metadata := &flowgraph_registry.NodeType{
+		TypeId:          pluginRunNodeTypeID,
+		DisplayName:     "Plugin Run",
+		ConfigIds:       []string{pluginRunConfigID},
+		PluginConfigIds: []string{pluginRunConfigID},
+	}
+	mux := srpc.NewMux()
+	if err := flowgraph_registry.SRPCRegisterNodeTypeResourceService(mux, flowgraph_registry.NewNodeTypeResource(b, metadata, pluginRunNodeType{})); err != nil {
+		t.Fatal(err)
+	}
+	attachment, err := resources.AttachResource(ctx, "Plugin Run compiler", mux)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Register the node type and hold it until the plugin unloads.
+	resp, err := flowgraph_registry.NewSRPCNodeTypeRegistryResourceServiceClient(root).RegisterNodeType(ctx, &flowgraph_registry.RegisterNodeTypeRequest{NodeType: metadata, HandlerResourceId: attachment})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := resources.CreateResourceReference(resp.GetResourceId())
+	return func() {
+		ref.Release()
+		if err := resources.DetachResource(ctx, attachment); err != nil {
+			t.Error(err)
+		}
+	}
+}
+
+// expectRuns waits for the plugin controller events in want, in any order.
+func expectRuns(t *testing.T, ctx context.Context, runs <-chan string, want ...string) {
+	// Collect as many events as expected, since start and stop may interleave.
+	t.Helper()
+	got := make([]string, 0, len(want))
+	for len(got) < len(want) {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("plugin controller events %v, want %v", got, want)
+		case run := <-runs:
+			got = append(got, run)
+		}
+	}
+
+	// Compare the events as sets.
+	slices.Sort(got)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("plugin controller events %v, want %v", got, want)
+	}
+}
+
+// pluginRunNodeType compiles its value parameter into the plugin run config.
+type pluginRunNodeType struct{}
+
+// GetDisplayName returns the fixture name.
+func (pluginRunNodeType) GetDisplayName() string {
+	return "Plugin Run"
+}
+
+// GetPorts declares no ports.
+func (pluginRunNodeType) GetPorts() []*s4wave_flowgraph.FlowgraphPort {
+	return nil
+}
+
+// GetConfigIDs declares the plugin run config.
+func (pluginRunNodeType) GetConfigIDs() []string {
+	return []string{pluginRunConfigID}
+}
+
+// Compile carries the value parameter as the config's bytes.
+func (pluginRunNodeType) Compile(_ context.Context, node *s4wave_flowgraph.PlacedFlowgraphNode) (map[string]config.Config, error) {
+	conf := space_exec.NewSpaceExecConfig(pluginRunConfigID)
+	if err := conf.UnmarshalVT([]byte(node.Node.GetParameters()["value"])); err != nil {
+		return nil, err
+	}
+	return map[string]config.Config{"run": conf}, nil
+}
+
+// pluginRunFactory builds the controller that exists only on the plugin's bus.
+type pluginRunFactory struct {
+	// runs receives each controller's start and stop.
+	runs chan<- string
+}
+
+// GetConfigID returns the plugin run config ID.
+func (f *pluginRunFactory) GetConfigID() string {
+	return pluginRunConfigID
+}
+
+// ConstructConfig returns an empty plugin run config.
+func (f *pluginRunFactory) ConstructConfig() config.Config {
+	return space_exec.NewSpaceExecConfig(pluginRunConfigID)
+}
+
+// GetVersion returns the fixture version.
+func (f *pluginRunFactory) GetVersion() controller.Version {
+	return controller.MustParseVersion("0.0.1")
+}
+
+// Construct builds a controller that reports its value while it runs.
+func (f *pluginRunFactory) Construct(_ context.Context, conf config.Config, _ controller.ConstructOpts) (controller.Controller, error) {
+	value, err := conf.MarshalVT()
+	if err != nil {
+		return nil, err
+	}
+	return &pluginRunController{runs: f.runs, value: string(value)}, nil
+}
+
+// pluginRunController reports its start and stop.
+type pluginRunController struct {
+	// runs receives the start and stop.
+	runs chan<- string
+	// value is the config's value.
+	value string
+}
+
+// GetControllerInfo describes the fixture controller.
+func (c *pluginRunController) GetControllerInfo() *controller.Info {
+	return controller.NewInfo(pluginRunConfigID, controller.MustParseVersion("0.0.1"), "plugin run fixture")
+}
+
+// Execute reports the start, runs until removed, then reports the stop.
+func (c *pluginRunController) Execute(ctx context.Context) error {
+	c.runs <- "start " + c.value
+	<-ctx.Done()
+	c.runs <- "stop " + c.value
+	return nil
+}
+
+// HandleDirective resolves nothing.
+func (c *pluginRunController) HandleDirective(context.Context, directive.Instance) ([]directive.Resolver, error) {
+	return nil, nil
+}
+
+// Close releases nothing.
+func (c *pluginRunController) Close() error {
+	return nil
 }

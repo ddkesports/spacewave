@@ -34,6 +34,14 @@ export interface NodeType {
    * ConfigIds lists every controller config the compiler may emit.
    */
   configIds?: string[]
+  /**
+   * PluginConfigIds lists the config_ids whose factories exist only in the
+   * plugin. While the registration lives, the host builds these configs as
+   * controllers that run inside the plugin through ExecController; the host
+   * builds the other config_ids itself. A config ID belongs to one
+   * registration at a time.
+   */
+  pluginConfigIds?: string[]
 }
 
 export const NodeType: MessageType<NodeType> =
@@ -44,6 +52,7 @@ export const NodeType: MessageType<NodeType> =
       [2, 'display_name', 9],
       [3, 'ports', 11, 1, FlowgraphPort.codec],
       [4, 'config_ids', 9, 1],
+      [5, 'plugin_config_ids', 9, 1],
     ],
   )
 
@@ -176,4 +185,22 @@ export const CompileResponse: MessageType<CompileResponse> =
   /* @__PURE__ */ createMessageType<CompileResponse>(
     's4wave.flowgraph.registry.CompileResponse',
     () => [[1, 'entries', 11, 584, ControllerConfig.codec]],
+  )
+
+/**
+ * ExecControllerRequest runs one plugin controller.
+ *
+ * @generated from message s4wave.flowgraph.registry.ExecControllerRequest
+ */
+export interface ExecControllerRequest {
+  /**
+   * Config is the controller config, encoded by ControllerBus's config codec.
+   */
+  config?: ControllerConfig
+}
+
+export const ExecControllerRequest: MessageType<ExecControllerRequest> =
+  /* @__PURE__ */ createMessageType<ExecControllerRequest>(
+    's4wave.flowgraph.registry.ExecControllerRequest',
+    () => [[1, 'config', 11, 0, ControllerConfig.codec]],
   )
