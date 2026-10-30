@@ -77,7 +77,7 @@ func TestBuildLookupWorldOpObservesStaticLookupSetAfterBuild(t *testing.T) {
 	}
 
 	// Setting the static lookup reaches the built lookup.
-	c.SetStaticLookupOp(world_mock.LookupMockOp)
+	c.SetOpTypes(OpTypes{Lookup: world_mock.LookupMockOp})
 	op, err = lookup(ctx, world_mock.MockWorldOpTypeID)
 	if err != nil {
 		t.Fatal(err.Error())

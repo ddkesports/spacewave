@@ -130,6 +130,9 @@ type ManifestConfig struct {
 	// NodeTypeIds hints at the Flowgraph node type IDs the plugin registers.
 	// Copied to the built manifest metadata.
 	NodeTypeIds []string `protobuf:"bytes,6,rep,name=node_type_ids,json=nodeTypeIds,proto3" json:"nodeTypeIds,omitempty"`
+	// OpTypeIds lists the World operation type IDs the plugin handles.
+	// Copied to the built manifest metadata.
+	OpTypeIds []string `protobuf:"bytes,7,rep,name=op_type_ids,json=opTypeIds,proto3" json:"opTypeIds,omitempty"`
 }
 
 func (x *ManifestConfig) Reset() {
@@ -176,6 +179,13 @@ func (x *ManifestConfig) GetPlatformIds() []string {
 func (x *ManifestConfig) GetNodeTypeIds() []string {
 	if x != nil {
 		return x.NodeTypeIds
+	}
+	return nil
+}
+
+func (x *ManifestConfig) GetOpTypeIds() []string {
+	if x != nil {
+		return x.OpTypeIds
 	}
 	return nil
 }
@@ -714,6 +724,7 @@ func (m *ManifestConfig) CloneVT() *ManifestConfig {
 	r.Builder = protobuf_go_lite.CloneVTValue(m.Builder)
 	r.PlatformIds = protobuf_go_lite.CloneSlice(m.PlatformIds)
 	r.NodeTypeIds = protobuf_go_lite.CloneSlice(m.NodeTypeIds)
+	r.OpTypeIds = protobuf_go_lite.CloneSlice(m.OpTypeIds)
 	if len(m.unknownFields) > 0 {
 		r.unknownFields = slices.Clone(m.unknownFields)
 	}
@@ -883,6 +894,9 @@ func (this *ManifestConfig) EqualVT(that *ManifestConfig) bool {
 		return false
 	}
 	if !protobuf_go_lite.EqualSlice(this.NodeTypeIds, that.NodeTypeIds) {
+		return false
+	}
+	if !protobuf_go_lite.EqualSlice(this.OpTypeIds, that.OpTypeIds) {
 		return false
 	}
 	return string(this.unknownFields) == string(that.unknownFields)
@@ -1473,6 +1487,11 @@ func (x *ManifestConfig) MarshalProtoJSON(s *json.MarshalState) {
 		s.WriteObjectField("nodeTypeIds")
 		s.WriteStringArray(x.NodeTypeIds)
 	}
+	if len(x.OpTypeIds) > 0 || s.HasField("opTypeIds") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("opTypeIds")
+		s.WriteStringArray(x.OpTypeIds)
+	}
 	s.WriteObjectEnd()
 }
 
@@ -1520,6 +1539,13 @@ func (x *ManifestConfig) UnmarshalProtoJSON(s *json.UnmarshalState) {
 				return
 			}
 			x.NodeTypeIds = s.ReadStringArray()
+		case "op_type_ids", "opTypeIds":
+			s.AddField("op_type_ids")
+			if s.ReadNil() {
+				x.OpTypeIds = nil
+				return
+			}
+			x.OpTypeIds = s.ReadStringArray()
 		}
 	})
 }
@@ -2323,6 +2349,13 @@ func (m *ManifestConfig) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	if m.unknownFields != nil {
 		i = protobuf_go_lite.EncodeRawBytes(dAtA, i, m.unknownFields)
 	}
+	if len(m.OpTypeIds) > 0 {
+		for iNdEx := len(m.OpTypeIds) - 1; iNdEx >= 0; iNdEx-- {
+			i = protobuf_go_lite.EncodeString(dAtA, i, m.OpTypeIds[iNdEx])
+			i--
+			dAtA[i] = 0x3a
+		}
+	}
 	if len(m.NodeTypeIds) > 0 {
 		for iNdEx := len(m.NodeTypeIds) - 1; iNdEx >= 0; iNdEx-- {
 			i = protobuf_go_lite.EncodeString(dAtA, i, m.NodeTypeIds[iNdEx])
@@ -2804,6 +2837,7 @@ func (m *ManifestConfig) SizeVT() (n int) {
 	n += protobuf_go_lite.SizeBoolNonZero(1, m.Background)
 	n += protobuf_go_lite.SizeStringSlice(1, m.PlatformIds)
 	n += protobuf_go_lite.SizeStringSlice(1, m.NodeTypeIds)
+	n += protobuf_go_lite.SizeStringSlice(1, m.OpTypeIds)
 	n += len(m.unknownFields)
 	return n
 }
@@ -3112,6 +3146,14 @@ func (x *ManifestConfig) MarshalProtoText() string {
 	if len(x.NodeTypeIds) > 0 {
 		protobuf_go_lite.TextWriteListStart(&sb, initialLen, "node_type_ids")
 		for i, v := range x.NodeTypeIds {
+			protobuf_go_lite.TextWriteListSeparator(&sb, i)
+			protobuf_go_lite.TextWriteString(&sb, v)
+		}
+		protobuf_go_lite.TextWriteListEnd(&sb)
+	}
+	if len(x.OpTypeIds) > 0 {
+		protobuf_go_lite.TextWriteListStart(&sb, initialLen, "op_type_ids")
+		for i, v := range x.OpTypeIds {
 			protobuf_go_lite.TextWriteListSeparator(&sb, i)
 			protobuf_go_lite.TextWriteString(&sb, v)
 		}
@@ -3743,6 +3785,16 @@ func (m *ManifestConfig) UnmarshalVT(dAtA []byte) error {
 				return err
 			}
 			m.NodeTypeIds = append(m.NodeTypeIds, v)
+		case 7:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field OpTypeIds", wireType)
+			}
+			var v string
+			v, iNdEx, err = protobuf_go_lite.DecodeString(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			m.OpTypeIds = append(m.OpTypeIds, v)
 		default:
 			iNdEx = preIndex
 			skippy, err := protobuf_go_lite.Skip(dAtA[iNdEx:])

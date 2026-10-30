@@ -10,7 +10,7 @@ import (
 	"github.com/s4wave/spacewave/core/sobject"
 	sobject_world_engine "github.com/s4wave/spacewave/core/sobject/world/engine"
 	"github.com/s4wave/spacewave/core/space"
-	space_world_optypes "github.com/s4wave/spacewave/core/space/world/optypes"
+	space_world_engine "github.com/s4wave/spacewave/core/space/world/engine"
 	"github.com/s4wave/spacewave/db/world"
 )
 
@@ -80,7 +80,7 @@ func (c *Controller) resolveMountSharedObjectBody(dir sobject.MountSharedObjectB
 		// at construction, before its first replay. The body's engine
 		// follows each engine the controller serves, across restarts and
 		// replacements after read access returns.
-		factory := sobject_world_engine.NewFactoryWithLookupOp(c.GetBus(), space_world_optypes.LookupWorldOp)
+		factory := sobject_world_engine.NewFactoryWithOpTypes(c.GetBus(), space_world_engine.OpTypes)
 		eng, ref, err := world.StartEngine(ctx, c.GetBus(), conf, factory)
 		if err != nil {
 			soRef.Release()

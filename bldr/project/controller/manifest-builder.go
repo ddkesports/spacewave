@@ -274,6 +274,7 @@ func (t *manifestBuilderTracker) execute(ctx context.Context) error {
 	meta.Description = manifestConfig.GetDescription()
 	meta.Background = manifestConfig.GetBackground()
 	meta.NodeTypeIds = manifestConfig.GetNodeTypeIds()
+	meta.OpTypeIds = manifestConfig.GetOpTypeIds()
 
 	// determine plugin rev from previous version
 	rev := manifestConfig.GetRev()

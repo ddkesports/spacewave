@@ -68,29 +68,81 @@ func (c *WorldOpRegistryBridgeController) HandleDirective(ctx context.Context, d
 		return nil, nil
 	}
 
-	// Select the registered handler and its plugin instance, or the pinned
-	// executable named by the operation.
+	// Proxy the operation to the pinned executable it names.
 	engineID := dir.LookupWorldOpEngineID()
-	reg, instanceKey := c.registry.lookupPluginInstance(opTypeID, engineID)
 	pluginID, manifestRoot, handlerID, pinned := s4wave_worldop_registry.ParsePinnedOperationID(opTypeID)
 	if pinned {
-		reg = &s4wave_worldop_registry.WorldOpRegistration{PluginId: pluginID, OperationTypeId: handlerID}
-	} else if reg == nil {
-		return nil, nil
+		reg := &s4wave_worldop_registry.WorldOpRegistration{PluginId: pluginID, OperationTypeId: handlerID}
+		lookupOp := func(ctx context.Context, operationTypeID string) (world.Operation, error) {
+			op := newBridgeOperation(c.le, c.b, reg, operationTypeID, engineID)
+			op.manifestRoot = manifestRoot
+			op.handlerID = handlerID
+			return op, nil
+		}
+		return directive.R(world.NewLookupWorldOpResolver(lookupOp), nil)
 	}
 
-	// Proxy each operation to the selected plugin.
-	lookupOp := func(ctx context.Context, operationTypeID string) (world.Operation, error) {
-		// Bind the operation to the selected plugin instance and executable.
-		op := newBridgeOperation(c.le, c.b, reg, operationTypeID, engineID)
-		op.instanceKey = instanceKey
-		op.manifestRoot = manifestRoot
-		if pinned {
-			op.handlerID = handlerID
+	// Follow the registered handler, so a replay waiting for a plugin resolves
+	// once the plugin registers.
+	return directive.R(directive.NewFuncResolver(func(ctx context.Context, handler directive.ResolverHandler) error {
+		return c.watchRegistration(ctx, handler, opTypeID, engineID)
+	}), nil)
+}
+
+// watchRegistration keeps handler's value a proxy to the plugin instance
+// registered for opTypeID, and no value while none is registered.
+func (c *WorldOpRegistryBridgeController) watchRegistration(
+	ctx context.Context,
+	handler directive.ResolverHandler,
+	opTypeID, engineID string,
+) error {
+	// Follow the registration, holding the value of the one last seen.
+	var valID, regID uint32
+	var instanceKey string
+	for {
+		// Read the registration and the channel that signals its change.
+		var reg *s4wave_worldop_registry.WorldOpRegistration
+		var nextInstanceKey string
+		var waitCh <-chan struct{}
+		c.registry.bcast.HoldLock(func(_ func(), getWaitCh func() <-chan struct{}) {
+			reg, nextInstanceKey = c.registry.lookupPluginInstanceLocked(opTypeID, engineID)
+			waitCh = getWaitCh()
+		})
+
+		// Replace the value when the registration or its instance changed.
+		if reg.GetRegistrationId() != regID || nextInstanceKey != instanceKey {
+			if valID != 0 {
+				handler.RemoveValue(valID)
+				valID = 0
+			}
+			regID, instanceKey = reg.GetRegistrationId(), nextInstanceKey
+			if reg != nil {
+				valID, _ = handler.AddValue(newRegisteredLookupOp(c.le, c.b, reg, instanceKey, engineID))
+			}
 		}
+		handler.MarkIdle(true)
+
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-waitCh:
+		}
+	}
+}
+
+// newRegisteredLookupOp returns a lookup that proxies each operation to the
+// plugin instance instanceKey serving reg.
+func newRegisteredLookupOp(
+	le *logrus.Entry,
+	b bus.Bus,
+	reg *s4wave_worldop_registry.WorldOpRegistration,
+	instanceKey, engineID string,
+) world.LookupWorldOpValue {
+	return func(ctx context.Context, operationTypeID string) (world.Operation, error) {
+		op := newBridgeOperation(le, b, reg, operationTypeID, engineID)
+		op.instanceKey = instanceKey
 		return op, nil
 	}
-	return directive.R(world.NewLookupWorldOpResolver(lookupOp), nil)
 }
 
 // Close releases any resources held by the controller.

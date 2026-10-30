@@ -22,7 +22,7 @@ func TestEvaluateMinimal(t *testing.T) {
 	starFile := filepath.Join(dir, "bldr.star")
 	err := os.WriteFile(starFile, []byte(`
 project(id="test-project")
-manifest("test-manifest", builder="bldr/plugin/compiler/go", rev=1, config={"goPkgs": ["./pkg"]}, background=True, platformIds=["desktop"], nodeTypeIds=["test/node"])
+manifest("test-manifest", builder="bldr/plugin/compiler/go", rev=1, config={"goPkgs": ["./pkg"]}, background=True, platformIds=["desktop"], nodeTypeIds=["test/node"], opTypeIds=["test/op"])
 build("app", manifests=["test-manifest"], targets=["desktop"])
 `), 0o644)
 	if err != nil {
@@ -65,6 +65,9 @@ build("app", manifests=["test-manifest"], targets=["desktop"])
 	}
 	if !slices.Equal(mc.GetNodeTypeIds(), []string{"test/node"}) {
 		t.Fatalf("manifest node types = %v, want test/node", mc.GetNodeTypeIds())
+	}
+	if !slices.Equal(mc.GetOpTypeIds(), []string{"test/op"}) {
+		t.Fatalf("manifest op types = %v, want test/op", mc.GetOpTypeIds())
 	}
 
 	// Assert the build target keeps its selected manifests.

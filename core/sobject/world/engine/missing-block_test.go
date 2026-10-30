@@ -121,7 +121,7 @@ func testEngineStopsReplayAtBlockGap(t *testing.T, store *hidingBlockStore, want
 	defer cancel()
 	privA, pidA := newReplayTestKey(t)
 	space := newReplayTestSpace(t, pidA)
-	space.c.SetStaticLookupOp(world_mock.LookupMockOp)
+	space.c.SetOpTypes(OpTypes{Lookup: world_mock.LookupMockOp})
 
 	// Write the block the fourth operation's object uses as its root.
 	transformConf := space.genesis.GetHeadRef().GetTransformConf()
@@ -296,12 +296,12 @@ func testEngineStopsReplayAtBlockGap(t *testing.T, store *hidingBlockStore, want
 
 	// A block only an absent peer holds wakes the watcher when it arrives.
 	if store.peer != nil {
-		if !engine.replay.missing.EqualsRef(payload) {
-			t.Fatalf("replay stopped at %v; want %s", engine.replay.missing, payload.MarshalString())
+		if !engine.replay.gap.missing.EqualsRef(payload) {
+			t.Fatalf("replay stopped at %v; want %s", engine.replay.gap.missing, payload.MarshalString())
 		}
 		woke := make(chan error, 1)
 		go func() {
-			_, err := space.c.waitReplayInput(ctx, so, stateCtr, snap, engine.replay.missing, nil)
+			_, err := space.c.waitReplayInput(ctx, so, stateCtr, snap, engine.replay.gap, nil)
 			woke <- err
 		}()
 		store.serve()

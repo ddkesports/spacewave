@@ -285,7 +285,7 @@ func (c *Controller) processApplyTxOpWithEngine(
 		// Apply the operations as the signing sender.
 		{
 			taskCtx, task := trace.NewTask(ctx, "alpha/so-engine/process-apply-tx-op/execute-tx")
-			_, err := ttx.ExecuteTx(taskCtx, peerID, ws.lookupOp, btx)
+			_, err := ttx.ExecuteTx(taskCtx, peerID, c.declaredLookup(ws.lookupOp, btx), btx)
 			task.End()
 			if err != nil {
 				return err
@@ -305,9 +305,10 @@ func (c *Controller) processApplyTxOpWithEngine(
 		return nil, nil, context.Canceled
 	}
 
-	// A block that is not available is a local gap, not a property of the
-	// operation, so it stops replay instead of rejecting.
-	if block.IsNotAvailable(aerr) {
+	// A block that is not available, or a declared handler that has not
+	// resolved, is a local gap, not a property of the operation, so it stops
+	// replay instead of rejecting.
+	if isReplayGap(aerr) {
 		return nil, nil, aerr
 	}
 

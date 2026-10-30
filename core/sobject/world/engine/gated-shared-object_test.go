@@ -42,6 +42,8 @@ func startGatedWorld(t *testing.T, dir string, soRef *sobject.SharedObjectRef) (
 		t.Fatal(err)
 	}
 	t.Cleanup(soMountRef.Release)
+
+	// Build the World engine over the local SharedObject.
 	local, ok := so.(*provider_local.SharedObject)
 	if !ok {
 		t.Fatalf("SharedObject is %T, not a local SharedObject", so)
@@ -50,7 +52,7 @@ func startGatedWorld(t *testing.T, dir string, soRef *sobject.SharedObjectRef) (
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctrl.SetStaticLookupOp(world_mock.LookupMockOp)
+	ctrl.SetOpTypes(sobject_world_engine.OpTypes{Lookup: world_mock.LookupMockOp})
 	gated := &gatedSharedObject{SharedObject: local, ctrl: ctrl}
 
 	// Serve its World with the mock operations until cleanup.

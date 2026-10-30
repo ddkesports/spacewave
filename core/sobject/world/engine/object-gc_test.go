@@ -363,7 +363,7 @@ func (w *spaceWorld) checkReplayedFile(ctx context.Context, t *testing.T) {
 
 	// Replay it from the checkpoint.
 	le := logrus.NewEntry(logrus.New())
-	replayed, release, err := sobject_world_engine.OpenReadCheckpoint(ctx, le, w.bus, freshMember{so}, w.engineID, world.NewSchema(unixfs_world.UnixfsTypes).LookupOp, snap)
+	replayed, release, err := sobject_world_engine.OpenReadCheckpoint(ctx, le, w.bus, freshMember{so}, w.engineID, sobject_world_engine.OpTypes{Lookup: world.NewSchema(unixfs_world.UnixfsTypes).LookupOp}, snap)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -479,7 +479,7 @@ func TestWorldEngineKeepsReplacedObjectRoots(t *testing.T) {
 
 	// Replay it from the checkpoint, as another member does.
 	le := logrus.NewEntry(logrus.New())
-	replayed, release, err := sobject_world_engine.OpenReadCheckpoint(ctx, le, w.bus, freshMember{so}, w.engineID, world_mock.LookupMockOp, snap)
+	replayed, release, err := sobject_world_engine.OpenReadCheckpoint(ctx, le, w.bus, freshMember{so}, w.engineID, sobject_world_engine.OpTypes{Lookup: world_mock.LookupMockOp}, snap)
 	if err != nil {
 		t.Fatal(err)
 	}

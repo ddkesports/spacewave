@@ -45,10 +45,11 @@ type Controller struct {
 
 	// sfs constructs the World block transformers.
 	sfs *block_transform.StepFactorySet
-	// staticLookupOpMu guards staticLookupOp.
-	staticLookupOpMu sync.RWMutex
-	// staticLookupOp supplies built-in operations before bus lookup.
-	staticLookupOp world.LookupOp
+	// opTypesMu guards opTypes.
+	opTypesMu sync.RWMutex
+	// opTypes supplies built-in operations before bus lookup and the operation
+	// types the World declares.
+	opTypes OpTypes
 
 	// writeMtx serializes write transactions and replay of the watched
 	// SharedObject state.
@@ -85,13 +86,20 @@ func NewController(
 	}, nil
 }
 
-// SetStaticLookupOp sets an in-process world operation lookup chain for this
-// engine. It is composed before the bus lookup, so domain-owned built-ins do
-// not depend on an outer controller lifecycle.
-func (c *Controller) SetStaticLookupOp(lookupOp world.LookupOp) {
-	c.staticLookupOpMu.Lock()
-	c.staticLookupOp = lookupOp
-	c.staticLookupOpMu.Unlock()
+// SetOpTypes sets how this engine resolves operation types. Its lookup is
+// composed before the bus lookup, so domain-owned built-ins do not depend on
+// an outer controller lifecycle.
+func (c *Controller) SetOpTypes(opTypes OpTypes) {
+	c.opTypesMu.Lock()
+	c.opTypes = opTypes
+	c.opTypesMu.Unlock()
+}
+
+// getOpTypes returns how this engine resolves operation types.
+func (c *Controller) getOpTypes() OpTypes {
+	c.opTypesMu.RLock()
+	defer c.opTypesMu.RUnlock()
+	return c.opTypes
 }
 
 // buildLookupWorldOp composes the current built-in operations with bus lookup.
@@ -103,11 +111,9 @@ func (c *Controller) buildLookupWorldOp(le *logrus.Entry) world.LookupOp {
 	return func(ctx context.Context, operationTypeID string) (world.Operation, error) {
 		// Try the built-in operations first, then the bus.
 		var lookupOps []world.LookupOp
-		c.staticLookupOpMu.RLock()
-		if c.staticLookupOp != nil {
-			lookupOps = append(lookupOps, c.staticLookupOp)
+		if lookupOp := c.getOpTypes().Lookup; lookupOp != nil {
+			lookupOps = append(lookupOps, lookupOp)
 		}
-		c.staticLookupOpMu.RUnlock()
 		if busLookupOp != nil {
 			lookupOps = append(lookupOps, busLookupOp)
 		}

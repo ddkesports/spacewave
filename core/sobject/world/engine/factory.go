@@ -7,7 +7,6 @@ import (
 	"github.com/aperturerobotics/controllerbus/config"
 	"github.com/aperturerobotics/controllerbus/controller"
 	transform_all "github.com/s4wave/spacewave/db/block/transform/all"
-	"github.com/s4wave/spacewave/db/world"
 )
 
 // ControllerID identifies the block graph engine controller.
@@ -16,12 +15,12 @@ const ControllerID = "sobject/world/engine"
 // Version is the controller version.
 var Version = controller.MustParseVersion("0.0.1")
 
-// Factory constructs a world engine controller
+// Factory constructs a world engine controller.
 type Factory struct {
 	// bus is the controller bus
 	bus bus.Bus
-	// lookupOp resolves built-in operations before the bus lookup, if set.
-	lookupOp world.LookupOp
+	// opTypes resolves the operation types of each engine.
+	opTypes OpTypes
 }
 
 // NewFactory builds a world block engine factory.
@@ -29,11 +28,11 @@ func NewFactory(bus bus.Bus) *Factory {
 	return &Factory{bus: bus}
 }
 
-// NewFactoryWithLookupOp builds a world block engine factory whose engines
-// resolve operations with lookupOp before the bus lookup. The lookup is set at
-// construction, so it covers the first replay.
-func NewFactoryWithLookupOp(bus bus.Bus, lookupOp world.LookupOp) *Factory {
-	return &Factory{bus: bus, lookupOp: lookupOp}
+// NewFactoryWithOpTypes builds a world block engine factory whose engines
+// resolve operation types with opTypes. They are set at construction, so they
+// cover the first replay.
+func NewFactoryWithOpTypes(bus bus.Bus, opTypes OpTypes) *Factory {
+	return &Factory{bus: bus, opTypes: opTypes}
 }
 
 // GetConfigID returns the configuration ID for the controller.
@@ -66,8 +65,8 @@ func (t *Factory) Construct(
 		return nil, err
 	}
 
-	// Set the built-in operations before the controller executes.
-	ctrl.SetStaticLookupOp(t.lookupOp)
+	// Set the operation types before the controller executes.
+	ctrl.SetOpTypes(t.opTypes)
 	return ctrl, nil
 }
 

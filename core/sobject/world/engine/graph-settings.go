@@ -5,7 +5,6 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/s4wave/spacewave/core/sobject"
-	"github.com/s4wave/spacewave/db/block"
 	"github.com/s4wave/spacewave/db/bucket"
 	world_block "github.com/s4wave/spacewave/db/world/block"
 	"github.com/s4wave/spacewave/net/peer"
@@ -119,7 +118,7 @@ func processGraphSettingsStepOp(
 	if ctx.Err() != nil {
 		return nil, nil, context.Canceled
 	}
-	if block.IsNotAvailable(aerr) {
+	if isReplayGap(aerr) {
 		return nil, nil, aerr
 	}
 	if aerr != nil {

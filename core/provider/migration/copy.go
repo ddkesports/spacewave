@@ -8,7 +8,7 @@ import (
 	"github.com/s4wave/spacewave/core/sobject"
 	sobject_world_engine "github.com/s4wave/spacewave/core/sobject/world/engine"
 	"github.com/s4wave/spacewave/core/space"
-	space_world_optypes "github.com/s4wave/spacewave/core/space/world/optypes"
+	space_world_engine "github.com/s4wave/spacewave/core/space/world/engine"
 	"github.com/s4wave/spacewave/db/block"
 	block_transform "github.com/s4wave/spacewave/db/block/transform"
 	"github.com/sirupsen/logrus"
@@ -30,7 +30,7 @@ func Checkpoint(
 	if !ok {
 		return nil, nil, errors.New("source cannot sign its migration checkpoint")
 	}
-	return sobject_world_engine.CheckpointWorld(ctx, le, b, factories, object, space.SpaceEngineId(ref), space_world_optypes.LookupWorldOp, host.GetPrivKey(), accepted)
+	return sobject_world_engine.CheckpointWorld(ctx, le, b, factories, object, space.SpaceEngineId(ref), space_world_engine.OpTypes, host.GetPrivKey(), accepted)
 }
 
 // CopyWorld copies every reachable block of world from object into

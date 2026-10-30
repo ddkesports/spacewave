@@ -29,6 +29,11 @@ message ManifestMeta {
   // it runs. A Device starts a listed plugin when a placed node needs one of
   // them; the running plugin's registrations decide what resolves.
   repeated string node_type_ids = 7;
+  // OpTypeIds lists the World operation type IDs the plugin handles. A Space
+  // replica that meets one of them before the plugin registers its handler
+  // runs the plugin and waits for the handler; one no installed plugin lists
+  // is rejected.
+  repeated string op_type_ids = 8;
 }
 
 // Manifest contains metadata and contents.

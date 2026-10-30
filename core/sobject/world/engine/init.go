@@ -5,13 +5,12 @@ import (
 
 	"github.com/aperturerobotics/util/ccontainer"
 	"github.com/s4wave/spacewave/core/sobject"
-	"github.com/s4wave/spacewave/db/block"
 )
 
 // waitWorldInit replays the shared object state until its World is
 // initialized and returns that World. An owner whose replay finds no World adds
 // the operation that initializes it; when several owners do, replay keeps the
-// first and rejects the rest. A replay that stops at a missing block returns
+// first and rejects the rest. A replay that stops at a gap returns
 // the initialized World before the stalled operation, so the World is served
 // and the watcher resumes the replay at that operation.
 func (c *Controller) waitWorldInit(
@@ -34,7 +33,7 @@ func (c *Controller) waitWorldInit(
 			return nil, err
 		}
 		if stale {
-			snap, err = c.waitReplayInput(ctx, so, soStateCtr, snap, nil, nil)
+			snap, err = c.waitReplayInput(ctx, so, soStateCtr, snap, replayGap{}, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -46,7 +45,7 @@ func (c *Controller) waitWorldInit(
 			return nil, err
 		}
 		state, _, err := replay.sync(ctx, snap, nil)
-		stalled := state != nil && block.IsNotAvailable(err)
+		stalled := state != nil && isReplayGap(err)
 		if err != nil && !stalled {
 			return nil, err
 		}
@@ -76,9 +75,9 @@ func (c *Controller) waitWorldInit(
 			queued = true
 		}
 
-		// Wait for the state to change or the block replay stopped at to
+		// Wait for the state to change or the input replay stopped for to
 		// arrive.
-		snap, err = c.waitReplayInput(ctx, so, soStateCtr, snap, replay.missing, nil)
+		snap, err = c.waitReplayInput(ctx, so, soStateCtr, snap, replay.gap, nil)
 		if err != nil {
 			return nil, err
 		}

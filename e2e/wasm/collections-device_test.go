@@ -21,6 +21,7 @@ import (
 	session_controller "github.com/s4wave/spacewave/core/session/controller"
 	"github.com/s4wave/spacewave/core/sobject"
 	sobject_world_engine "github.com/s4wave/spacewave/core/sobject/world/engine"
+	space_world_engine "github.com/s4wave/spacewave/core/space/world/engine"
 	space_objecttypes "github.com/s4wave/spacewave/core/space/world/objecttypes"
 	space_optypes "github.com/s4wave/spacewave/core/space/world/optypes"
 	blocktype_controller "github.com/s4wave/spacewave/db/blocktype/controller"
@@ -181,7 +182,7 @@ func mountPluginBuildDevice(t *testing.T, ctx context.Context, author *s4wave_se
 	ref := sobject.NewSharedObjectRef("local", pairedRef.GetProviderResourceRef().GetProviderAccountId(), spaceID, provider_local.SobjectBlockStoreID(spaceID))
 	worldEngine, engineRef, err := world.StartEngine(ctx, tb.Bus,
 		sobject_world_engine.NewConfig("plugin-device-space", ref),
-		sobject_world_engine.NewFactoryWithLookupOp(tb.Bus, space_optypes.LookupWorldOp))
+		sobject_world_engine.NewFactoryWithOpTypes(tb.Bus, space_world_engine.OpTypes))
 	if err != nil {
 		t.Fatal(err)
 	}

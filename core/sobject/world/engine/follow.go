@@ -70,7 +70,7 @@ func (e *soEngine) follows(ctx context.Context, snap sobject.SharedObjectStateSn
 func (r *replayer) follow(ctx context.Context, snap sobject.SharedObjectStateSnapshot) (*InnerState, error) {
 	// Read without waiting for a peer, as sync does.
 	ctx, peerWait := block.WithoutPeerWait(ctx)
-	r.missing = nil
+	r.gap = replayGap{}
 
 	// Start from the checkpoint and drop the positions above it.
 	if err := r.rebase(ctx, snap); err != nil {

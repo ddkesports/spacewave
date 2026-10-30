@@ -11,17 +11,20 @@ import (
 )
 
 // manifestBuiltin implements the manifest() built-in function.
-// manifest(id, builder, rev=0, config=None, description="", background=False, platformIds=[], nodeTypeIds=[])
+// manifest(id, builder, rev=0, config=None, description="", background=False, platformIds=[], nodeTypeIds=[], opTypeIds=[])
 func (e *evaluator) manifestBuiltin(thread *starlark.Thread, fn *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	// Declare the manifest arguments.
-	var id string
-	var builder string
-	var rev int
-	var config starlark.Value
-	var description string
-	var background bool
-	var platformIDs []string
-	var nodeTypeIDs []string
+	var (
+		id          string
+		builder     string
+		rev         int
+		config      starlark.Value
+		description string
+		background  bool
+		platformIDs []string
+		nodeTypeIDs []string
+		opTypeIDs   []string
+	)
 
 	// Read the positional manifest ID.
 	id, kwargs, err := popPositionalID("manifest", args, kwargs)
@@ -70,6 +73,12 @@ func (e *evaluator) manifestBuiltin(thread *starlark.Thread, fn *starlark.Builti
 				return nil, errors.Wrap(err, "manifest(): nodeTypeIds")
 			}
 			nodeTypeIDs = list
+		case "opTypeIds", "op_type_ids":
+			list, err := toStringList(val)
+			if err != nil {
+				return nil, errors.Wrap(err, "manifest(): opTypeIds")
+			}
+			opTypeIDs = list
 		case "background":
 			b, ok := val.(starlark.Bool)
 			if !ok {
@@ -115,6 +124,7 @@ func (e *evaluator) manifestBuiltin(thread *starlark.Thread, fn *starlark.Builti
 		Background:  background,
 		PlatformIds: platformIDs,
 		NodeTypeIds: nodeTypeIDs,
+		OpTypeIds:   opTypeIDs,
 	}
 	if e.config.Manifests == nil {
 		e.config.Manifests = make(map[string]*bldr_project.ManifestConfig)

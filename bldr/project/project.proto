@@ -63,6 +63,9 @@ message ManifestConfig {
   // NodeTypeIds hints at the Flowgraph node type IDs the plugin registers.
   // Copied to the built manifest metadata.
   repeated string node_type_ids = 6;
+  // OpTypeIds lists the World operation type IDs the plugin handles.
+  // Copied to the built manifest metadata.
+  repeated string op_type_ids = 7;
 }
 
 // StartConfig configures starting the program.

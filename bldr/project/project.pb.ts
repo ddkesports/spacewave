@@ -112,6 +112,11 @@ export interface ManifestConfig {
    * Copied to the built manifest metadata.
    */
   nodeTypeIds?: string[]
+  /**
+   * OpTypeIds lists the World operation type IDs the plugin handles.
+   * Copied to the built manifest metadata.
+   */
+  opTypeIds?: string[]
 }
 
 export const ManifestConfig: MessageType<ManifestConfig> =
@@ -124,6 +129,7 @@ export const ManifestConfig: MessageType<ManifestConfig> =
       [4, 'background', 8],
       [5, 'platform_ids', 9, 1],
       [6, 'node_type_ids', 9, 1],
+      [7, 'op_type_ids', 9, 1],
     ],
   )
 

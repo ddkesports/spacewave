@@ -129,9 +129,10 @@ type replayer struct {
 	// mismatch is the latest judged checkpoint whose World differs from this
 	// replay's, or nil when the latest judged checkpoint agreed.
 	mismatch *sobject.SOCheckpointMismatch
-	// missing is the block the last sync stopped at because no connected peer
-	// could serve it, or nil when that sync did not stop for that reason.
-	missing *block.BlockRef
+	// gap is the input the last sync stopped for: a block no connected peer
+	// could serve, or an operation waiting for its declared handler. It is
+	// the zero gap when that sync did not stop for either.
+	gap replayGap
 	// span is the saved span block, the head of a chain holding the Worlds and
 	// payloads of the first spanLen positions, or nil when no saved chain
 	// holds a prefix of positions.
@@ -163,17 +164,18 @@ func newReplayer(c *Controller, so sobject.SharedObject) *replayer {
 // sync replays snap and returns the World after the last operation it can
 // place, with the outcome of every placed operation in order. fork, when set,
 // supplies the World after a local write in place of replaying it. When a block
-// an operation needs is not available, replay stops at that operation and sync
-// returns the World before it with an error block.IsNotAvailable reports; the
-// next sync resumes at the same operation. A served replay that would return a
+// an operation needs is not available, or the operation's declared handler has
+// not resolved, replay stops at that operation and sync returns the World
+// before it with an error isReplayGap reports; the next sync resumes at the
+// same operation. A served replay that would return a
 // World behind the one it serves returns no World instead, and keeps its
 // positions. Reads do not wait for a peer to
 // connect, since the caller holds the writer lock: a block only an absent peer
-// holds stops replay and is recorded in missing.
+// holds stops replay and is recorded in gap.
 func (r *replayer) sync(ctx context.Context, snap sobject.SharedObjectStateSnapshot, fork *replayFork) (*InnerState, []replayOutcome, error) {
 	// Read without waiting for a peer.
 	ctx, peerWait := block.WithoutPeerWait(ctx)
-	r.missing = nil
+	r.gap = replayGap{}
 
 	// Restart from the checkpoint's World when it changed.
 	if err := r.rebase(ctx, snap); err != nil {
@@ -189,13 +191,11 @@ func (r *replayer) sync(ctx context.Context, snap sobject.SharedObjectStateSnaps
 	return state, outcomes, r.stopAt(peerWait, err)
 }
 
-// stopAt records in missing the block a read under peerWait skipped when err
-// reports a block not available, so the engine can wait for a peer to serve
-// it, and returns err.
+// stopAt records in gap the input err reports replay stopped for, the block a
+// read under peerWait skipped or the operation waiting for its handler, so the
+// engine can wait for it, and returns err.
 func (r *replayer) stopAt(peerWait *block.PeerWait, err error) error {
-	if block.IsNotAvailable(err) {
-		r.missing = peerWait.GetRef()
-	}
+	r.gap = gapOf(err, peerWait.GetRef())
 	return err
 }
 
@@ -693,7 +693,7 @@ func (r *replayer) replay(
 		} else {
 			inner := set.Get(h)
 			next, opOutcome, opErr := r.replayOp(ctx, w, snap, inner, n+i, state)
-			if block.IsNotAvailable(opErr) {
+			if isReplayGap(opErr) {
 				if i == 0 && n != 0 && r.worldLost(ctx, state) {
 					r.positions = nil
 					return r.replay(ctx, snap, set, nil)
@@ -705,7 +705,7 @@ func (r *replayer) replay(
 					r.changed, r.deferred, r.span, r.spanLen = changed, deferred, span, spanLen
 					return nil, nil, stopErr
 				}
-				r.c.le.WithError(stopErr).Warn("replay stopped at an operation whose block is not available")
+				r.c.le.WithError(stopErr).Warn("replay stopped at an operation it cannot place yet")
 				return state, nil, stopErr
 			}
 			if opErr != nil {

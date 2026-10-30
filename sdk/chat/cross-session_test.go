@@ -16,6 +16,7 @@ import (
 	"github.com/s4wave/spacewave/core/session"
 	"github.com/s4wave/spacewave/core/sobject"
 	sobject_world_engine "github.com/s4wave/spacewave/core/sobject/world/engine"
+	space_world_engine "github.com/s4wave/spacewave/core/space/world/engine"
 	"github.com/s4wave/spacewave/core/space/world/optypes"
 	"github.com/s4wave/spacewave/db/block"
 	"github.com/s4wave/spacewave/db/world"
@@ -125,7 +126,7 @@ func testChatResourceCrossSessionAppend(t *testing.T, transactionID string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	head, err := sobject_world_engine.ReplayWorld(ctx, tb.Logger, tb.Bus, tb.StepFactorySet, ownerObject, "", optypes.LookupWorldOp, snapshot)
+	head, err := sobject_world_engine.ReplayWorld(ctx, tb.Logger, tb.Bus, tb.StepFactorySet, ownerObject, "", space_world_engine.OpTypes, snapshot)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -184,16 +184,22 @@ func (r *WorldOpRegistryResource) lookupPluginInstance(
 	var reg *s4wave_worldop_registry.WorldOpRegistration
 	var pluginInstanceKey string
 	r.bcast.HoldLock(func(_ func(), _ func() <-chan struct{}) {
-		selected := registration.SelectLocked(r.generations, r.registrations, instanceKey, (*s4wave_worldop_registry.WorldOpRegistration).GetOperationTypeId)
-		for _, v := range selected {
-			if v.GetOperationTypeId() == opTypeID {
-				reg = v.CloneVT()
-				pluginInstanceKey = r.generations.InstanceKeyLocked(v)
-				break
-			}
-		}
+		reg, pluginInstanceKey = r.lookupPluginInstanceLocked(opTypeID, instanceKey)
 	})
 	return reg, pluginInstanceKey
+}
+
+// lookupPluginInstanceLocked is lookupPluginInstance with the bcast lock held.
+func (r *WorldOpRegistryResource) lookupPluginInstanceLocked(
+	opTypeID, instanceKey string,
+) (*s4wave_worldop_registry.WorldOpRegistration, string) {
+	selected := registration.SelectLocked(r.generations, r.registrations, instanceKey, (*s4wave_worldop_registry.WorldOpRegistration).GetOperationTypeId)
+	for _, v := range selected {
+		if v.GetOperationTypeId() == opTypeID {
+			return v.CloneVT(), r.generations.InstanceKeyLocked(v)
+		}
+	}
+	return nil, ""
 }
 
 // getRegistrationsLocked returns a snapshot of all registrations.

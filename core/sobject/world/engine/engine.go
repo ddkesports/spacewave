@@ -461,17 +461,16 @@ func (e *soEngine) lockReplayed(ctx context.Context, clock *commitClock) (func()
 		if err == nil {
 			return unlockWriteMtx, nil
 		}
-		missing := e.replay.missing
+		gap := e.replay.gap
 		unlockWriteMtx()
-		if !block.IsNotAvailable(err) || missing == nil {
+		if !isReplayGap(err) || gap.empty() {
 			return nil, err
 		}
 
-		// Fetch the block replay stopped at with a read that waits for a peer.
-		if _, found, err := e.so.GetBlockStore().GetBlock(ctx, missing); err != nil {
+		// Wait for the input replay stopped for: a peer serving the block, or
+		// the handler of the operation.
+		if err := e.c.waitGap(ctx, e.so, gap); err != nil {
 			return nil, err
-		} else if !found {
-			return nil, errors.Wrap(block.ErrNotFound, missing.MarshalString())
 		}
 	}
 }
@@ -521,7 +520,7 @@ func (e *soEngine) advance(ctx context.Context, snap sobject.SharedObjectStateSn
 func (e *soEngine) install(ctx context.Context, snap sobject.SharedObjectStateSnapshot, fork *replayFork, follow bool) ([]replayOutcome, error) {
 	// Reach and install the World.
 	state, outcomes, err := e.reach(ctx, snap, fork, follow)
-	if state != nil && block.IsNotAvailable(err) {
+	if state != nil && isReplayGap(err) {
 		if installErr := e.updateEngineState(ctx, state); installErr != nil {
 			return nil, installErr
 		}

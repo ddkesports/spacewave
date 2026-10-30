@@ -49,6 +49,13 @@ export interface ManifestMeta {
    * them; the running plugin's registrations decide what resolves.
    */
   nodeTypeIds?: string[]
+  /**
+   * OpTypeIds lists the World operation type IDs the plugin handles. A Space
+   * replica that meets one of them before the plugin registers its handler
+   * runs the plugin and waits for the handler; one no installed plugin lists
+   * is rejected.
+   */
+  opTypeIds?: string[]
 }
 
 export const ManifestMeta: MessageType<ManifestMeta> =
@@ -62,6 +69,7 @@ export const ManifestMeta: MessageType<ManifestMeta> =
       [5, 'description', 9],
       [6, 'background', 8],
       [7, 'node_type_ids', 9, 1],
+      [8, 'op_type_ids', 9, 1],
     ],
   )
 

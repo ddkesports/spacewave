@@ -29,9 +29,11 @@ func TestReplayLateOperationStageTimes(t *testing.T) {
 	space.c.le.Logger.SetLevel(logrus.InfoLevel)
 	space.so.localStore = store_kvtx_inmem.NewStore()
 	space.so.blockStore = &replayTimingBlockStore{BlockStore: space.so.blockStore}
+
+	// Replay the seed operation into the base World.
 	seed := space.sign("checkpoint", seedKey, "checkpoint-object", &sobject.SOOperationLink{Nonce: 1})
 	seedSnap := newHeldTestSnapshot(t, space, seed)
-	base, err := ReplayWorld(ctx, space.c.le, space.c.bus, space.c.sfs, space.so, "test-replay-timing", nil, seedSnap)
+	base, err := ReplayWorld(ctx, space.c.le, space.c.bus, space.c.sfs, space.so, "test-replay-timing", OpTypes{}, seedSnap)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +86,7 @@ func TestReplayLateOperationStageTimes(t *testing.T) {
 	}
 
 	// Fill the persistent replay's prefix through the production public API.
-	replay, err := NewWorldReplay(space.c.le, space.c.bus, space.c.sfs, space.so, "test-replay-timing", nil)
+	replay, err := NewWorldReplay(space.c.le, space.c.bus, space.c.sfs, space.so, "test-replay-timing", OpTypes{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,6 +122,8 @@ func TestReplayLateOperationStageTimes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	// Report the replay time and bound it.
 	count := tailOperations + 1
 	t.Logf("late replay: checkpoint=%d operations=%d total=%s per-op=%s", checkpoint.GetHeight(), count, elapsed, elapsed/time.Duration(count))
 	if elapsed >= 2*time.Minute {
@@ -156,7 +160,7 @@ func TestReplayLateOperationStageTimes(t *testing.T) {
 	}
 
 	// Compare the warm replay with a cold replay of exactly the same held set.
-	cold, err := ReplayWorld(ctx, space.c.le, space.c.bus, space.c.sfs, space.so, "test-replay-timing-cold", nil, lateSnap)
+	cold, err := ReplayWorld(ctx, space.c.le, space.c.bus, space.c.sfs, space.so, "test-replay-timing-cold", OpTypes{}, lateSnap)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +170,7 @@ func TestReplayLateOperationStageTimes(t *testing.T) {
 
 	// Read through the public checkpoint engine to prove every operation
 	// applied, including the operation already covered by the checkpoint.
-	engine, release, err := OpenReadCheckpoint(ctx, space.c.le, space.c.bus, space.so, "test-replay-timing-read", nil, lateSnap)
+	engine, release, err := OpenReadCheckpoint(ctx, space.c.le, space.c.bus, space.so, "test-replay-timing-read", OpTypes{}, lateSnap)
 	if err != nil {
 		t.Fatal(err)
 	}

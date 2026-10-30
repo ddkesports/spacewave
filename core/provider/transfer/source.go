@@ -8,7 +8,7 @@ import (
 	"github.com/s4wave/spacewave/core/sobject"
 	sobject_world_engine "github.com/s4wave/spacewave/core/sobject/world/engine"
 	"github.com/s4wave/spacewave/core/space"
-	space_world_optypes "github.com/s4wave/spacewave/core/space/world/optypes"
+	space_world_engine "github.com/s4wave/spacewave/core/space/world/engine"
 	"github.com/s4wave/spacewave/db/block"
 	block_transform "github.com/s4wave/spacewave/db/block/transform"
 	"github.com/sirupsen/logrus"
@@ -64,5 +64,5 @@ func replaySharedObject(
 	if err != nil {
 		return nil, err
 	}
-	return sobject_world_engine.ReplayWorld(ctx, le, b, sfs, so, space.SpaceEngineId(ref), space_world_optypes.LookupWorldOp, snap)
+	return sobject_world_engine.ReplayWorld(ctx, le, b, sfs, so, space.SpaceEngineId(ref), space_world_engine.OpTypes, snap)
 }

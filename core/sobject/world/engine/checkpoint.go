@@ -9,14 +9,13 @@ import (
 	"github.com/pkg/errors"
 	"github.com/s4wave/spacewave/core/sobject"
 	block_transform "github.com/s4wave/spacewave/db/block/transform"
-	"github.com/s4wave/spacewave/db/world"
 	"github.com/s4wave/spacewave/net/crypto"
 	"github.com/s4wave/spacewave/net/peer"
 	"github.com/sirupsen/logrus"
 )
 
 // CheckpointWorld replays the operation set of state as the World engine
-// engineID, resolving operations with lookupOp, and returns state advanced to
+// engineID, resolving operations with opTypes, and returns state advanced to
 // the checkpoint, signed as the owner of privKey, whose World is the replayed
 // World. The returned state holds no operations. Whole-state
 // copies such as transfer and publication carry it, so the receiver needs
@@ -28,7 +27,7 @@ func CheckpointWorld(
 	sfs *block_transform.StepFactorySet,
 	so sobject.SharedObject,
 	engineID string,
-	lookupOp world.LookupOp,
+	opTypes OpTypes,
 	privKey crypto.PrivKey,
 	state *sobject.SOState,
 ) (*sobject.SOState, *InnerState, error) {
@@ -42,7 +41,7 @@ func CheckpointWorld(
 	if host, ok := so.(sobject.StateHost); ok {
 		snap = snap.WithConfigHistory(host.GetSOHost().ReadConfigEntry).WithOperationVerifier(host.GetSOHost().GetOperationVerifier()).WithGrantKeyring(host.GetSOHost().GetGrantKeyring())
 	}
-	replayed, err := ReplayWorld(ctx, le, b, sfs, so, engineID, lookupOp, snap)
+	replayed, err := ReplayWorld(ctx, le, b, sfs, so, engineID, opTypes, snap)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -84,7 +83,7 @@ type WorldReplay struct {
 }
 
 // NewWorldReplay constructs a replay of the World of so. Replay resolves
-// operations as the World engine engineID does: with lookupOp first, then
+// operations as the World engine engineID does: with opTypes first, then
 // through the bus. It must resolve every operation the engine does, or replay
 // rejects operations the engine applied.
 func NewWorldReplay(
@@ -93,14 +92,14 @@ func NewWorldReplay(
 	sfs *block_transform.StepFactorySet,
 	so sobject.SharedObject,
 	engineID string,
-	lookupOp world.LookupOp,
+	opTypes OpTypes,
 ) (*WorldReplay, error) {
 	// Replay through a controller of the engine.
 	c, err := NewController(le, b, &Config{EngineId: engineID}, sfs)
 	if err != nil {
 		return nil, err
 	}
-	c.SetStaticLookupOp(lookupOp)
+	c.SetOpTypes(opTypes)
 	return &WorldReplay{r: newReplayer(c, so)}, nil
 }
 
@@ -128,10 +127,10 @@ func ReplayWorld(
 	sfs *block_transform.StepFactorySet,
 	so sobject.SharedObject,
 	engineID string,
-	lookupOp world.LookupOp,
+	opTypes OpTypes,
 	snap sobject.SharedObjectStateSnapshot,
 ) (*InnerState, error) {
-	replay, err := NewWorldReplay(le, b, sfs, so, engineID, lookupOp)
+	replay, err := NewWorldReplay(le, b, sfs, so, engineID, opTypes)
 	if err != nil {
 		return nil, err
 	}

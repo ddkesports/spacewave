@@ -18,12 +18,12 @@ func (c *Controller) executeWatchSOState(
 	soEngine *soEngine,
 ) error {
 	var snap sobject.SharedObjectStateSnapshot
-	var missing *block.BlockRef
+	var gap replayGap
 	var settled <-chan struct{}
 	for {
-		// Wait for the state to change, the block replay stopped at to arrive,
-		// or the oldest pending receipt to resolve.
-		_, err := c.waitReplayInput(ctx, soEngine.so, soStateCtr, snap, missing, settled)
+		// Wait for the state to change, the input replay stopped for to
+		// arrive, or the oldest pending receipt to resolve.
+		_, err := c.waitReplayInput(ctx, soEngine.so, soStateCtr, snap, gap, settled)
 		if err != nil {
 			return err
 		}
@@ -49,7 +49,7 @@ func (c *Controller) executeWatchSOState(
 		if err == nil && !stale {
 			err = c.executeWatchSOStateOnce(holdCtx, snap, soEngine)
 		}
-		missing = soEngine.replay.missing
+		gap = soEngine.replay.gap
 		settled = soEngine.settled()
 
 		// Be sure to unlock the writeMtx right away.
@@ -64,19 +64,19 @@ func (c *Controller) executeWatchSOState(
 }
 
 // waitReplayInput waits for the state to change from snap and returns the new
-// state. When missing is set, it also returns the current state once a peer
-// serves that block, since replay stopped at it. When settled is set, it also
+// state. When gap is set, it also returns the current state once the input it
+// names arrives, since replay stopped for it. When settled is set, it also
 // returns the current state once settled closes.
 func (c *Controller) waitReplayInput(
 	ctx context.Context,
 	so sobject.SharedObject,
 	soStateCtr ccontainer.Watchable[sobject.SharedObjectStateSnapshot],
 	snap sobject.SharedObjectStateSnapshot,
-	missing *block.BlockRef,
+	gap replayGap,
 	settled <-chan struct{},
 ) (sobject.SharedObjectStateSnapshot, error) {
 	// Without another input only a state change resumes replay.
-	if missing == nil && settled == nil {
+	if gap.empty() && settled == nil {
 		return soStateCtr.WaitValueChange(ctx, snap, nil)
 	}
 
@@ -93,19 +93,22 @@ func (c *Controller) waitReplayInput(
 		}()
 	}
 
-	// Fetch the block with a read that waits for a peer, ending the state
-	// wait once it arrives.
+	// Wait for the input replay stopped for, ending the state wait once it
+	// arrives.
 	fetched := make(chan struct{})
 	go func() {
+		// Skip the wait when replay stopped for no input.
 		defer close(fetched)
-		if missing == nil {
+		if gap.empty() {
 			return
 		}
-		_, found, err := so.GetBlockStore().GetBlock(waitCtx, missing)
-		if err != nil && waitCtx.Err() == nil {
-			c.le.WithError(err).Warn("fetch the block replay stopped at")
+
+		// Wait for the input, ending the state wait once it arrives.
+		err := c.waitGap(waitCtx, so, gap)
+		if err != nil && waitCtx.Err() == nil && !errors.Is(err, block.ErrNotFound) {
+			c.le.WithError(err).Warn("wait for the input replay stopped for")
 		}
-		if found {
+		if err == nil {
 			cancel()
 		}
 	}()
@@ -123,9 +126,10 @@ func (c *Controller) waitReplayInput(
 }
 
 // executeWatchSOStateOnce replays one shared object state into the World. A
-// block that is not available stops replay at its operation without ending the
-// watch: the World before that operation stays served, and the next state
-// change, write, or arrival of the block resumes replay there.
+// replay gap, a block that is not available or a declared handler that has
+// not resolved, stops replay at its operation without ending the watch: the
+// World before that operation stays served, and the next state change, write,
+// or arrival of the input resumes replay there.
 func (c *Controller) executeWatchSOStateOnce(
 	ctx context.Context,
 	snap sobject.SharedObjectStateSnapshot,
@@ -135,9 +139,9 @@ func (c *Controller) executeWatchSOStateOnce(
 	ctx, task := trace.NewTask(ctx, "alpha/watch-state/process-snapshot")
 	defer task.End()
 
-	// Replay, waiting out a block that is not available.
+	// Replay, waiting out a gap.
 	_, err := soEngine.advance(ctx, snap, nil)
-	if block.IsNotAvailable(err) {
+	if isReplayGap(err) {
 		return nil
 	}
 	return err
