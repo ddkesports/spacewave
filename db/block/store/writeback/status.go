@@ -38,6 +38,8 @@ type Status struct {
 	// Refills is the number of evicted blocks read back from the remote since
 	// the store opened. Each one was a read that waited on the remote.
 	Refills int64
+	// Copy reports the latest copy of the stored blocks to a remote.
+	Copy CopyStatus
 }
 
 // ResidentBytes is the size of the store's blocks the local store holds: the
