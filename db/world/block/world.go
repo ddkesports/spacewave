@@ -318,14 +318,19 @@ func (t *WorldState) StageWorldState(ctx context.Context) (world.WorldStage, err
 	return world.NewTransactionStage(t), nil
 }
 
-// setCursorStore routes the cursor's blocks through the transaction store.
-// A read-only state's cursor rejects writes.
+// setCursorStore routes the cursor's blocks through the transaction store, and
+// records the pages its transactions replace into the World's log, if any. A
+// read-only state's cursor rejects writes.
 func (t *WorldState) setCursorStore(ctx context.Context, cursor *bucket_lookup.Cursor) {
 	if t.store != nil {
 		cursor.SetTransactionStore(t.store)
 	}
 	if !t.write {
 		setReadOnlyCursor(ctx, cursor)
+		return
+	}
+	if log := t.btx.GetReplacementLog(); log != nil {
+		cursor.SetReplacementLog(log)
 	}
 }
 

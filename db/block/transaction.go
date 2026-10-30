@@ -78,7 +78,7 @@ type Transaction struct {
 	writeBuffer *BufferedStore
 	// replacements records the stored pages writes replace, or nil when the
 	// transaction does not record them.
-	replacements *replacementLog
+	replacements *ReplacementLog
 }
 
 // NewTransaction builds a new transaction with a root cursor. The transformer,
@@ -570,9 +570,7 @@ func (t *Transaction) WriteAtRoot(ctx context.Context, clearTree bool, subRoot *
 					if blkRef != nil {
 						page = &pageBase{ref: blkRef, refs: CloneBlockRefs(blkRefs)}
 					}
-					mtx.Lock()
 					log.recordWrite(bn.base, page)
-					mtx.Unlock()
 					bn.base = page
 				}
 				bn.ref = blkRef
