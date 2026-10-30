@@ -106,7 +106,7 @@ func (r *SharedObjectResource) MountSharedObjectBody(ctx context.Context, req *s
 	spaceResource.SetBindingRegistry(r.bindingRegistry)
 
 	// Run the plugins its replay waits for until the client releases it.
-	releaseOpPlugins := spaceResource.StartOpPluginLoader()
+	releaseOpPlugins := spaceResource.StartOpPluginLoader(ctx)
 	release := func() {
 		releaseOpPlugins()
 		mountedSpaceRef.Release()

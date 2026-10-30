@@ -480,7 +480,7 @@ func (r *SessionResource) mountSpaceResponse(
 	spaceResource.SetAppPluginIDs(r.appPluginIDs)
 	spaceResource.SetAccountPlugins(r.accountPluginSource())
 	spaceResource.SetBindingRegistry(r.bindingRegistry)
-	releaseOpPlugins := spaceResource.StartOpPluginLoader()
+	releaseOpPlugins := spaceResource.StartOpPluginLoader(ctx)
 	releaseSpaceResource := func() {
 		releaseOpPlugins()
 		releaseMountedSpace()

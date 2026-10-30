@@ -157,7 +157,7 @@ func (r *SessionResource) MountSpace(
 	spaceResource.SetAppPluginIDs(r.appPluginIDs)
 	spaceResource.SetAccountPlugins(r.accountPluginSource())
 	spaceResource.SetBindingRegistry(r.bindingRegistry)
-	releaseOpPlugins := spaceResource.StartOpPluginLoader()
+	releaseOpPlugins := spaceResource.StartOpPluginLoader(ctx)
 
 	// Release the operation plugins, then the body before the SharedObject.
 	release := func() {

@@ -31,10 +31,12 @@ type opPluginLoader struct {
 }
 
 // StartOpPluginLoader runs the plugins that replay of the Space's World
-// waits for, until the returned release is called.
-func (r *SpaceResource) StartOpPluginLoader() func() {
+// waits for, until the returned release is called. ctx is the mount's
+// context: the loader keeps its values, which select the same plugin runtime
+// an application of this resource acquires, but not its cancellation.
+func (r *SpaceResource) StartOpPluginLoader(ctx context.Context) func() {
 	// Watch for requests from the Space's World engine.
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	l := &opPluginLoader{r: r}
 	releaseCtrl, err := r.b.AddController(ctx, l, nil)
 	if err != nil {
