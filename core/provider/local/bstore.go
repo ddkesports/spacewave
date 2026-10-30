@@ -514,7 +514,9 @@ func (t *bstoreTracker) executeBlockStoreTracker(rctx context.Context) error {
 
 	// Follow placement changes until the store unmounts. The backend receives
 	// the blocks stored before it was chosen as well as new writes.
-	if err := t.backfill(ctx, wb, backend); err != nil {
+	// A placement that skips the backfill queues it once the placement no
+	// longer does.
+	if err := t.backfill(ctx, wb, backend, placed); err != nil {
 		return err
 	}
 	for settings != nil {
@@ -523,16 +525,15 @@ func (t *bstoreTracker) executeBlockStoreTracker(rctx context.Context) error {
 			return err
 		}
 		placement.setPolicy(placed.GetCache())
-		if next.EqualVT(backend) {
-			continue
+		if !next.EqualVT(backend) {
+			placement.backend.Store(next)
+			if err := wb.SetEnabled(ctx, next != nil); err != nil {
+				return err
+			}
+			upload.SetState(next)
+			backend = next
 		}
-		placement.backend.Store(next)
-		if err := wb.SetEnabled(ctx, next != nil); err != nil {
-			return err
-		}
-		upload.SetState(next)
-		backend = next
-		if err := t.backfill(ctx, wb, backend); err != nil {
+		if err := t.backfill(ctx, wb, backend, placed); err != nil {
 			return err
 		}
 	}
@@ -559,13 +560,15 @@ func newLocalBlockStoreController(
 	)
 }
 
-// backfill queues the store's blocks for upload to backend, once per backend.
+// backfill queues the store's blocks for upload to backend, once per backend,
+// unless the placement skips the backfill.
 func (t *bstoreTracker) backfill(
 	ctx context.Context,
 	wb *block_store_writeback.Store,
 	backend *account_settings.StorageBackend,
+	placed *account_settings.BlockStorePlacement,
 ) error {
-	if backend == nil {
+	if backend == nil || placed.GetCache().GetSkipBackfill() {
 		return nil
 	}
 	return wb.Backfill(ctx, backend.GetId(), func(ctx context.Context) ([]*block.BlockRef, error) {
