@@ -94,7 +94,9 @@ func (c *Controller) declaredLookup(lookupOp world.LookupOp, ws world.WorldState
 
 // waitGap waits until the input gap names is available: a peer serves the
 // missing block, or a handler for the pending operation type resolves on the
-// bus. A handler resolves once the declaring plugin runs and registers it.
+// bus. While it waits for a handler it asks for the declaring plugins with a
+// LoadOpPlugins directive; a handler resolves once one of them runs and
+// registers it.
 func (c *Controller) waitGap(ctx context.Context, so sobject.SharedObject, gap replayGap) error {
 	// Fetch the block with a read that waits for a peer.
 	if gap.missing != nil {
@@ -107,13 +109,22 @@ func (c *Controller) waitGap(ctx context.Context, so sobject.SharedObject, gap r
 		}
 	}
 
-	// Wait for a lookup value that resolves the operation type. Other values,
-	// such as the built-in operations, resolve nothing for it.
+	// Wait for a handler of the pending operation type.
 	if gap.pending != nil {
 		if c.conf.GetDisableLookup() {
 			<-ctx.Done()
 			return context.Cause(ctx)
 		}
+
+		// Ask the plugin runtime holders to run the declaring plugins.
+		_, loadRef, err := c.bus.AddDirective(ctx, NewLoadOpPlugins(c.engineID, gap.pending.pluginIDs), nil)
+		if err != nil {
+			return err
+		}
+		defer loadRef.Release()
+
+		// Wait for a lookup value that resolves the operation type. Other
+		// values, such as the built-in operations, resolve nothing for it.
 		opTypeID := gap.pending.opTypeID
 		_, _, ref, err := bus.ExecWaitValue[world.LookupWorldOpValue](
 			ctx,

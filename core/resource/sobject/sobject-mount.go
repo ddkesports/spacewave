@@ -104,9 +104,16 @@ func (r *SharedObjectResource) MountSharedObjectBody(ctx context.Context, req *s
 	spaceResource.SetAppPluginIDs(r.appPluginIDs)
 	spaceResource.SetAccountPlugins(r.accountPlugins)
 	spaceResource.SetBindingRegistry(r.bindingRegistry)
-	id, err := resourceCtx.AddResourceValue(spaceResource.GetMux(), spaceResource, mountedSpaceRef.Release)
-	if err != nil {
+
+	// Run the plugins its replay waits for until the client releases it.
+	releaseOpPlugins := spaceResource.StartOpPluginLoader()
+	release := func() {
+		releaseOpPlugins()
 		mountedSpaceRef.Release()
+	}
+	id, err := resourceCtx.AddResourceValue(spaceResource.GetMux(), spaceResource, release)
+	if err != nil {
+		release()
 		return nil, err
 	}
 	return &s4wave_sobject.MountSharedObjectBodyResponse{
