@@ -17,6 +17,7 @@ import (
 	storage_controller "github.com/s4wave/spacewave/bldr/storage/controller"
 	plugin_space "github.com/s4wave/spacewave/core/plugin/space"
 	volume_rpc_server "github.com/s4wave/spacewave/db/volume/rpc/server"
+	"github.com/s4wave/spacewave/net/peer"
 	"github.com/sirupsen/logrus"
 )
 
@@ -127,6 +128,19 @@ func (g *Generation) start(
 	resolver.AddFactory(plugin_space.NewFactory(child, factoryOpts...))
 	if err := g.addController(ctx, child, bus_bridge.NewBusBridge(parent, bridgeFilter(conf, appPluginIDs))); err != nil {
 		return err
+	}
+
+	// Serve the Space's World to its plugins through their host.
+	if engineID := conf.GetEngineId(); engineID != "" {
+		var sessionPeerID peer.ID
+		if id := conf.GetSessionPeerId(); id != "" {
+			if sessionPeerID, err = peer.IDB58Decode(id); err != nil {
+				return errors.Wrap(err, "session peer id")
+			}
+		}
+		if err := g.addController(ctx, child, newWorldService(le, child, engineID, sessionPeerID)); err != nil {
+			return err
+		}
 	}
 
 	// Store plugin state in the daemon host storage.
