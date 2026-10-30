@@ -107,6 +107,11 @@ export interface ManifestConfig {
    * For example, ["desktop"] excludes JavaScript and browser WebAssembly.
    */
   platformIds?: string[]
+  /**
+   * NodeTypeIds hints at the Flowgraph node type IDs the plugin registers.
+   * Copied to the built manifest metadata.
+   */
+  nodeTypeIds?: string[]
 }
 
 export const ManifestConfig: MessageType<ManifestConfig> =
@@ -118,6 +123,7 @@ export const ManifestConfig: MessageType<ManifestConfig> =
       [3, 'description', 9],
       [4, 'background', 8],
       [5, 'platform_ids', 9, 1],
+      [6, 'node_type_ids', 9, 1],
     ],
   )
 

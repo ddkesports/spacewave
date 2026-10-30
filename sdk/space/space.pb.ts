@@ -757,6 +757,42 @@ export const MountSpaceContentsResponse: MessageType<MountSpaceContentsResponse>
   )
 
 /**
+ * HoldNodeTypePluginsRequest is the request type for HoldNodeTypePlugins.
+ *
+ * @generated from message s4wave.space.HoldNodeTypePluginsRequest
+ */
+export interface HoldNodeTypePluginsRequest {
+  /**
+   * NodeTypeIds are the Flowgraph node type IDs whose plugins should run.
+   */
+  nodeTypeIds?: string[]
+}
+
+export const HoldNodeTypePluginsRequest: MessageType<HoldNodeTypePluginsRequest> =
+  /* @__PURE__ */ createMessageType<HoldNodeTypePluginsRequest>(
+    's4wave.space.HoldNodeTypePluginsRequest',
+    () => [[1, 'node_type_ids', 9, 1]],
+  )
+
+/**
+ * HoldNodeTypePluginsResponse reports the plugins the hold runs.
+ *
+ * @generated from message s4wave.space.HoldNodeTypePluginsResponse
+ */
+export interface HoldNodeTypePluginsResponse {
+  /**
+   * PluginIds are the sorted plugin IDs whose manifests hint at a held type.
+   */
+  pluginIds?: string[]
+}
+
+export const HoldNodeTypePluginsResponse: MessageType<HoldNodeTypePluginsResponse> =
+  /* @__PURE__ */ createMessageType<HoldNodeTypePluginsResponse>(
+    's4wave.space.HoldNodeTypePluginsResponse',
+    () => [[1, 'plugin_ids', 9, 1]],
+  )
+
+/**
  * CreateSecretRequest creates a Secret object and nested SharedObject payload.
  *
  * @generated from message s4wave.space.CreateSecretRequest
@@ -1084,6 +1120,10 @@ export interface AvailablePlugin {
    * Background reports that the plugin can run in the background.
    */
   background?: boolean
+  /**
+   * NodeTypeIds lists the Flowgraph node type IDs the manifest hints at.
+   */
+  nodeTypeIds?: string[]
 }
 
 export const AvailablePlugin: MessageType<AvailablePlugin> =
@@ -1094,6 +1134,7 @@ export const AvailablePlugin: MessageType<AvailablePlugin> =
       [2, 'description', 9],
       [3, 'revision', 9],
       [4, 'background', 8],
+      [5, 'node_type_ids', 9, 1],
     ],
   )
 

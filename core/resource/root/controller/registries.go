@@ -10,6 +10,7 @@ import (
 	"github.com/s4wave/spacewave/core/resource/registration"
 	resource_viewer_registry "github.com/s4wave/spacewave/core/resource/viewer/registry"
 	resource_worldop_registry "github.com/s4wave/spacewave/core/resource/worldop/registry"
+	"github.com/s4wave/spacewave/core/space/world/objecttypes"
 	s4wave_configtype_registry "github.com/s4wave/spacewave/sdk/configtype/registry"
 	flowgraph_registry "github.com/s4wave/spacewave/sdk/flowgraph/registry"
 	s4wave_objecttype_registry "github.com/s4wave/spacewave/sdk/objecttype/registry"
@@ -50,7 +51,7 @@ func newRegistries(le *logrus.Entry, b bus.Bus) *registries {
 	return &registries{
 		generations:  generations,
 		viewer:       resource_viewer_registry.NewViewerRegistryResource(generations),
-		objectType:   resource_objecttype_registry.NewObjectTypeRegistryResource(generations),
+		objectType:   resource_objecttype_registry.NewObjectTypeRegistryResource(generations, objecttypes.BuiltInObjectTypeIDs()...),
 		worldOp:      resource_worldop_registry.NewWorldOpRegistryResource(generations),
 		configType:   resource_configtype_registry.NewConfigTypeRegistryResource(),
 		nodeType:     resource_flowgraph_registry.NewRegistryResource(),

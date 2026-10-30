@@ -2,6 +2,7 @@ package resource_space
 
 import (
 	"context"
+	"slices"
 	"strconv"
 	"sync/atomic"
 	"testing"
@@ -359,7 +360,7 @@ func TestAvailablePluginsFromCatalogKeepsHighestRev(t *testing.T) {
 	// keep the highest revision per manifest ID.
 	for _, meta := range []*bldr_manifest.ManifestMeta{
 		{ManifestId: "spacewave-notes", Rev: 2, Description: "notes v2"},
-		{ManifestId: "spacewave-notes", Rev: 5, Description: "notes v5"},
+		{ManifestId: "spacewave-notes", Rev: 5, Description: "notes v5", NodeTypeIds: []string{"notes/sync"}},
 		{ManifestId: "spacewave-notes", Rev: 1, Description: "notes v1"},
 		{ManifestId: "spacewave-v86", Rev: 3, Description: "vm"},
 		{ManifestId: "", Rev: 9, Description: "unnamed"},
@@ -382,6 +383,9 @@ func TestAvailablePluginsFromCatalogKeepsHighestRev(t *testing.T) {
 	}
 	if got[0].GetDescription() != "notes v5" {
 		t.Fatalf("expected highest-rev description, got %q", got[0].GetDescription())
+	}
+	if !slices.Equal(got[0].GetNodeTypeIds(), []string{"notes/sync"}) {
+		t.Fatalf("expected the highest revision's node type hint, got %v", got[0].GetNodeTypeIds())
 	}
 	if got[1].GetRevision() != "3" {
 		t.Fatalf("expected revision 3 for v86, got %q", got[1].GetRevision())

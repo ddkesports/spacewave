@@ -4,6 +4,7 @@ package device_flowgraph
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -233,7 +234,10 @@ func TestPluginNodeFixture(t *testing.T) {
 	}
 	runs := make(chan string, 8)
 	pluginResolver.AddFactory(&pluginRunFactory{runs: runs})
-	releaseRun := registerPluginRun(t, ctx, resources, rootClient, pluginBus)
+	releaseRun, err := registerPluginRun(ctx, resources, rootClient, pluginBus)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// The Device runs the controller in the plugin and shows it active.
 	expectRuns(t, ctx, runs, "start one")
@@ -249,11 +253,47 @@ func TestPluginNodeFixture(t *testing.T) {
 	})
 
 	// Unloading the plugin stops its controller and shows the node unavailable.
-	releaseRun()
+	if err := releaseRun(); err != nil {
+		t.Fatal(err)
+	}
 	expectRuns(t, ctx, runs, "stop two")
 	waitCapabilities(t, ctx, tb.Engine, func(caps map[string]*s4wave_device.DeviceCapability) bool {
 		return capabilityState(caps, "run") == s4wave_device.DeviceCapabilityState_DEVICE_CAPABILITY_STATE_DECLARED
 	})
+
+	// A plugin loader whose hold runs the plugin, as a Space does for a plugin
+	// whose manifest hints at the type. It starts the plugin for the placed node.
+	loader := NewPluginLoader(le, func(ctx context.Context, typeID string) error {
+		// Hold other types without a plugin.
+		if typeID != pluginRunNodeTypeID {
+			<-ctx.Done()
+			return nil
+		}
+
+		// Run the plugin until the lookup ends.
+		release, err := registerPluginRun(ctx, resources, rootClient, pluginBus)
+		if err != nil {
+			return err
+		}
+		<-ctx.Done()
+		return release()
+	})
+	releaseLoader, err := b.AddController(ctx, loader, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseLoader()
+	expectRuns(t, ctx, runs, "start two")
+	waitCapabilities(t, ctx, tb.Engine, func(caps map[string]*s4wave_device.DeviceCapability) bool {
+		return capabilityState(caps, "run") == s4wave_device.DeviceCapabilityState_DEVICE_CAPABILITY_STATE_ACTIVE
+	})
+
+	// Removing the last node of the type ends the hold and stops the plugin.
+	commit(t, ctx, tb.Engine, func(tx world.Tx) error {
+		_, err := s4wave_flowgraph.UpdateFlowgraph(ctx, tx, testFlowgraphKey, &s4wave_flowgraph.UpdateFlowgraphRequest{RemoveNodeIds: []string{"run"}})
+		return err
+	})
+	expectRuns(t, ctx, runs, "stop two")
 }
 
 // pluginRunNodeTypeID selects the fixture node whose controller runs in its plugin.
@@ -275,7 +315,7 @@ func setPluginRunNode(t *testing.T, ctx context.Context, engine world.Engine, va
 
 // registerPluginRun registers the plugin run node type as a plugin does, with
 // its controller on b, and returns the function that unloads it.
-func registerPluginRun(t *testing.T, ctx context.Context, resources *resource_client.Client, root srpc.Client, b bus.Bus) func() {
+func registerPluginRun(ctx context.Context, resources *resource_client.Client, root srpc.Client, b bus.Bus) (func() error, error) {
 	// Attach the compiler and its plugin controllers.
 	metadata := &flowgraph_registry.NodeType{
 		TypeId:          pluginRunNodeTypeID,
@@ -285,25 +325,23 @@ func registerPluginRun(t *testing.T, ctx context.Context, resources *resource_cl
 	}
 	mux := srpc.NewMux()
 	if err := flowgraph_registry.SRPCRegisterNodeTypeResourceService(mux, flowgraph_registry.NewNodeTypeResource(b, metadata, pluginRunNodeType{})); err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
 	attachment, err := resources.AttachResource(ctx, "Plugin Run compiler", mux)
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
 
 	// Register the node type and hold it until the plugin unloads.
 	resp, err := flowgraph_registry.NewSRPCNodeTypeRegistryResourceServiceClient(root).RegisterNodeType(ctx, &flowgraph_registry.RegisterNodeTypeRequest{NodeType: metadata, HandlerResourceId: attachment})
 	if err != nil {
-		t.Fatal(err)
+		return nil, errors.Join(err, resources.DetachResource(ctx, attachment))
 	}
 	ref := resources.CreateResourceReference(resp.GetResourceId())
-	return func() {
+	return func() error {
 		ref.Release()
-		if err := resources.DetachResource(ctx, attachment); err != nil {
-			t.Error(err)
-		}
-	}
+		return resources.DetachResource(context.WithoutCancel(ctx), attachment)
+	}, nil
 }
 
 // expectRuns waits for the plugin controller events in want, in any order.

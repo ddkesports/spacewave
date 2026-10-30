@@ -299,6 +299,7 @@ func (h *buildPluginHandler) buildRepository(ctx context.Context) error {
 		meta, platform, err := (&manifest.ManifestMeta{
 			ManifestId: h.manifestID, PlatformId: h.platformID, BuildType: string(manifest.BuildType_DEV),
 			Description: selected.GetDescription(), Background: selected.GetBackground(), Rev: selected.GetRev(),
+			NodeTypeIds: selected.GetNodeTypeIds(),
 		}).Resolve()
 		if err != nil {
 			return err

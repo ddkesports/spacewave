@@ -25,6 +25,10 @@ message ManifestMeta {
   // Background declares that the plugin can run without an open view.
   // A Session runs it in the background only after its user confirms.
   bool background = 6;
+  // NodeTypeIds hints at the Flowgraph node type IDs the plugin registers while
+  // it runs. A Device starts a listed plugin when a placed node needs one of
+  // them; the running plugin's registrations decide what resolves.
+  repeated string node_type_ids = 7;
 }
 
 // Manifest contains metadata and contents.

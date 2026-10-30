@@ -22,7 +22,7 @@ func TestEvaluateMinimal(t *testing.T) {
 	starFile := filepath.Join(dir, "bldr.star")
 	err := os.WriteFile(starFile, []byte(`
 project(id="test-project")
-manifest("test-manifest", builder="bldr/plugin/compiler/go", rev=1, config={"goPkgs": ["./pkg"]}, background=True, platformIds=["desktop"])
+manifest("test-manifest", builder="bldr/plugin/compiler/go", rev=1, config={"goPkgs": ["./pkg"]}, background=True, platformIds=["desktop"], nodeTypeIds=["test/node"])
 build("app", manifests=["test-manifest"], targets=["desktop"])
 `), 0o644)
 	if err != nil {
@@ -47,7 +47,7 @@ build("app", manifests=["test-manifest"], targets=["desktop"])
 		t.Fatal("manifest 'test-manifest' not found")
 	}
 
-	// Assert the manifest builder id, revisions, background, and the build target.
+	// Assert the manifest builder id, revisions, background, node types, and the build target.
 	if mc.GetBuilder().GetId() != "bldr/plugin/compiler/go" {
 		t.Fatalf("expected builder id 'bldr/plugin/compiler/go', got %q", mc.GetBuilder().GetId())
 	}
@@ -62,6 +62,9 @@ build("app", manifests=["test-manifest"], targets=["desktop"])
 	}
 	if !slices.Equal(mc.GetPlatformIds(), []string{"desktop"}) {
 		t.Fatalf("manifest platforms = %v, want desktop", mc.GetPlatformIds())
+	}
+	if !slices.Equal(mc.GetNodeTypeIds(), []string{"test/node"}) {
+		t.Fatalf("manifest node types = %v, want test/node", mc.GetNodeTypeIds())
 	}
 
 	// Assert the build target keeps its selected manifests.

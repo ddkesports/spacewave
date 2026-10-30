@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/aperturerobotics/controllerbus/bus"
-	"github.com/s4wave/spacewave/core/space/world/objecttypes"
 	world_testbed "github.com/s4wave/spacewave/db/world/testbed"
 	s4wave_objecttype_registry "github.com/s4wave/spacewave/sdk/objecttype/registry"
 	"github.com/sirupsen/logrus"
@@ -95,7 +94,7 @@ func TestRegisteredObjectTypeDeclaresPorts(t *testing.T) {
 	if err := comparePorts(msg.GetRegistrations()[0].GetMetadata().GetPorts(), ports); err != nil {
 		t.Fatalf("watched ports: %v", err)
 	}
-	if !slices.Equal(msg.GetBuiltInTypeIds(), objecttypes.BuiltInObjectTypeIDs()) || len(msg.GetBuiltInTypeIds()) == 0 {
+	if !slices.Equal(msg.GetBuiltInTypeIds(), testBuiltInTypeIDs) {
 		t.Fatalf("watched built-in types = %v", msg.GetBuiltInTypeIds())
 	}
 

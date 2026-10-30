@@ -25,6 +25,10 @@ type SRPCSpaceResourceServiceClient interface {
 	AccessWorld(ctx context.Context, in *AccessWorldRequest) (*AccessWorldResponse, error)
 
 	MountSpaceContents(ctx context.Context, in *MountSpaceContentsRequest) (*MountSpaceContentsResponse, error)
+	// HoldNodeTypePlugins runs the Space's listed plugins whose manifests hint
+	// at any of the node type IDs, until the stream ends. It streams the held
+	// plugin IDs each time the Space's manifests change them.
+	HoldNodeTypePlugins(ctx context.Context, in *HoldNodeTypePluginsRequest) (SRPCSpaceResourceService_HoldNodeTypePluginsClient, error)
 
 	CreateSecret(ctx context.Context, in *CreateSecretRequest) (*CreateSecretResponse, error)
 
@@ -216,6 +220,39 @@ func (c *srpcSpaceResourceServiceClient) MountSpaceContents(ctx context.Context,
 		return nil, err
 	}
 	return out, nil
+}
+
+func (c *srpcSpaceResourceServiceClient) HoldNodeTypePlugins(ctx context.Context, in *HoldNodeTypePluginsRequest) (SRPCSpaceResourceService_HoldNodeTypePluginsClient, error) {
+	stream, err := c.cc.NewStream(ctx, c.serviceID, "HoldNodeTypePlugins", in)
+	if err != nil {
+		return nil, err
+	}
+	strm := &srpcSpaceResourceService_HoldNodeTypePluginsClient{stream}
+	// A failed half-close means the call ended; MsgRecv reports its outcome.
+	_ = strm.CloseSend()
+	return strm, nil
+}
+
+type SRPCSpaceResourceService_HoldNodeTypePluginsClient interface {
+	srpc.Stream
+	Recv() (*HoldNodeTypePluginsResponse, error)
+	RecvTo(*HoldNodeTypePluginsResponse) error
+}
+
+type srpcSpaceResourceService_HoldNodeTypePluginsClient struct {
+	srpc.Stream
+}
+
+func (x *srpcSpaceResourceService_HoldNodeTypePluginsClient) Recv() (*HoldNodeTypePluginsResponse, error) {
+	m := new(HoldNodeTypePluginsResponse)
+	if err := x.MsgRecv(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+func (x *srpcSpaceResourceService_HoldNodeTypePluginsClient) RecvTo(m *HoldNodeTypePluginsResponse) error {
+	return x.MsgRecv(m)
 }
 
 func (c *srpcSpaceResourceServiceClient) CreateSecret(ctx context.Context, in *CreateSecretRequest) (*CreateSecretResponse, error) {
@@ -445,6 +482,10 @@ type SRPCSpaceResourceServiceServer interface {
 	AccessWorld(context.Context, *AccessWorldRequest) (*AccessWorldResponse, error)
 
 	MountSpaceContents(context.Context, *MountSpaceContentsRequest) (*MountSpaceContentsResponse, error)
+	// HoldNodeTypePlugins runs the Space's listed plugins whose manifests hint
+	// at any of the node type IDs, until the stream ends. It streams the held
+	// plugin IDs each time the Space's manifests change them.
+	HoldNodeTypePlugins(*HoldNodeTypePluginsRequest, SRPCSpaceResourceService_HoldNodeTypePluginsStream) error
 
 	CreateSecret(context.Context, *CreateSecretRequest) (*CreateSecretResponse, error)
 
@@ -534,6 +575,7 @@ func (SRPCSpaceResourceServiceHandler) GetMethodIDs() []string {
 		"WatchSpaceSharingState",
 		"AccessWorld",
 		"MountSpaceContents",
+		"HoldNodeTypePlugins",
 		"CreateSecret",
 		"ReadSecretPayload",
 		"WriteSecretPayload",
@@ -574,6 +616,8 @@ func (d *SRPCSpaceResourceServiceHandler) InvokeMethod(
 		return true, d.InvokeMethod_AccessWorld(d.impl, strm)
 	case "MountSpaceContents":
 		return true, d.InvokeMethod_MountSpaceContents(d.impl, strm)
+	case "HoldNodeTypePlugins":
+		return true, d.InvokeMethod_HoldNodeTypePlugins(d.impl, strm)
 	case "CreateSecret":
 		return true, d.InvokeMethod_CreateSecret(d.impl, strm)
 	case "ReadSecretPayload":
@@ -664,6 +708,15 @@ func (SRPCSpaceResourceServiceHandler) InvokeMethod_MountSpaceContents(impl SRPC
 		return err
 	}
 	return strm.MsgSend(out)
+}
+
+func (SRPCSpaceResourceServiceHandler) InvokeMethod_HoldNodeTypePlugins(impl SRPCSpaceResourceServiceServer, strm srpc.Stream) error {
+	req := new(HoldNodeTypePluginsRequest)
+	if err := strm.MsgRecv(req); err != nil {
+		return err
+	}
+	serverStrm := &srpcSpaceResourceService_HoldNodeTypePluginsStream{strm}
+	return impl.HoldNodeTypePlugins(req, serverStrm)
 }
 
 func (SRPCSpaceResourceServiceHandler) InvokeMethod_CreateSecret(impl SRPCSpaceResourceServiceServer, strm srpc.Stream) error {
@@ -955,6 +1008,29 @@ type SRPCSpaceResourceService_MountSpaceContentsStream interface {
 
 type srpcSpaceResourceService_MountSpaceContentsStream struct {
 	srpc.Stream
+}
+
+type SRPCSpaceResourceService_HoldNodeTypePluginsStream interface {
+	srpc.Stream
+	Send(*HoldNodeTypePluginsResponse) error
+	SendAndClose(*HoldNodeTypePluginsResponse) error
+}
+
+type srpcSpaceResourceService_HoldNodeTypePluginsStream struct {
+	srpc.Stream
+}
+
+func (x *srpcSpaceResourceService_HoldNodeTypePluginsStream) Send(m *HoldNodeTypePluginsResponse) error {
+	return x.MsgSend(m)
+}
+
+func (x *srpcSpaceResourceService_HoldNodeTypePluginsStream) SendAndClose(m *HoldNodeTypePluginsResponse) error {
+	if m != nil {
+		if err := x.MsgSend(m); err != nil {
+			return err
+		}
+	}
+	return x.CloseSend()
 }
 
 type SRPCSpaceResourceService_CreateSecretStream interface {

@@ -460,6 +460,7 @@ manifest("spacewave-cli-plugin",
 manifest("spacewave-flowgraph",
     builder="bldr/plugin/compiler/go",
     rev=1,
+    nodeTypeIds=["flowgraph/stream-echo"],
     config={
         "goPkgs": ["./plugin/flowgraph"],
         "configSet": {

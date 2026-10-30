@@ -19,6 +19,8 @@ import {
   CreateSecretResponse,
   FetchPluginRepositoryRequest,
   FetchPluginRepositoryResponse,
+  HoldNodeTypePluginsRequest,
+  HoldNodeTypePluginsResponse,
   ImportSpacePluginRequest,
   ImportSpacePluginResponse,
   MountSpaceContentsRequest,
@@ -116,6 +118,19 @@ export const SpaceResourceServiceDefinition = {
       I: MountSpaceContentsRequest,
       O: MountSpaceContentsResponse,
       kind: MethodKind.Unary,
+    },
+    /**
+     * HoldNodeTypePlugins runs the Space's listed plugins whose manifests hint
+     * at any of the node type IDs, until the stream ends. It streams the held
+     * plugin IDs each time the Space's manifests change them.
+     *
+     * @generated from rpc s4wave.space.SpaceResourceService.HoldNodeTypePlugins
+     */
+    HoldNodeTypePlugins: {
+      name: 'HoldNodeTypePlugins',
+      I: HoldNodeTypePluginsRequest,
+      O: HoldNodeTypePluginsResponse,
+      kind: MethodKind.ServerStreaming,
     },
     /**
      * @generated from rpc s4wave.space.SpaceResourceService.CreateSecret
@@ -376,6 +391,18 @@ export interface SpaceResourceService {
   ): Promise<MountSpaceContentsResponse>
 
   /**
+   * HoldNodeTypePlugins runs the Space's listed plugins whose manifests hint
+   * at any of the node type IDs, until the stream ends. It streams the held
+   * plugin IDs each time the Space's manifests change them.
+   *
+   * @generated from rpc s4wave.space.SpaceResourceService.HoldNodeTypePlugins
+   */
+  HoldNodeTypePlugins(
+    request: HoldNodeTypePluginsRequest,
+    abortSignal?: AbortSignal,
+  ): MessageStream<HoldNodeTypePluginsResponse>
+
+  /**
    * @generated from rpc s4wave.space.SpaceResourceService.CreateSecret
    */
   CreateSecret(
@@ -619,6 +646,19 @@ export interface SpaceResourceServiceHandler {
   ): Promise<MountSpaceContentsResponse>
 
   /**
+   * HoldNodeTypePlugins runs the Space's listed plugins whose manifests hint
+   * at any of the node type IDs, until the stream ends. It streams the held
+   * plugin IDs each time the Space's manifests change them.
+   *
+   * @generated from rpc s4wave.space.SpaceResourceService.HoldNodeTypePlugins
+   */
+  HoldNodeTypePlugins(
+    request: HoldNodeTypePluginsRequest,
+    abortSignal: AbortSignal,
+    context: ServerContext,
+  ): MessageStream<HoldNodeTypePluginsResponse>
+
+  /**
    * @generated from rpc s4wave.space.SpaceResourceService.CreateSecret
    */
   CreateSecret(
@@ -841,6 +881,7 @@ export class SpaceResourceServiceClient implements SpaceResourceService {
     this.WatchSpaceSharingState = this.WatchSpaceSharingState.bind(this)
     this.AccessWorld = this.AccessWorld.bind(this)
     this.MountSpaceContents = this.MountSpaceContents.bind(this)
+    this.HoldNodeTypePlugins = this.HoldNodeTypePlugins.bind(this)
     this.CreateSecret = this.CreateSecret.bind(this)
     this.ReadSecretPayload = this.ReadSecretPayload.bind(this)
     this.WriteSecretPayload = this.WriteSecretPayload.bind(this)
@@ -946,6 +987,27 @@ export class SpaceResourceServiceClient implements SpaceResourceService {
       abortSignal || undefined,
     )
     return MountSpaceContentsResponse.fromBinary(result)
+  }
+
+  /**
+   * HoldNodeTypePlugins runs the Space's listed plugins whose manifests hint
+   * at any of the node type IDs, until the stream ends. It streams the held
+   * plugin IDs each time the Space's manifests change them.
+   *
+   * @generated from rpc s4wave.space.SpaceResourceService.HoldNodeTypePlugins
+   */
+  HoldNodeTypePlugins(
+    request: HoldNodeTypePluginsRequest,
+    abortSignal?: AbortSignal,
+  ): MessageStream<HoldNodeTypePluginsResponse> {
+    const requestMsg = HoldNodeTypePluginsRequest.create(request)
+    const result = this.rpc.serverStreamingRequest(
+      this.service,
+      SpaceResourceServiceDefinition.methods.HoldNodeTypePlugins.name,
+      HoldNodeTypePluginsRequest.toBinary(requestMsg),
+      abortSignal || undefined,
+    )
+    return buildDecodeMessageTransform(HoldNodeTypePluginsResponse)(result)
   }
 
   /**

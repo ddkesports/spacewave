@@ -8,7 +8,6 @@ import (
 	"github.com/aperturerobotics/util/broadcast"
 	resource_server "github.com/s4wave/spacewave/bldr/resource/server"
 	"github.com/s4wave/spacewave/core/resource/registration"
-	"github.com/s4wave/spacewave/core/space/world/objecttypes"
 	s4wave_objecttype_registry "github.com/s4wave/spacewave/sdk/objecttype/registry"
 )
 
@@ -39,8 +38,9 @@ type attachedObjectTypeHandler struct {
 	ctx    context.Context
 }
 
-// NewObjectTypeRegistryResource creates a new ObjectTypeRegistryResource.
-func NewObjectTypeRegistryResource(generations *registration.Registry) *ObjectTypeRegistryResource {
+// NewObjectTypeRegistryResource creates a new ObjectTypeRegistryResource
+// that reports builtInTypeIDs, sorted, as the host's compiled ObjectTypes.
+func NewObjectTypeRegistryResource(generations *registration.Registry, builtInTypeIDs ...string) *ObjectTypeRegistryResource {
 	// A standalone registry has its own admission boundary.
 	if generations == nil {
 		generations = registration.NewRegistry()
@@ -50,7 +50,7 @@ func NewObjectTypeRegistryResource(generations *registration.Registry) *ObjectTy
 		bcast:          generations.Broadcast(),
 		nextID:         1,
 		registrations:  make(map[uint32]*objectTypeRegistration),
-		builtInTypeIDs: objecttypes.BuiltInObjectTypeIDs(),
+		builtInTypeIDs: builtInTypeIDs,
 	}
 	mux := srpc.NewMux()
 	_ = s4wave_objecttype_registry.SRPCRegisterObjectTypeRegistryResourceService(mux, r)

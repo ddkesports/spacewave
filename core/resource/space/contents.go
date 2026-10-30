@@ -830,6 +830,7 @@ func availablePluginsFromCatalog(catalog map[string]*bldr_manifest.ManifestMeta)
 			Description: meta.GetDescription(),
 			Revision:    strconv.FormatUint(meta.GetRev(), 10),
 			Background:  meta.GetBackground(),
+			NodeTypeIds: meta.GetNodeTypeIds(),
 		})
 	}
 	slices.SortFunc(out, func(a, b *s4wave_space.AvailablePlugin) int {

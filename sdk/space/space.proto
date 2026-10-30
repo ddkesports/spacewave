@@ -24,6 +24,11 @@ service SpaceResourceService {
 
   rpc MountSpaceContents(MountSpaceContentsRequest) returns (MountSpaceContentsResponse) {}
 
+  // HoldNodeTypePlugins runs the Space's listed plugins whose manifests hint
+  // at any of the node type IDs, until the stream ends. It streams the held
+  // plugin IDs each time the Space's manifests change them.
+  rpc HoldNodeTypePlugins(HoldNodeTypePluginsRequest) returns (stream HoldNodeTypePluginsResponse) {}
+
   rpc CreateSecret(CreateSecretRequest) returns (CreateSecretResponse) {}
 
   rpc ReadSecretPayload(ReadSecretPayloadRequest) returns (ReadSecretPayloadResponse) {}
@@ -345,6 +350,18 @@ message MountSpaceContentsResponse {
   uint32 resource_id = 1;
 }
 
+// HoldNodeTypePluginsRequest is the request type for HoldNodeTypePlugins.
+message HoldNodeTypePluginsRequest {
+  // NodeTypeIds are the Flowgraph node type IDs whose plugins should run.
+  repeated string node_type_ids = 1;
+}
+
+// HoldNodeTypePluginsResponse reports the plugins the hold runs.
+message HoldNodeTypePluginsResponse {
+  // PluginIds are the sorted plugin IDs whose manifests hint at a held type.
+  repeated string plugin_ids = 1;
+}
+
 // CreateSecretRequest creates a Secret object and nested SharedObject payload.
 message CreateSecretRequest {
   // ObjectKey is the parent Secret object key.
@@ -460,6 +477,8 @@ message AvailablePlugin {
   string revision = 3;
   // Background reports that the plugin can run in the background.
   bool background = 4;
+  // NodeTypeIds lists the Flowgraph node type IDs the manifest hints at.
+  repeated string node_type_ids = 5;
 }
 
 // SpacePluginLifecycleState is the app-facing lifecycle projection for a plugin.

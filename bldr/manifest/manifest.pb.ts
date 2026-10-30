@@ -43,6 +43,12 @@ export interface ManifestMeta {
    * A Session runs it in the background only after its user confirms.
    */
   background?: boolean
+  /**
+   * NodeTypeIds hints at the Flowgraph node type IDs the plugin registers while
+   * it runs. A Device starts a listed plugin when a placed node needs one of
+   * them; the running plugin's registrations decide what resolves.
+   */
+  nodeTypeIds?: string[]
 }
 
 export const ManifestMeta: MessageType<ManifestMeta> =
@@ -55,6 +61,7 @@ export const ManifestMeta: MessageType<ManifestMeta> =
       [4, 'rev', 4],
       [5, 'description', 9],
       [6, 'background', 8],
+      [7, 'node_type_ids', 9, 1],
     ],
   )
 

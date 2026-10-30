@@ -60,6 +60,9 @@ message ManifestConfig {
   // platform IDs. Empty allows every platform selected by the build target.
   // For example, ["desktop"] excludes JavaScript and browser WebAssembly.
   repeated string platform_ids = 5;
+  // NodeTypeIds hints at the Flowgraph node type IDs the plugin registers.
+  // Copied to the built manifest metadata.
+  repeated string node_type_ids = 6;
 }
 
 // StartConfig configures starting the program.

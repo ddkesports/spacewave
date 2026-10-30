@@ -383,13 +383,18 @@ func TestRegisterObjectTypeAttachedHandlerEndsWithClientGeneration(t *testing.T)
 	}
 }
 
+// testBuiltInTypeIDs stands in for the host's compiled ObjectTypes.
+var testBuiltInTypeIDs = []string{"test/builtin-a", "test/builtin-b"}
+
+// newRegistryResourceClient serves a fresh registry through an in-process
+// resource client.
 func newRegistryResourceClient(
 	t *testing.T,
 	ctx context.Context,
 ) (*ObjectTypeRegistryResource, *resource_client.Client, s4wave_objecttype_registry.SRPCObjectTypeRegistryResourceServiceClient) {
 	// Expose the registry service through an in-process resource client.
 	t.Helper()
-	registry := NewObjectTypeRegistryResource(nil)
+	registry := NewObjectTypeRegistryResource(nil, testBuiltInTypeIDs...)
 	serviceMux := srpc.NewMux()
 	if err := resource_server.NewResourceServer(registry.GetMux()).Register(serviceMux); err != nil {
 		t.Fatalf("register registry ResourceService: %v", err)

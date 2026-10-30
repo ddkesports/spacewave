@@ -14,6 +14,7 @@ import (
 	device_flowgraph "github.com/s4wave/spacewave/core/device/flowgraph"
 	device_policy "github.com/s4wave/spacewave/core/device/policy"
 	"github.com/s4wave/spacewave/db/world"
+	s4wave_space "github.com/s4wave/spacewave/sdk/space"
 	"github.com/sirupsen/logrus"
 )
 
@@ -46,9 +47,9 @@ func startFlowgraphReconciler(
 		}
 		defer client.close()
 
-		// Mount the Space holding the Device.
+		// Mount the Space holding the Device, loading its plugins on demand.
 		mount := func(ctx context.Context, record *deviceSetupRecord) (world.Engine, string, func(), error) {
-			return mountDeviceWorld(ctx, client, record)
+			return mountDeviceWorld(ctx, le, b, client, record)
 		}
 
 		// Keep the daemon alive while a node runs, since nodes serve with no
@@ -135,9 +136,10 @@ func waitDeviceSetupReady(ctx context.Context, le *logrus.Entry, statePath strin
 }
 
 // mountDeviceWorld mounts the World of the Space that holds the Device of
-// record, and returns the ID of its engine. Call release when done with the
-// engine.
-func mountDeviceWorld(ctx context.Context, client *sdkClient, record *deviceSetupRecord) (world.Engine, string, func(), error) {
+// record, and returns the ID of its engine. Until release, a lookup of a node
+// type on b runs the Space's plugins that hint at it. Call release when done
+// with the engine.
+func mountDeviceWorld(ctx context.Context, le *logrus.Entry, b bus.Bus, client *sdkClient, record *deviceSetupRecord) (world.Engine, string, func(), error) {
 	// Decode the Space the Device object lives in.
 	spaceID, err := decodeDeviceResourceID(record.ResourceID)
 	if err != nil {
@@ -166,6 +168,20 @@ func mountDeviceWorld(ctx context.Context, client *sdkClient, record *deviceSetu
 		sess.Release()
 	}
 
+	// Start the plugins of the node types the Device looks up.
+	releaseLoader, err := b.AddController(ctx, device_flowgraph.NewPluginLoader(le, func(ctx context.Context, typeID string) error {
+		return holdNodeTypePlugins(ctx, spaceSvc, typeID)
+	}), nil)
+	if err != nil {
+		release()
+		return nil, "", nil, err
+	}
+	releaseWorld := release
+	release = func() {
+		releaseLoader()
+		releaseWorld()
+	}
+
 	// Read the ID the World engine has on the daemon's bus.
 	info, err := engine.GetEngineInfo(ctx)
 	if err != nil {
@@ -173,4 +189,25 @@ func mountDeviceWorld(ctx context.Context, client *sdkClient, record *deviceSetu
 		return nil, "", nil, errors.Wrap(err, "get world engine info")
 	}
 	return engine, info.GetEngineInfo().GetEngineId(), release, nil
+}
+
+// holdNodeTypePlugins runs the Space's plugins that hint at typeID until ctx
+// ends or the hold stream fails.
+func holdNodeTypePlugins(ctx context.Context, spaceSvc s4wave_space.SRPCSpaceResourceServiceClient, typeID string) error {
+	// Open the hold, which lasts as long as the stream.
+	strm, err := spaceSvc.HoldNodeTypePlugins(ctx, &s4wave_space.HoldNodeTypePluginsRequest{NodeTypeIds: []string{typeID}})
+	if err != nil {
+		return err
+	}
+	defer strm.Close()
+
+	// Drain the held plugin reports until the stream ends.
+	for {
+		if _, err := strm.Recv(); err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return err
+		}
+	}
 }
