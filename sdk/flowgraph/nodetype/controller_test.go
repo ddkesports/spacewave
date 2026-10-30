@@ -32,7 +32,7 @@ func TestCompileTCPPortToLocalPort(t *testing.T) {
 	// Resolve each core node type through the public directive.
 	types := make(map[string]s4wave_flowgraph.FlowgraphNodeType)
 	for _, typeID := range []string{s4wave_flowgraph.TCPPortNodeTypeID, s4wave_flowgraph.LocalPortNodeTypeID} {
-		nodeType, ref, err := s4wave_flowgraph.ExLookupFlowgraphNodeType(ctx, b, typeID)
+		nodeType, ref, err := s4wave_flowgraph.ExLookupFlowgraphNodeType(ctx, b, "", typeID)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -46,7 +46,7 @@ func TestCompileTCPPortToLocalPort(t *testing.T) {
 	// Leave a type that no controller supplies waiting until the context ends.
 	missingCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
 	defer cancel()
-	if _, _, err := s4wave_flowgraph.ExLookupFlowgraphNodeType(missingCtx, b, "missing"); err == nil {
+	if _, _, err := s4wave_flowgraph.ExLookupFlowgraphNodeType(missingCtx, b, "", "missing"); err == nil {
 		t.Fatal("resolved a node type nobody supplies")
 	}
 

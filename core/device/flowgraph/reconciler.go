@@ -88,7 +88,7 @@ func NewReconciler(
 		wake:        make(chan struct{}, 1),
 		watchErr:    make(chan error, 1),
 	}
-	r.types = newNodeTypes(b, r.notify)
+	r.types = newNodeTypes(b, engineID, r.notify)
 	r.applier = newConfigApplier(b, r.notify)
 	return r
 }

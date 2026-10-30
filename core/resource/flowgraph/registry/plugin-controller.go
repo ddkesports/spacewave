@@ -17,12 +17,15 @@ import (
 var pluginControllerVersion = controller.MustParseVersion("0.0.1")
 
 // pluginConfig carries a plugin config's encoded bytes through the host bus,
-// which has no Go type for it. The plugin decodes the bytes.
+// which has no Go type for it, bound to the registration whose plugin compiled
+// it. The plugin decodes the bytes.
 type pluginConfig struct {
 	// configID is the plugin config ID.
 	configID string
 	// data is the config encoded as protobuf or JSON.
 	data []byte
+	// reg is the registration whose plugin runs the config.
+	reg *nodeTypeRegistration
 }
 
 // GetConfigID returns the plugin config ID.
@@ -35,10 +38,10 @@ func (c *pluginConfig) Validate() error {
 	return nil
 }
 
-// EqualsConfig compares the config ID and encoded bytes.
+// EqualsConfig compares the config ID, registration and encoded bytes.
 func (c *pluginConfig) EqualsConfig(other config.Config) bool {
 	oc, ok := other.(*pluginConfig)
-	return ok && c.configID == oc.configID && bytes.Equal(c.data, oc.data)
+	return ok && c.configID == oc.configID && c.reg == oc.reg && bytes.Equal(c.data, oc.data)
 }
 
 // MarshalJSON returns the bytes when they are JSON.
@@ -84,19 +87,6 @@ func (c *pluginConfig) Reset() {
 	c.data = nil
 }
 
-// pluginConfigConstructor constructs empty configs for one plugin config ID.
-type pluginConfigConstructor string
-
-// GetConfigID returns the plugin config ID.
-func (c pluginConfigConstructor) GetConfigID() string {
-	return string(c)
-}
-
-// ConstructConfig returns an empty config for the ID.
-func (c pluginConfigConstructor) ConstructConfig() config.Config {
-	return &pluginConfig{configID: string(c)}
-}
-
 // pluginFactory builds controllers that run one plugin config inside the
 // plugin, for one registration.
 type pluginFactory struct {
@@ -111,9 +101,9 @@ func (f *pluginFactory) GetConfigID() string {
 	return f.configID
 }
 
-// ConstructConfig returns an empty config for the ID.
+// ConstructConfig returns an empty config for the ID bound to the registration.
 func (f *pluginFactory) ConstructConfig() config.Config {
-	return pluginConfigConstructor(f.configID).ConstructConfig()
+	return &pluginConfig{configID: f.configID, reg: f.reg}
 }
 
 // GetVersion returns the proxy version.
@@ -126,7 +116,7 @@ func (f *pluginFactory) GetVersion() controller.Version {
 func (f *pluginFactory) Construct(ctx context.Context, conf config.Config, _ controller.ConstructOpts) (controller.Controller, error) {
 	// Accept only this factory's config.
 	pc, ok := conf.(*pluginConfig)
-	if !ok || pc.configID != f.configID {
+	if !ok || pc.configID != f.configID || pc.reg != f.reg {
 		return nil, errors.Errorf("plugin factory %q got config %q", f.configID, conf.GetConfigID())
 	}
 

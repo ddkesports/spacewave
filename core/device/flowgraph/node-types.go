@@ -18,6 +18,8 @@ import (
 type nodeTypes struct {
 	// b is the bus the lookup directives run on.
 	b bus.Bus
+	// engineID is the ID of the World engine that holds the Flowgraphs.
+	engineID string
 	// notify wakes the reconciler when a lookup resolves or changes.
 	notify func()
 	// held contains the lookup of each node type in use, by type ID.
@@ -35,9 +37,10 @@ type heldNodeType struct {
 	nodeType s4wave_flowgraph.FlowgraphNodeType
 }
 
-// newNodeTypes constructs a nodeTypes that wakes notify on every change.
-func newNodeTypes(b bus.Bus, notify func()) *nodeTypes {
-	return &nodeTypes{b: b, notify: notify, held: make(map[string]*heldNodeType)}
+// newNodeTypes constructs a nodeTypes for the World engineID that wakes notify
+// on every change.
+func newNodeTypes(b bus.Bus, engineID string, notify func()) *nodeTypes {
+	return &nodeTypes{b: b, engineID: engineID, notify: notify, held: make(map[string]*heldNodeType)}
 }
 
 // Hold looks up the wanted node types and releases the lookup of every other
@@ -73,7 +76,7 @@ func (n *nodeTypes) Hold(ctx context.Context, wanted map[string]struct{}) error 
 				return true
 			},
 			n.b,
-			s4wave_flowgraph.NewLookupFlowgraphNodeType(typeID),
+			s4wave_flowgraph.NewLookupFlowgraphNodeType(n.engineID, typeID),
 		)
 		if err != nil {
 			return err

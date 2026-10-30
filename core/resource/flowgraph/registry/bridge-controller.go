@@ -11,8 +11,8 @@ import (
 )
 
 // BridgeController publishes compile proxies for registered plugin node types,
-// and the constructors and factories that run their plugin config IDs inside
-// the plugin.
+// and the factories that run their plugin configs inside the plugin that
+// compiled them.
 type BridgeController struct {
 	// b resolves the compiled controller config constructors.
 	b bus.Bus
@@ -36,27 +36,21 @@ func (c *BridgeController) Execute(context.Context) error {
 }
 
 // HandleDirective follows registration arrival, withdrawal and replacement
-// for node type lookups and for the plugin config IDs' constructors and
-// factories.
+// for node type lookups and for the factories of compiled plugin configs.
 func (c *BridgeController) HandleDirective(ctx context.Context, di directive.Instance) ([]directive.Resolver, error) {
 	// Match standing demand even when its plugin has not registered yet.
 	switch dir := di.GetDirective().(type) {
 	case s4wave_flowgraph.LookupFlowgraphNodeType:
-		typeID := dir.LookupFlowgraphNodeTypeID()
-		return c.watch(func() *nodeTypeRegistration { return c.registry.registrations[typeID] }, func(reg *nodeTypeRegistration) directive.Value {
-			return NewNodeTypeProxy(c.b, reg.metadata, reg.client, reg.ctx)
-		})
-	case resolver.LoadConfigConstructorByID:
-		configID := dir.LoadConfigConstructorByIDConfigID()
-		return c.watch(func() *nodeTypeRegistration { return c.registry.pluginConfigs[configID] }, func(*nodeTypeRegistration) directive.Value {
-			return pluginConfigConstructor(configID)
+		engineID, typeID := dir.LookupFlowgraphNodeTypeEngineID(), dir.LookupFlowgraphNodeTypeID()
+		return c.watch(func() *nodeTypeRegistration { return c.registry.lookupLocked(engineID, typeID) }, func(reg *nodeTypeRegistration) directive.Value {
+			return newNodeTypeProxy(c.b, reg)
 		})
 	case resolver.LoadFactoryByConfig:
 		conf, ok := dir.LoadFactoryByConfig().(*pluginConfig)
-		if !ok {
+		if !ok || conf.reg == nil {
 			return nil, nil
 		}
-		return c.watch(func() *nodeTypeRegistration { return c.registry.pluginConfigs[conf.configID] }, func(reg *nodeTypeRegistration) directive.Value {
+		return c.watch(func() *nodeTypeRegistration { return c.registry.registrations[conf.reg.id] }, func(reg *nodeTypeRegistration) directive.Value {
 			return &pluginFactory{configID: conf.configID, reg: reg}
 		})
 	}

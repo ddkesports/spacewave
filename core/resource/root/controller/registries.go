@@ -54,7 +54,7 @@ func newRegistries(le *logrus.Entry, b bus.Bus) *registries {
 		objectType:   resource_objecttype_registry.NewObjectTypeRegistryResource(generations, objecttypes.BuiltInObjectTypeIDs()...),
 		worldOp:      resource_worldop_registry.NewWorldOpRegistryResource(generations),
 		configType:   resource_configtype_registry.NewConfigTypeRegistryResource(),
-		nodeType:     resource_flowgraph_registry.NewRegistryResource(),
+		nodeType:     resource_flowgraph_registry.NewRegistryResource(generations),
 		quickstart:   resource_quickstart_registry.NewQuickstartRegistryResource(le, b, generations),
 		objectWizard: s4wave_wizard.NewWizardRegistryResource(generations),
 	}

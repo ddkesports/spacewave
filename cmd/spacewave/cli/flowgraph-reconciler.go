@@ -168,8 +168,16 @@ func mountDeviceWorld(ctx context.Context, le *logrus.Entry, b bus.Bus, client *
 		sess.Release()
 	}
 
-	// Start the plugins of the node types the Device looks up.
-	releaseLoader, err := b.AddController(ctx, device_flowgraph.NewPluginLoader(le, func(ctx context.Context, typeID string) error {
+	// Read the ID the World engine has on the daemon's bus.
+	info, err := engine.GetEngineInfo(ctx)
+	if err != nil {
+		release()
+		return nil, "", nil, errors.Wrap(err, "get world engine info")
+	}
+	engineID := info.GetEngineInfo().GetEngineId()
+
+	// Start the plugins of the node types the Device looks up in this World.
+	releaseLoader, err := b.AddController(ctx, device_flowgraph.NewPluginLoader(le, engineID, func(ctx context.Context, typeID string) error {
 		return holdNodeTypePlugins(ctx, spaceSvc, typeID)
 	}), nil)
 	if err != nil {
@@ -181,14 +189,7 @@ func mountDeviceWorld(ctx context.Context, le *logrus.Entry, b bus.Bus, client *
 		releaseLoader()
 		releaseWorld()
 	}
-
-	// Read the ID the World engine has on the daemon's bus.
-	info, err := engine.GetEngineInfo(ctx)
-	if err != nil {
-		release()
-		return nil, "", nil, errors.Wrap(err, "get world engine info")
-	}
-	return engine, info.GetEngineInfo().GetEngineId(), release, nil
+	return engine, engineID, release, nil
 }
 
 // holdNodeTypePlugins runs the Space's plugins that hint at typeID until ctx

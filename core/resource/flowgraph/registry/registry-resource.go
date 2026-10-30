@@ -8,22 +8,30 @@ import (
 	"github.com/aperturerobotics/util/broadcast"
 	"github.com/pkg/errors"
 	resource_server "github.com/s4wave/spacewave/bldr/resource/server"
+	"github.com/s4wave/spacewave/core/resource/registration"
 	flowgraph_registry "github.com/s4wave/spacewave/sdk/flowgraph/registry"
 )
 
-// RegistryResource retains compilers for the lifetime of their registration Resources.
+// RegistryResource retains compilers for the lifetime of their registration
+// Resources. A Space plugin registers through its generation scope, so each
+// installation of the plugin holds its own node types, selected by the World
+// engine ID of the Flowgraph that uses them.
 type RegistryResource struct {
-	// bcast guards registrations and wakes node type lookups.
-	bcast broadcast.Broadcast
-	// registrations contains the sole compiler for each type ID under bcast.
-	registrations map[string]*nodeTypeRegistration
-	// pluginConfigs maps each plugin config ID to the registration that runs
-	// it, under bcast.
-	pluginConfigs map[string]*nodeTypeRegistration
+	// generations owns visibility of prepared plugin registrations.
+	generations *registration.Registry
+	// bcast is the generations' lock; it guards registrations and wakes node
+	// type lookups.
+	bcast *broadcast.Broadcast
+	// nextID is the next registration ID, under bcast.
+	nextID uint32
+	// registrations contains each registered compiler by ID, under bcast.
+	registrations map[uint32]*nodeTypeRegistration
 }
 
 // nodeTypeRegistration binds metadata and its compiler to one Resource lifetime.
 type nodeTypeRegistration struct {
+	// id is the registration ID.
+	id uint32
 	// metadata is an immutable copy of the plugin's declaration.
 	metadata *flowgraph_registry.NodeType
 	// client invokes the compiler attached by the registering Resource client.
@@ -32,11 +40,18 @@ type nodeTypeRegistration struct {
 	ctx context.Context
 }
 
-// NewRegistryResource constructs an empty node type registry.
-func NewRegistryResource() *RegistryResource {
+// NewRegistryResource constructs an empty node type registry that admits
+// plugin generations through generations, or through its own boundary when
+// generations is nil.
+func NewRegistryResource(generations *registration.Registry) *RegistryResource {
+	if generations == nil {
+		generations = registration.NewRegistry()
+	}
 	return &RegistryResource{
-		registrations: make(map[string]*nodeTypeRegistration),
-		pluginConfigs: make(map[string]*nodeTypeRegistration),
+		generations:   generations,
+		bcast:         generations.Broadcast(),
+		nextID:        1,
+		registrations: make(map[uint32]*nodeTypeRegistration),
 	}
 }
 
@@ -49,6 +64,10 @@ func (r *RegistryResource) RegisterNodeType(ctx context.Context, req *flowgraph_
 	}
 	if req.GetHandlerResourceId() == 0 {
 		return nil, errors.New("node type compiler resource is required")
+	}
+	generation, err := registration.FromContext(ctx, "")
+	if err != nil {
+		return nil, err
 	}
 
 	// Bind the compiler to the caller's Resource generation.
@@ -63,31 +82,25 @@ func (r *RegistryResource) RegisterNodeType(ctx context.Context, req *flowgraph_
 	lifetime, cancel := context.WithCancel(client.Context())
 	reg := &nodeTypeRegistration{metadata: metadata.CloneVT(), client: compiler, ctx: lifetime}
 
-	// Reject ambiguous compilers and plugin controllers.
-	var conflict error
+	// Index the registration unless it is ambiguous in its scope.
 	r.bcast.HoldLock(func(broadcast func(), _ func() <-chan struct{}) {
-		// Refuse a type ID or plugin config ID another registration holds.
-		if r.registrations[metadata.GetTypeId()] != nil {
-			conflict = errors.New("node type already registered")
+		// Refuse a name another registration in the scope holds.
+		if err = r.checkConflictLocked(reg.metadata, generation); err != nil {
 			return
 		}
-		for _, id := range metadata.GetPluginConfigIds() {
-			if r.pluginConfigs[id] != nil {
-				conflict = errors.Errorf("plugin config ID %q already registered", id)
-				return
-			}
-		}
 
-		// Index the registration by type and by each plugin config ID.
-		r.registrations[metadata.GetTypeId()] = reg
-		for _, id := range metadata.GetPluginConfigIds() {
-			r.pluginConfigs[id] = reg
+		// Bind the registration to its generation, then publish it.
+		reg.id = r.nextID
+		r.nextID++
+		if err = r.generations.BindLocked(reg, generation); err != nil {
+			return
 		}
+		r.registrations[reg.id] = reg
 		broadcast()
 	})
-	if conflict != nil {
+	if err != nil {
 		cancel()
-		return nil, conflict
+		return nil, err
 	}
 
 	// Withdraw the declaration and cancel in-flight compiles and plugin
@@ -95,13 +108,8 @@ func (r *RegistryResource) RegisterNodeType(ctx context.Context, req *flowgraph_
 	release := func() {
 		cancel()
 		r.bcast.HoldLock(func(broadcast func(), _ func() <-chan struct{}) {
-			if r.registrations[metadata.GetTypeId()] != reg {
-				return
-			}
-			delete(r.registrations, metadata.GetTypeId())
-			for _, id := range metadata.GetPluginConfigIds() {
-				delete(r.pluginConfigs, id)
-			}
+			r.generations.ForgetLocked(reg)
+			delete(r.registrations, reg.id)
 			broadcast()
 		})
 	}
@@ -111,6 +119,44 @@ func (r *RegistryResource) RegisterNodeType(ctx context.Context, req *flowgraph_
 		return nil, err
 	}
 	return &flowgraph_registry.RegisterNodeTypeResponse{ResourceId: resourceID}, nil
+}
+
+// checkConflictLocked refuses a type ID or plugin config ID that another
+// registration in the same scope holds. The caller holds bcast.
+func (r *RegistryResource) checkConflictLocked(metadata *flowgraph_registry.NodeType, generation *registration.Generation) error {
+	pluginConfigIDs := idSet(metadata.GetPluginConfigIds())
+	for _, other := range r.registrations {
+		// Registrations in other scopes may share every name.
+		if r.generations.CanShareNameLocked(other, generation) {
+			continue
+		}
+
+		// Refuse a shared type ID or plugin config ID within one scope.
+		if other.metadata.GetTypeId() == metadata.GetTypeId() {
+			return errors.New("node type already registered")
+		}
+		for _, id := range other.metadata.GetPluginConfigIds() {
+			if _, ok := pluginConfigIDs[id]; ok {
+				return errors.Errorf("plugin config ID %q already registered", id)
+			}
+		}
+	}
+	return nil
+}
+
+// lookupLocked returns the visible registration of typeID for the World
+// engineID: the Space plugin installed in that World, else a global one. The
+// caller holds bcast.
+func (r *RegistryResource) lookupLocked(engineID, typeID string) *nodeTypeRegistration {
+	selected := registration.SelectLocked(r.generations, r.registrations, engineID, func(reg *nodeTypeRegistration) string {
+		return reg.metadata.GetTypeId()
+	})
+	for _, reg := range selected {
+		if reg.metadata.GetTypeId() == typeID {
+			return reg
+		}
+	}
+	return nil
 }
 
 // _ is a type assertion.

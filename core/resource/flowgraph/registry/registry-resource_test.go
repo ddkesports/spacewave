@@ -10,7 +10,7 @@ import (
 func TestRegisterNodeTypeRejectsUnnamespacedID(t *testing.T) {
 	for _, typeID := range []string{"tcp-port", "flowgraph/", "/stream-echo", "flowgraph//stream-echo"} {
 		// Register a declaration that fails validation before any compiler attaches.
-		_, err := NewRegistryResource().RegisterNodeType(t.Context(), &flowgraph_registry.RegisterNodeTypeRequest{
+		_, err := NewRegistryResource(nil).RegisterNodeType(t.Context(), &flowgraph_registry.RegisterNodeTypeRequest{
 			NodeType:          &flowgraph_registry.NodeType{TypeId: typeID, DisplayName: "Impostor"},
 			HandlerResourceId: 1,
 		})

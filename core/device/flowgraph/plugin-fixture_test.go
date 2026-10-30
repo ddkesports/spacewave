@@ -23,6 +23,7 @@ import (
 	space_exec "github.com/s4wave/spacewave/core/forge/exec"
 	resource_configtype_registry "github.com/s4wave/spacewave/core/resource/configtype/registry"
 	resource_flowgraph_registry "github.com/s4wave/spacewave/core/resource/flowgraph/registry"
+	"github.com/s4wave/spacewave/core/resource/registration"
 	"github.com/s4wave/spacewave/core/transport"
 	"github.com/s4wave/spacewave/db/block"
 	"github.com/s4wave/spacewave/db/world"
@@ -34,6 +35,7 @@ import (
 	s4wave_device "github.com/s4wave/spacewave/sdk/device"
 	s4wave_flowgraph "github.com/s4wave/spacewave/sdk/flowgraph"
 	flowgraph_registry "github.com/s4wave/spacewave/sdk/flowgraph/registry"
+	sdk_registration "github.com/s4wave/spacewave/sdk/plugin/registration"
 	"github.com/sirupsen/logrus"
 )
 
@@ -41,6 +43,8 @@ import (
 // The compiler crosses a bidirectional Resource stream and never joins the Device bus.
 // A second node type's controller exists only on its plugin's bus: the Device runs
 // it there, restarts it on a changed config, and stops it when the plugin unloads.
+// Two Space installations of that plugin then register the same type through
+// their generation scopes, and the Device runs only its own World's.
 func TestPluginNodeFixture(t *testing.T) {
 	// Create an isolated Device World and an allowed plugin node placement.
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
@@ -88,7 +92,8 @@ func TestPluginNodeFixture(t *testing.T) {
 	tb.StaticResolver.AddFactory(stream_echo.NewFactory(b))
 
 	// Serve the node type registry through the bridge controller.
-	registry := resource_flowgraph_registry.NewRegistryResource()
+	generations := registration.NewRegistry()
+	registry := resource_flowgraph_registry.NewRegistryResource(generations)
 	bridgeRelease, err := b.AddController(ctx, resource_flowgraph_registry.NewBridgeController(b, registry), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -146,6 +151,9 @@ func TestPluginNodeFixture(t *testing.T) {
 	if err := s4wave_configtype_registry.SRPCRegisterConfigTypeRegistryResourceService(rootMux, editors); err != nil {
 		t.Fatal(err)
 	}
+	if err := generations.Register(rootMux); err != nil {
+		t.Fatal(err)
+	}
 
 	// Connect a Resource client the way the plugin does.
 	serverMux := srpc.NewMux()
@@ -175,7 +183,7 @@ func TestPluginNodeFixture(t *testing.T) {
 	}
 
 	// Resolve metadata and compile on the host through the retained plugin capability.
-	nodeType, ref, err := s4wave_flowgraph.ExLookupFlowgraphNodeType(ctx, b, node.GetTypeId())
+	nodeType, ref, err := s4wave_flowgraph.ExLookupFlowgraphNodeType(ctx, b, tb.EngineID, node.GetTypeId())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,9 +269,24 @@ func TestPluginNodeFixture(t *testing.T) {
 		return capabilityState(caps, "run") == s4wave_device.DeviceCapabilityState_DEVICE_CAPABILITY_STATE_DECLARED
 	})
 
-	// A plugin loader whose hold runs the plugin, as a Space does for a plugin
-	// whose manifest hints at the type. It starts the plugin for the placed node.
-	loader := NewPluginLoader(le, func(ctx context.Context, typeID string) error {
+	// Another Space's installation of the plugin registers the same type in
+	// its own scope. The Device's World never runs it.
+	otherBus, otherResolver, err := controllerbus_core.NewCoreBus(ctx, le)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherRuns := make(chan string, 8)
+	otherResolver.AddFactory(&pluginRunFactory{runs: otherRuns})
+	releaseOther, err := registerScopedPluginRun(ctx, resources, rootClient, otherBus, "other-world")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = releaseOther() }()
+
+	// A plugin loader whose hold runs the Device World's installation, as a
+	// Space does for a plugin whose manifest hints at the type. It starts the
+	// plugin for the placed node.
+	loader := NewPluginLoader(le, tb.EngineID, func(ctx context.Context, typeID string) error {
 		// Hold other types without a plugin.
 		if typeID != pluginRunNodeTypeID {
 			<-ctx.Done()
@@ -271,7 +294,7 @@ func TestPluginNodeFixture(t *testing.T) {
 		}
 
 		// Run the plugin until the lookup ends.
-		release, err := registerPluginRun(ctx, resources, rootClient, pluginBus)
+		release, err := registerScopedPluginRun(ctx, resources, rootClient, pluginBus, tb.EngineID)
 		if err != nil {
 			return err
 		}
@@ -294,6 +317,45 @@ func TestPluginNodeFixture(t *testing.T) {
 		return err
 	})
 	expectRuns(t, ctx, runs, "stop two")
+	if len(otherRuns) != 0 {
+		t.Fatalf("the other World's installation ran %q", <-otherRuns)
+	}
+}
+
+// registerScopedPluginRun registers the plugin run node type as the plugin's
+// installation in the World instanceKey does: through a generation scope it
+// then activates. It returns the function that unloads it.
+func registerScopedPluginRun(ctx context.Context, resources *resource_client.Client, root srpc.Client, b bus.Bus, instanceKey string) (func() error, error) {
+	// Prepare the installation's generation scope.
+	resp, err := sdk_registration.NewSRPCRegistrationServiceClient(root).Prepare(ctx, &sdk_registration.PrepareRequest{
+		PluginId:     "fixture-plugin",
+		ManifestRoot: "fixture-manifest",
+		InstanceKey:  instanceKey,
+	})
+	if err != nil {
+		return nil, err
+	}
+	scope := resources.CreateResourceReference(resp.GetResourceId())
+	scopeClient, err := scope.GetClient()
+	if err != nil {
+		scope.Release()
+		return nil, err
+	}
+
+	// Register through the scope, then admit the generation.
+	release, err := registerPluginRun(ctx, resources, scopeClient, b)
+	if err != nil {
+		scope.Release()
+		return nil, err
+	}
+	if err := sdk_registration.Activate(ctx, scopeClient); err != nil {
+		scope.Release()
+		return nil, errors.Join(err, release())
+	}
+	return func() error {
+		defer scope.Release()
+		return release()
+	}, nil
 }
 
 // pluginRunNodeTypeID selects the fixture node whose controller runs in its plugin.

@@ -131,7 +131,8 @@ func (g *Generation) InvokeMethod(serviceID, methodID string, strm srpc.Stream) 
 		"s4wave.worldop.registry.WorldOpRegistryResourceService",
 		"s4wave.viewer.registry.ViewerRegistryResourceService",
 		"s4wave.quickstart.registry.QuickstartRegistryResourceService",
-		"s4wave.wizard.ObjectWizardRegistryResourceService":
+		"s4wave.wizard.ObjectWizardRegistryResourceService",
+		"s4wave.flowgraph.registry.NodeTypeRegistryResourceService":
 		ctx := context.WithValue(strm.Context(), generationKey{}, g)
 		return g.root.InvokeMethod(serviceID, methodID, srpc.NewStreamWithContext(strm, ctx))
 	default:

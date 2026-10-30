@@ -19,20 +19,23 @@ const PluginLoaderControllerID = "spacewave/device/flowgraph/plugin-loader"
 type HoldNodeTypePlugins func(ctx context.Context, typeID string) error
 
 // PluginLoader starts the plugins that supply a node type while a lookup of
-// that type runs on the bus. The Reconciler holds a lookup for each type a
+// that type for its World runs on the bus. The Reconciler holds a lookup for each type a
 // placed and allowed node uses, so each such node's plugin starts on demand
 // and stops after the last node using its types is removed. The loader adds
 // no value: the started plugin's registration resolves the lookup.
 type PluginLoader struct {
 	// le reports failed holds.
 	le *logrus.Entry
+	// engineID is the ID of the World engine whose plugins the loader runs.
+	engineID string
 	// hold runs the plugins of one node type.
 	hold HoldNodeTypePlugins
 }
 
-// NewPluginLoader constructs a PluginLoader that runs plugins through hold.
-func NewPluginLoader(le *logrus.Entry, hold HoldNodeTypePlugins) *PluginLoader {
-	return &PluginLoader{le: le, hold: hold}
+// NewPluginLoader constructs a PluginLoader that runs the plugins of the World
+// engineID through hold.
+func NewPluginLoader(le *logrus.Entry, engineID string, hold HoldNodeTypePlugins) *PluginLoader {
+	return &PluginLoader{le: le, engineID: engineID, hold: hold}
 }
 
 // GetControllerInfo returns information about the controller.
@@ -45,10 +48,10 @@ func (l *PluginLoader) Execute(ctx context.Context) error {
 	return nil
 }
 
-// HandleDirective holds the plugins of each looked-up node type.
+// HandleDirective holds the plugins of each node type looked up for its World.
 func (l *PluginLoader) HandleDirective(ctx context.Context, di directive.Instance) ([]directive.Resolver, error) {
 	dir, ok := di.GetDirective().(s4wave_flowgraph.LookupFlowgraphNodeType)
-	if !ok {
+	if !ok || dir.LookupFlowgraphNodeTypeEngineID() != l.engineID {
 		return nil, nil
 	}
 	return directive.R(&pluginLoadResolver{l: l, typeID: dir.LookupFlowgraphNodeTypeID()}, nil)
