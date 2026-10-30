@@ -167,12 +167,12 @@ type fsContext struct {
 // mountFsContext connects to the daemon and mounts the full chain to get
 // an FSHandleResourceService client for the given URI.
 func mountFsContext(c *cli.Context, statePath string, uri fsURI) (*fsContext, func(), error) {
-	mount, _, err := mountObjectChain(c, statePath, uri, nil)
+	mount, err := mountObjectChain(c, statePath, uri, nil)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	fsSvc := s4wave_unixfs.NewSRPCFSHandleResourceServiceClient(mount.typedClient)
+	fsSvc := s4wave_unixfs.NewSRPCFSHandleResourceServiceClient(mount.TypedClient)
 
 	return &fsContext{
 		fsSvc:     fsSvc,

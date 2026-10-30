@@ -457,12 +457,12 @@ func (a *promArgs) withQueryService(c *cli.Context, target string, cb func(s4wav
 	if target == "" {
 		discover = discoverPromTarget
 	}
-	mount, cleanup, err := mountObjectChain(c, a.statePath, fsURI{sessionIdx: idx, spaceID: a.spaceID, objectKey: target}, discover)
+	mount, err := mountObjectChain(c, a.statePath, fsURI{sessionIdx: idx, spaceID: a.spaceID, objectKey: target}, discover)
 	if err != nil {
 		return err
 	}
-	defer cleanup()
-	return cb(s4wave_prom.NewSRPCPromQueryResourceServiceClient(mount.typedClient))
+	defer mount.release()
+	return cb(s4wave_prom.NewSRPCPromQueryResourceServiceClient(mount.TypedClient))
 }
 
 // buildPromQueryCommand builds the query subcommand.

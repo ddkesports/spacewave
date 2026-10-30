@@ -48,14 +48,14 @@ func attachWasiVmConsole(c *cli.Context, statePath string, uri fsURI) error {
 	}
 
 	// Open the console of the VM's typed resource.
-	mount, cleanup, err := mountObjectChain(c, statePath, uri, nil)
+	mount, err := mountObjectChain(c, statePath, uri, nil)
 	if err != nil {
 		return err
 	}
-	defer cleanup()
+	defer mount.release()
 	ctx, cancel := context.WithCancel(c.Context)
 	defer cancel()
-	strm, err := s4wave_vm.NewSRPCWasiVmConsoleServiceClient(mount.typedClient).Console(ctx)
+	strm, err := s4wave_vm.NewSRPCWasiVmConsoleServiceClient(mount.TypedClient).Console(ctx)
 	if err != nil {
 		return errors.Wrap(err, "open VM console")
 	}

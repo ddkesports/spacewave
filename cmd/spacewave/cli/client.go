@@ -17,9 +17,9 @@ import (
 	resource "github.com/s4wave/spacewave/bldr/resource"
 	resource_client "github.com/s4wave/spacewave/bldr/resource/client"
 	"github.com/s4wave/spacewave/core/daemon"
-	s4wave_space_core "github.com/s4wave/spacewave/core/space"
 	s4wave_account "github.com/s4wave/spacewave/sdk/account"
 	"github.com/s4wave/spacewave/sdk/cli/runner"
+	s4wave_mount "github.com/s4wave/spacewave/sdk/mount"
 	s4wave_provider "github.com/s4wave/spacewave/sdk/provider"
 	s4wave_provider_local "github.com/s4wave/spacewave/sdk/provider/local"
 	s4wave_provider_spacewave "github.com/s4wave/spacewave/sdk/provider/spacewave"
@@ -27,7 +27,6 @@ import (
 	s4wave_session "github.com/s4wave/spacewave/sdk/session"
 	s4wave_sobject "github.com/s4wave/spacewave/sdk/sobject"
 	s4wave_space "github.com/s4wave/spacewave/sdk/space"
-	s4wave_world "github.com/s4wave/spacewave/sdk/world"
 	sdk_engine "github.com/s4wave/spacewave/sdk/world/engine"
 )
 
@@ -239,150 +238,40 @@ func (s *nativeSession) WatchLockState(ctx context.Context) (runner.LockStateStr
 
 // mountSession mounts a session by index and returns the Session SDK wrapper.
 func (c *sdkClient) mountSession(ctx context.Context, idx uint32) (*s4wave_session.Session, error) {
-	// Mount the session by index.
-	resp, err := c.root.MountSessionByIdx(ctx, idx)
-	if err != nil {
-		return nil, errors.Wrap(err, "mount session")
-	}
-	if resp.GetNotFound() {
-		return nil, errors.Errorf("no session found at index %d", idx)
-	}
-
-	// Wrap the session resource.
-	sessRef := c.resClient.CreateResourceReference(resp.GetResourceId())
-	sess, err := s4wave_session.NewSession(c.resClient, sessRef)
-	if err != nil {
-		sessRef.Release()
-		return nil, errors.Wrap(err, "session resource")
-	}
-	return sess, nil
+	return s4wave_mount.Session(ctx, c.resClient, c.root, idx)
 }
 
 // mountSharedObject mounts a shared object by ID and returns its
 // SharedObjectResourceService client.
 func (c *sdkClient) mountSharedObject(ctx context.Context, sess *s4wave_session.Session, sharedObjectID string) (s4wave_sobject.SRPCSharedObjectResourceServiceClient, func(), error) {
-	// Mount the shared object.
-	soResp, err := sess.MountSharedObject(ctx, sharedObjectID)
-	if err != nil {
-		return nil, nil, errors.Wrap(err, "mount shared object")
-	}
-
-	// Open the shared object resource client.
-	soRef := c.resClient.CreateResourceReference(soResp.GetResourceId())
-	soClient, err := soRef.GetClient()
-	if err != nil {
-		soRef.Release()
-		return nil, nil, errors.Wrap(err, "shared object client")
-	}
-	return s4wave_sobject.NewSRPCSharedObjectResourceServiceClient(soClient), soRef.Release, nil
+	return s4wave_mount.SharedObject(ctx, c.resClient, sess, sharedObjectID)
 }
 
 // mountSpace mounts a space by shared object ID and returns the SpaceResourceService client.
 func (c *sdkClient) mountSpace(ctx context.Context, sess *s4wave_session.Session, sharedObjectID string) (s4wave_space.SRPCSpaceResourceServiceClient, func(), error) {
-	// Mount the shared object and its space body.
-	soSvc, soRelease, err := c.mountSharedObject(ctx, sess, sharedObjectID)
-	if err != nil {
-		return nil, nil, err
-	}
-	bodyResp, err := s4wave_sobject.MountSharedObjectBody(ctx, soSvc)
-	if err != nil {
-		soRelease()
-		return nil, nil, errors.Wrap(err, "mount shared object body")
-	}
-
-	// Open the space body resource client.
-	bodyRef := c.resClient.CreateResourceReference(bodyResp.GetResourceId())
-	bodyClient, err := bodyRef.GetClient()
-	if err != nil {
-		bodyRef.Release()
-		soRelease()
-		return nil, nil, errors.Wrap(err, "space body client")
-	}
-
-	// Build the space service client and the cleanup.
-	spaceSvc := s4wave_space.NewSRPCSpaceResourceServiceClient(bodyClient)
-	cleanup := func() {
-		bodyRef.Release()
-		soRelease()
-	}
-	return spaceSvc, cleanup, nil
+	return s4wave_mount.Space(ctx, c.resClient, sess, sharedObjectID)
 }
 
 // resolveSpaceID resolves a space argument to a shared object ID.
 func (c *sdkClient) resolveSpaceID(ctx context.Context, sess *s4wave_session.Session, spaceID string) (string, error) {
-	// Watch the resource list stream and receive the first snapshot.
-	strm, err := sess.WatchResourcesList(ctx)
-	if err != nil {
-		return "", errors.Wrap(err, "watch resources list")
-	}
-	defer strm.Close()
-
-	// Receive the resources list snapshot.
-	resp, err := strm.Recv()
-	if err != nil {
-		return "", errors.Wrap(err, "recv resources list")
-	}
-
-	// Resolve the space ID from the snapshot.
-	return resolveSpaceIDFromList(spaceID, resp.GetSpacesList())
-}
-
-// resolveSpaceIDFromList selects an exact ID, display name, or sole Space,
-// and rejects a Space the session does not list.
-func resolveSpaceIDFromList(spaceID string, spaces []*s4wave_space_core.SpaceSoListEntry) (string, error) {
-	if len(spaces) == 0 {
-		return "", errors.New("no spaces found; specify --space")
-	}
-	if spaceID != "" {
-		for _, sp := range spaces {
-			id := sp.GetEntry().GetRef().GetProviderResourceRef().GetId()
-			if id == spaceID {
-				return spaceID, nil
-			}
-		}
-		for _, sp := range spaces {
-			if sp.GetSpaceMeta().GetName() == spaceID {
-				return sp.GetEntry().GetRef().GetProviderResourceRef().GetId(), nil
-			}
-		}
-		return "", errors.Errorf("space %q not found in this session; an ID can predate a reset, so prefer the Space name from spacewave space list", spaceID)
-	}
-	if len(spaces) > 1 {
-		return "", errors.New("multiple spaces found; specify --space")
-	}
-	return spaces[0].GetEntry().GetRef().GetProviderResourceRef().GetId(), nil
+	return s4wave_mount.ResolveSpaceID(ctx, sess, spaceID)
 }
 
 // getSpaceByName finds a space by name and returns its shared object ID.
 // If name is empty, returns the first space found.
 func (c *sdkClient) getSpaceByName(ctx context.Context, sess *s4wave_session.Session, name string) (string, error) {
-	// Watch the resource list stream and receive the first snapshot.
-	strm, err := sess.WatchResourcesList(ctx)
+	// Collect the spaces from the session's list snapshot.
+	spaces, err := s4wave_mount.ListSpaces(ctx, sess)
 	if err != nil {
-		return "", errors.Wrap(err, "watch resources list")
+		return "", err
 	}
-	defer strm.Close()
-
-	// Receive the resources list snapshot.
-	resp, err := strm.Recv()
-	if err != nil {
-		return "", errors.Wrap(err, "recv resources list")
-	}
-
-	// Collect the spaces from the snapshot.
-	spaces := resp.GetSpacesList()
 	if len(spaces) == 0 {
 		return "", errors.New("no spaces found")
 	}
 
-	// Select the first space when no name is given.
-	if name == "" {
-		return spaces[0].GetEntry().GetRef().GetProviderResourceRef().GetId(), nil
-	}
-
-	// Find the space whose name matches.
+	// Select the first space when no name is given, else the matching name.
 	for _, sp := range spaces {
-		if sp.GetSpaceMeta().GetName() == name {
+		if name == "" || sp.GetSpaceMeta().GetName() == name {
 			return sp.GetEntry().GetRef().GetProviderResourceRef().GetId(), nil
 		}
 	}
@@ -391,31 +280,11 @@ func (c *sdkClient) getSpaceByName(ctx context.Context, sess *s4wave_session.Ses
 
 // accessWorldEngine accesses the world engine via a space's SpaceResourceService.
 func (c *sdkClient) accessWorldEngine(ctx context.Context, spaceSvc s4wave_space.SRPCSpaceResourceServiceClient) (*sdk_engine.SDKEngine, func(), error) {
-	engine, _, cleanup, err := c.accessWorldEngineWithRef(ctx, spaceSvc)
-	return engine, cleanup, err
-}
-
-// accessWorldEngineWithRef accesses the world engine and returns the engine resource reference.
-func (c *sdkClient) accessWorldEngineWithRef(ctx context.Context, spaceSvc s4wave_space.SRPCSpaceResourceServiceClient) (*sdk_engine.SDKEngine, resource_client.ResourceRef, func(), error) {
-	// Access the world resource and build the SDK engine.
-	worldResp, err := spaceSvc.AccessWorld(ctx, &s4wave_space.AccessWorldRequest{})
+	engine, err := s4wave_mount.WorldEngine(ctx, c.resClient, spaceSvc)
 	if err != nil {
-		return nil, nil, nil, errors.Wrap(err, "access world")
+		return nil, nil, err
 	}
-
-	// Wrap the engine resource reference.
-	engineRef := c.resClient.CreateResourceReference(worldResp.GetResourceId())
-	engine, err := sdk_engine.NewSDKEngine(c.resClient, engineRef)
-	if err != nil {
-		engineRef.Release()
-		return nil, nil, nil, errors.Wrap(err, "create sdk engine")
-	}
-
-	// Build the cleanup that releases the engine.
-	cleanup := func() {
-		engine.Release()
-	}
-	return engine, engineRef, cleanup, nil
+	return engine, engine.Release, nil
 }
 
 // close releases all resources, closes the connection, and cancels the
@@ -688,34 +557,6 @@ func (c *sdkClient) accessAccount(ctx context.Context, providerID, accountID str
 	return svc, cleanup, nil
 }
 
-// accessTypedObject accesses a typed object resource via an engine resource reference.
-// engineRef is the resource reference for the engine (from accessWorldEngine).
-// Returns the typed object's resource reference, which the caller releases,
-// and the SRPC client for its services.
-func (c *sdkClient) accessTypedObject(ctx context.Context, engineRef resource_client.ResourceRef, objectKey string) (resource_client.ResourceRef, srpc.Client, error) {
-	// Access the typed object through the engine client.
-	engineClient, err := engineRef.GetClient()
-	if err != nil {
-		return nil, nil, errors.Wrap(err, "engine client")
-	}
-
-	// Access the typed object resource.
-	typedSvc := s4wave_world.NewSRPCTypedObjectResourceServiceClient(engineClient)
-	resp, err := s4wave_world.AccessTypedObject(ctx, typedSvc, &s4wave_world.AccessTypedObjectRequest{ObjectKey: objectKey})
-	if err != nil {
-		return nil, nil, errors.Wrap(err, "access typed object")
-	}
-
-	// Wrap the typed object resource reference.
-	ref := c.resClient.CreateResourceReference(resp.GetResourceId())
-	typedClient, err := ref.GetClient()
-	if err != nil {
-		ref.Release()
-		return nil, nil, errors.Wrap(err, "typed object client")
-	}
-	return ref, typedClient, nil
-}
-
 // lookupSpacewaveProvider looks up the spacewave provider and returns an SDK wrapper.
 // If providerID is empty, defaults to "spacewave".
 func (c *sdkClient) lookupSpacewaveProvider(ctx context.Context, providerID string) (*s4wave_provider_spacewave.SpacewaveProvider, func(), error) {
@@ -768,128 +609,46 @@ func (c *sdkClient) lookupLocalProvider(ctx context.Context) (*s4wave_provider_l
 	return prov, cleanup, nil
 }
 
-// objectMount holds one mounted daemon-to-world-object chain: session,
-// space, world engine, and typed object client. The unexported cleanup
-// fields are set by mountObjectChain and run by release.
+// objectMount holds one mounted daemon-to-world-object chain and the daemon
+// client it runs on.
 type objectMount struct {
-	client      *sdkClient
-	sess        *s4wave_session.Session
-	spaceSvc    s4wave_space.SRPCSpaceResourceServiceClient
-	spaceID     string
-	engineRef   resource_client.ResourceRef
-	engine      *sdk_engine.SDKEngine
-	typedRef    resource_client.ResourceRef
-	typedClient srpc.Client
-	objectKey   string
-
-	engineCleanup func()
-	spaceCleanup  func()
+	*s4wave_mount.Object
+	// client is the daemon client the chain was mounted on.
+	client *sdkClient
 }
 
-// release unwinds the whole chain in reverse acquisition order.
+// release unwinds the chain and closes the daemon client.
 func (m *objectMount) release() {
-	// Release the mounted chain in reverse order.
-	m.typedRef.Release()
-	m.engineCleanup()
-	m.spaceCleanup()
-	m.sess.Release()
+	m.Release()
 	m.client.close()
 }
 
 // mountObjectChain connects to the daemon and mounts session -> space ->
 // world engine -> typed object for the URI. When resolveObjectKey is nil,
 // uri.objectKey is used verbatim; otherwise it resolves the key against
-// the mounted World engine.
+// the mounted World engine. The caller releases the mount.
 func mountObjectChain(
 	c *cli.Context,
 	statePath string,
 	uri fsURI,
 	resolveObjectKey func(ctx context.Context, engine *sdk_engine.SDKEngine) (string, error),
-) (*objectMount, func(), error) {
-	// Connect to the daemon and prepare the unwind stack.
-	ctx := c.Context
-
+) (*objectMount, error) {
 	// Connect to the daemon addressed by the command context.
-	client, err := connectDaemonFromContext(ctx, c, statePath)
+	client, err := connectDaemonFromContext(c.Context, c, statePath)
 	if err != nil {
-		return nil, nil, err
-	}
-	var rels []func()
-	unwind := func() {
-		for _, rel := range slices.Backward(rels) {
-			rel()
-		}
-	}
-	fail := func(err error) (*objectMount, func(), error) {
-		unwind()
-		return nil, nil, err
+		return nil, err
 	}
 
-	// Mount the session and register its cleanup.
-	sess, err := client.mountSession(ctx, uri.sessionIdx)
+	// Mount the chain, closing the client if it fails.
+	obj, err := s4wave_mount.MountObject(c.Context, client.resClient, client.root, s4wave_mount.Target{
+		SessionIdx:       uri.sessionIdx,
+		Space:            uri.spaceID,
+		ObjectKey:        uri.objectKey,
+		ResolveObjectKey: resolveObjectKey,
+	})
 	if err != nil {
-		return fail(err)
+		client.close()
+		return nil, err
 	}
-	rels = append(rels, sess.Release)
-
-	// Resolve the Space ID or name, or the default Space when none was given.
-	var spaceID string
-	if uri.spaceID == "" {
-		spaceID, err = client.getSpaceByName(ctx, sess, "")
-		if err != nil {
-			return fail(errors.Wrap(err, "resolve default space"))
-		}
-	} else {
-		spaceID, err = client.resolveSpaceID(ctx, sess, uri.spaceID)
-		if err != nil {
-			return fail(err)
-		}
-	}
-
-	// Mount the space and register its cleanup.
-	spaceSvc, spaceCleanup, err := client.mountSpace(ctx, sess, spaceID)
-	if err != nil {
-		return fail(err)
-	}
-	rels = append(rels, spaceCleanup)
-
-	// Access the world engine and register its cleanup.
-	engine, engineRef, engineCleanup, err := client.accessWorldEngineWithRef(ctx, spaceSvc)
-	if err != nil {
-		return fail(err)
-	}
-	rels = append(rels, engineCleanup)
-
-	// Resolve the object key.
-	objectKey := uri.objectKey
-	if resolveObjectKey != nil {
-		objectKey, err = resolveObjectKey(ctx, engine)
-		if err != nil {
-			return fail(err)
-		}
-	}
-
-	// Access the typed object and register its cleanup.
-	typedRef, typedClient, err := client.accessTypedObject(ctx, engineRef, objectKey)
-	if err != nil {
-		return fail(errors.Wrap(err, "access typed object for "+objectKey))
-	}
-	rels = append(rels, typedRef.Release)
-
-	// Assemble the object mount and return its cleanup.
-	mount := &objectMount{
-		client:        client,
-		sess:          sess,
-		spaceSvc:      spaceSvc,
-		spaceID:       spaceID,
-		engineRef:     engineRef,
-		engine:        engine,
-		typedClient:   typedClient,
-		objectKey:     objectKey,
-		typedRef:      typedRef,
-		engineCleanup: engineCleanup,
-		spaceCleanup:  spaceCleanup,
-	}
-	cleanup := func() { unwind() }
-	return mount, cleanup, nil
+	return &objectMount{Object: obj, client: client}, nil
 }

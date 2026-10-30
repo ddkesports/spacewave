@@ -61,17 +61,17 @@ func canvasZIndex(value int) (int32, error) {
 // If uri.objectKey is empty, auto-discovers the canvas by finding exactly one
 // canvas-type object in the space.
 func mountCanvasContext(c *cli.Context, statePath string, uri fsURI) (*canvasContext, func(), error) {
-	mount, _, err := mountObjectChain(c, statePath, uri, discoverCanvasObject)
+	mount, err := mountObjectChain(c, statePath, uri, discoverCanvasObject)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	canvasSvc := s4wave_canvas.NewSRPCCanvasResourceServiceClient(mount.typedClient)
+	canvasSvc := s4wave_canvas.NewSRPCCanvasResourceServiceClient(mount.TypedClient)
 
 	return &canvasContext{
 		canvasSvc: canvasSvc,
-		engine:    mount.engine,
-		objectKey: mount.objectKey,
+		engine:    mount.Engine,
+		objectKey: mount.ObjectKey,
 	}, mount.release, nil
 }
 

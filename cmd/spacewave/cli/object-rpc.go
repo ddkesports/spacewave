@@ -61,11 +61,11 @@ func (a *objectRPCArgs) Run(c *cli.Context) error {
 	}
 
 	// Mount the typed object.
-	mount, cleanup, err := mountObjectChain(c, a.statePath, uri, nil)
+	mount, err := mountObjectChain(c, a.statePath, uri, nil)
 	if err != nil {
 		return err
 	}
-	defer cleanup()
+	defer mount.release()
 
 	// Forward each stream the peer opens to the object's service.
 	ctx, cancel := context.WithCancel(c.Context)
@@ -82,19 +82,19 @@ func (a *objectRPCArgs) Run(c *cli.Context) error {
 	defer close(stop)
 	go func() {
 		select {
-		case <-mount.typedRef.Done():
+		case <-mount.TypedRef.Done():
 			_ = conn.Close()
 		case <-stop:
 		}
 	}()
-	err = srpc.NewServer(srpc.NewClientInvoker(mount.typedClient)).AcceptMuxedConn(ctx, conn)
+	err = srpc.NewServer(srpc.NewClientInvoker(mount.TypedClient)).AcceptMuxedConn(ctx, conn)
 
 	// Report why the object ended, or end cleanly when the peer closed stdin.
 	select {
 	case <-mount.client.resClient.Done():
 		return errors.New("daemon connection closed")
-	case <-mount.typedRef.Done():
-		return errors.New("object " + mount.objectKey + " was released")
+	case <-mount.TypedRef.Done():
+		return errors.New("object " + mount.ObjectKey + " was released")
 	default:
 	}
 	if err == io.EOF || conn.IsClosed() {

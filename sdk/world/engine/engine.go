@@ -44,6 +44,11 @@ func (e *SDKEngine) GetEngineInfo(ctx context.Context) (*s4wave_world.GetEngineI
 	return e.service.GetEngineInfo(ctx, &s4wave_world.GetEngineInfoRequest{})
 }
 
+// GetResourceRef returns the engine's resource reference, which Release frees.
+func (e *SDKEngine) GetResourceRef() resource_client.ResourceRef {
+	return e.ref
+}
+
 // Release releases the underlying resource reference.
 func (e *SDKEngine) Release() {
 	e.ref.Release()

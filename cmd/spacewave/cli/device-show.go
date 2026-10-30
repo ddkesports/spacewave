@@ -70,23 +70,23 @@ func (a *deviceShowArgs) Run(c *cli.Context) error {
 
 	// Mount the Device object's typed Resource.
 	uri := fsURI{sessionIdx: sessionIndex32(a.sessionIdx), spaceID: a.spaceID, objectKey: c.Args().First()}
-	mount, cleanup, err := mountObjectChain(c, a.statePath, uri, nil)
+	mount, err := mountObjectChain(c, a.statePath, uri, nil)
 	if err != nil {
 		return err
 	}
-	defer cleanup()
+	defer mount.release()
 
 	// Read the Device and its Worker claim from the same World revision.
-	tx, err := mount.engine.NewTransaction(c.Context, false)
+	tx, err := mount.Engine.NewTransaction(c.Context, false)
 	if err != nil {
 		return errors.Wrap(err, "read device world")
 	}
 	defer tx.Discard()
-	device, err := world.LookupObjectBody[s4wave_device.Device](c.Context, tx, mount.objectKey)
+	device, err := world.LookupObjectBody[s4wave_device.Device](c.Context, tx, mount.ObjectKey)
 	if err != nil {
 		return errors.Wrap(err, "read device state")
 	}
-	availability, err := forge_runtime.LookupForgeWorkerAvailability(c.Context, tx, mount.objectKey, device)
+	availability, err := forge_runtime.LookupForgeWorkerAvailability(c.Context, tx, mount.ObjectKey, device)
 	if err != nil {
 		return errors.Wrap(err, "read device availability")
 	}
@@ -101,7 +101,7 @@ func (a *deviceShowArgs) Run(c *cli.Context) error {
 	}
 
 	// Print the derived availability beside the Device's diagnostic fields.
-	writeDeviceShow(os.Stdout, mount.objectKey, device, availability)
+	writeDeviceShow(os.Stdout, mount.ObjectKey, device, availability)
 	return nil
 }
 

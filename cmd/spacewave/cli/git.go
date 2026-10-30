@@ -59,17 +59,17 @@ func parseGitURI(arg, spaceFlag string, sessFlag int) (fsURI, error) {
 // mountGitContext connects to the daemon and mounts the full chain to get
 // a GitRepoResourceService client for the given URI.
 func mountGitContext(c *cli.Context, statePath string, uri fsURI) (*gitContext, func(), error) {
-	mount, _, err := mountObjectChain(c, statePath, uri, nil)
+	mount, err := mountObjectChain(c, statePath, uri, nil)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	gitSvc := s4wave_git.NewSRPCGitRepoResourceServiceClient(mount.typedClient)
+	gitSvc := s4wave_git.NewSRPCGitRepoResourceServiceClient(mount.TypedClient)
 
 	return &gitContext{
 		gitSvc:    gitSvc,
-		engine:    mount.engine,
-		objectKey: mount.objectKey,
+		engine:    mount.Engine,
+		objectKey: mount.ObjectKey,
 		client:    mount.client,
 	}, mount.release, nil
 }

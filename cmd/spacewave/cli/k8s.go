@@ -123,15 +123,15 @@ func (a *k8sArgs) getAccess(c *cli.Context) (*s4wave_k8s.GetAccessResponse, stri
 	if err != nil {
 		return nil, "", err
 	}
-	mount, cleanup, err := mountObjectChain(c, a.statePath, fsURI{sessionIdx: idx, spaceID: a.spaceID, objectKey: s4wave_k8s.ClusterObjectKey}, nil)
+	mount, err := mountObjectChain(c, a.statePath, fsURI{sessionIdx: idx, spaceID: a.spaceID, objectKey: s4wave_k8s.ClusterObjectKey}, nil)
 	if err != nil {
 		return nil, "", errors.Wrap(err, "open the Space's k8s/cluster object (enable it with spacewave k8s enable)")
 	}
-	defer cleanup()
+	defer mount.release()
 
 	// Ask it for the server and a token.
-	access, err := s4wave_k8s.NewSRPCClusterResourceServiceClient(mount.typedClient).GetAccess(c.Context, &s4wave_k8s.GetAccessRequest{})
-	return access, mount.spaceID, err
+	access, err := s4wave_k8s.NewSRPCClusterResourceServiceClient(mount.TypedClient).GetAccess(c.Context, &s4wave_k8s.GetAccessRequest{})
+	return access, mount.SpaceID, err
 }
 
 // k8sKubeconfigArgs prints a kubeconfig for the Space.

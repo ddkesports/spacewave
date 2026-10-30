@@ -89,12 +89,12 @@ func (a *flowgraphArgs) mountResource(c *cli.Context) (flowgraph.SRPCFlowgraphRe
 
 	// Mount the chain from the daemon to the typed object.
 	uri := fsURI{sessionIdx: sessionIdx, spaceID: a.spaceID, objectKey: a.key}
-	mount, cleanup, err := mountObjectChain(c, a.statePath, uri, discover)
+	mount, err := mountObjectChain(c, a.statePath, uri, discover)
 	if err != nil {
 		return nil, "", nil, err
 	}
-	svc := flowgraph.NewSRPCFlowgraphResourceServiceClient(mount.typedClient)
-	return svc, mount.objectKey, cleanup, nil
+	svc := flowgraph.NewSRPCFlowgraphResourceServiceClient(mount.TypedClient)
+	return svc, mount.ObjectKey, mount.release, nil
 }
 
 // update applies one edit and prints the resulting snapshot.
