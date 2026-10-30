@@ -510,6 +510,17 @@ func (ws *SDKWorldState) ForEachObjectBodyPage(
 	return s4wave_world.ForEachObjectBodyPage(ctx, ws.service, keys, cb)
 }
 
+// ForEachObjectBodyJSONPage calls cb with each page of object bodies carrying
+// their type IDs and, where the host or the type's plugin can render them,
+// JSON. The page belongs to cb.
+func (ws *SDKWorldState) ForEachObjectBodyJSONPage(
+	ctx context.Context,
+	keys []string,
+	cb func([]*s4wave_world.ObjectBody) error,
+) error {
+	return s4wave_world.ForEachObjectBodyJSONPage(ctx, ws.service, keys, cb)
+}
+
 // GetObjectBodiesBatch returns serialized object bodies for object keys.
 func (ws *SDKWorldState) GetObjectBodiesBatch(ctx context.Context, keys []string) ([]*world.ObjectBody, error) {
 	return s4wave_world.GetObjectBodiesBatch(ctx, ws.service, keys)
