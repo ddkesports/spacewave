@@ -67,6 +67,8 @@ message CompileRequest {
   string device_peer_id = 4;
   // Connections contains the edges ending at this node.
   repeated PlacedConnection connections = 5;
+  // EngineId is the ID of the World engine holding the Flowgraph.
+  string engine_id = 6;
 }
 
 // PlacedConnection adds remote Device identity to an authored edge.

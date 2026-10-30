@@ -139,6 +139,8 @@ type CompileRequest struct {
 	DevicePeerId string `protobuf:"bytes,4,opt,name=device_peer_id,json=devicePeerId,proto3" json:"devicePeerId,omitempty"`
 	// Connections contains the edges ending at this node.
 	Connections []*PlacedConnection `protobuf:"bytes,5,rep,name=connections,proto3" json:"connections,omitempty"`
+	// EngineId is the ID of the World engine holding the Flowgraph.
+	EngineId string `protobuf:"bytes,6,opt,name=engine_id,json=engineId,proto3" json:"engineId,omitempty"`
 }
 
 func (x *CompileRequest) Reset() {
@@ -180,6 +182,13 @@ func (x *CompileRequest) GetConnections() []*PlacedConnection {
 		return x.Connections
 	}
 	return nil
+}
+
+func (x *CompileRequest) GetEngineId() string {
+	if x != nil {
+		return x.EngineId
+	}
+	return ""
 }
 
 // PlacedConnection adds remote Device identity to an authored edge.
@@ -347,6 +356,7 @@ func (m *CompileRequest) CloneVT() *CompileRequest {
 	r.FlowgraphKey = m.FlowgraphKey
 	r.NodeId = m.NodeId
 	r.DevicePeerId = m.DevicePeerId
+	r.EngineId = m.EngineId
 	r.Node = protobuf_go_lite.CloneVTValue(m.Node)
 	r.Connections = protobuf_go_lite.CloneVTSlice(m.Connections)
 	if len(m.unknownFields) > 0 {
@@ -503,6 +513,9 @@ func (this *CompileRequest) EqualVT(that *CompileRequest) bool {
 		return false
 	}
 	if !protobuf_go_lite.EqualVTSliceImplicit(this.Connections, that.Connections, func() *PlacedConnection { return &PlacedConnection{} }) {
+		return false
+	}
+	if this.EngineId != that.EngineId {
 		return false
 	}
 	return string(this.unknownFields) == string(that.unknownFields)
@@ -820,6 +833,11 @@ func (x *CompileRequest) MarshalProtoJSON(s *json.MarshalState) {
 		}
 		s.WriteArrayEnd()
 	}
+	if x.EngineId != "" || s.HasField("engineId") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("engineId")
+		s.WriteString(x.EngineId)
+	}
 	s.WriteObjectEnd()
 }
 
@@ -871,6 +889,9 @@ func (x *CompileRequest) UnmarshalProtoJSON(s *json.UnmarshalState) {
 				}
 				x.Connections = append(x.Connections, v)
 			})
+		case "engine_id", "engineId":
+			s.AddField("engine_id")
+			x.EngineId = s.ReadString()
 		}
 	})
 }
@@ -1282,6 +1303,11 @@ func (m *CompileRequest) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	if m.unknownFields != nil {
 		i = protobuf_go_lite.EncodeRawBytes(dAtA, i, m.unknownFields)
 	}
+	if len(m.EngineId) > 0 {
+		i = protobuf_go_lite.EncodeString(dAtA, i, m.EngineId)
+		i--
+		dAtA[i] = 0x32
+	}
 	if len(m.Connections) > 0 {
 		for iNdEx := len(m.Connections) - 1; iNdEx >= 0; iNdEx-- {
 			size, err := m.Connections[iNdEx].MarshalToSizedBufferVT(dAtA[:i])
@@ -1529,6 +1555,7 @@ func (m *CompileRequest) SizeVT() (n int) {
 		l = e.SizeVT()
 		n += protobuf_go_lite.SizeMessage(1, l)
 	}
+	n += protobuf_go_lite.SizeStringNonEmpty(1, m.EngineId)
 	n += len(m.unknownFields)
 	return n
 }
@@ -1691,6 +1718,10 @@ func (x *CompileRequest) MarshalProtoText() string {
 			}
 		}
 		protobuf_go_lite.TextWriteListEnd(&sb)
+	}
+	if x.EngineId != "" {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "engine_id")
+		protobuf_go_lite.TextWriteString(&sb, x.EngineId)
 	}
 	return protobuf_go_lite.TextFinishMessage(&sb)
 }
@@ -2071,6 +2102,16 @@ func (m *CompileRequest) UnmarshalVT(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
+		case 6:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field EngineId", wireType)
+			}
+			var v string
+			v, iNdEx, err = protobuf_go_lite.DecodeString(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			m.EngineId = v
 		default:
 			iNdEx = preIndex
 			skippy, err := protobuf_go_lite.Skip(dAtA[iNdEx:])

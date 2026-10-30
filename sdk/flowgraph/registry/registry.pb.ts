@@ -125,6 +125,10 @@ export interface CompileRequest {
    * Connections contains the edges ending at this node.
    */
   connections?: PlacedConnection[]
+  /**
+   * EngineId is the ID of the World engine holding the Flowgraph.
+   */
+  engineId?: string
 }
 
 export const CompileRequest: MessageType<CompileRequest> =
@@ -136,6 +140,7 @@ export const CompileRequest: MessageType<CompileRequest> =
       [3, 'node', 11, 0, FlowgraphNode.codec],
       [4, 'device_peer_id', 9],
       [5, 'connections', 11, 1, PlacedConnection.codec],
+      [6, 'engine_id', 9],
     ],
   )
 

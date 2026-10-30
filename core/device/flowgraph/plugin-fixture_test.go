@@ -384,8 +384,12 @@ func (pluginRunNodeType) GetConfigIDs() []string {
 	return []string{pluginRunConfigID}
 }
 
-// Compile carries the value parameter as the config's bytes.
+// Compile carries the value parameter as the config's bytes. It requires the
+// World engine ID, which a plugin node's controller needs to read the World.
 func (pluginRunNodeType) Compile(_ context.Context, node *s4wave_flowgraph.PlacedFlowgraphNode) (map[string]config.Config, error) {
+	if node.EngineID == "" {
+		return nil, errors.New("compile request carries no World engine ID")
+	}
 	conf := space_exec.NewSpaceExecConfig(pluginRunConfigID)
 	if err := conf.UnmarshalVT([]byte(node.Node.GetParameters()["value"])); err != nil {
 		return nil, err

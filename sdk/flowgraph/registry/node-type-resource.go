@@ -82,6 +82,7 @@ func NewCompileRequest(node *s4wave_flowgraph.PlacedFlowgraphNode) *CompileReque
 		NodeId:       node.NodeID,
 		Node:         node.Node.CloneVT(),
 		DevicePeerId: node.DevicePeerID,
+		EngineId:     node.EngineID,
 		Connections:  make([]*PlacedConnection, len(node.Connections)),
 	}
 	for i, conn := range node.Connections {
@@ -102,6 +103,7 @@ func (r *CompileRequest) PlacedNode() *s4wave_flowgraph.PlacedFlowgraphNode {
 		NodeID:       r.GetNodeId(),
 		Node:         r.GetNode().CloneVT(),
 		DevicePeerID: r.GetDevicePeerId(),
+		EngineID:     r.GetEngineId(),
 		Connections:  make([]*s4wave_flowgraph.PlacedFlowgraphConnection, len(r.GetConnections())),
 	}
 	for i, conn := range r.GetConnections() {
