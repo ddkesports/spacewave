@@ -45,8 +45,15 @@ func buildCreateArgs(conf *Config, runtimeName, outputDir string) []string {
 		args = append(args, "--mount", buildMountArg(&Mount{HostPath: outputDir, ContainerPath: conf.GetOutputDir()}))
 	}
 
-	// Select the container image and command after its runtime options.
+	// Select the entrypoint, image and command after the runtime options.
+	entrypoint := conf.GetEntrypoint()
+	if len(entrypoint) != 0 {
+		args = append(args, "--entrypoint", entrypoint[0])
+	}
 	args = append(args, conf.GetImage())
+	if len(entrypoint) > 1 {
+		args = append(args, entrypoint[1:]...)
+	}
 	args = append(args, conf.GetCommand()...)
 	return args
 }

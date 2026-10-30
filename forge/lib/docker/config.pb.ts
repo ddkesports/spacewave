@@ -68,6 +68,11 @@ export interface Config {
    * A file absent after exit leaves its output unset.
    */
   outputs?: string[]
+  /**
+   * Entrypoint replaces the image's entrypoint when set: its first entry is
+   * the executable and the rest are placed before command.
+   */
+  entrypoint?: string[]
 }
 
 export const Config: MessageType<Config> =
@@ -84,6 +89,7 @@ export const Config: MessageType<Config> =
     [10, 'memory_bytes', 4],
     [11, 'output_dir', 9],
     [12, 'outputs', 9, 1],
+    [13, 'entrypoint', 9, 1],
   ])
 
 /**

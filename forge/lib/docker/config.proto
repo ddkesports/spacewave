@@ -36,6 +36,9 @@ message Config {
   // Outputs lists the output names the command may write to output_dir.
   // A file absent after exit leaves its output unset.
   repeated string outputs = 12;
+  // Entrypoint replaces the image's entrypoint when set: its first entry is
+  // the executable and the rest are placed before command.
+  repeated string entrypoint = 13;
 }
 
 // Mount configures one docker bind mount.

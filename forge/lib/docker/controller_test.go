@@ -26,7 +26,8 @@ func TestBuildCreateArgsPinsEnvMountsWorkdirImageCommand(t *testing.T) {
 			{HostPath: "/host/socket", ContainerPath: "/run/ghbot.sock"},
 			{HostPath: "/host/work", ContainerPath: "/work/repo", ReadOnly: true},
 		},
-		Command: []string{"ghbot-agent", "-h"},
+		Command:    []string{"-h"},
+		Entrypoint: []string{"ghbot-agent", "--quiet"},
 	}
 
 	// Compare the Docker create arguments with their explicit configuration.
@@ -39,8 +40,9 @@ func TestBuildCreateArgsPinsEnvMountsWorkdirImageCommand(t *testing.T) {
 		"--env", "BETA=two",
 		"--mount", "type=bind,source=/host/socket,target=/run/ghbot.sock",
 		"--mount", "type=bind,source=/host/work,target=/work/repo,readonly",
+		"--entrypoint", "ghbot-agent",
 		"ghbot:dev",
-		"ghbot-agent", "-h",
+		"--quiet", "-h",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("create args mismatch\nwant: %#v\n got: %#v", want, got)

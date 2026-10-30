@@ -26,13 +26,8 @@ type Container struct {
 // be empty to let Docker choose. A nonempty outputDir is the host directory
 // mounted at conf's output_dir.
 func CreateContainer(ctx context.Context, runner DockerRunner, conf *Config, name, outputDir string) (*Container, error) {
-	// Resolve the CLI the config selects.
-	c := &Container{runner: runner, path: conf.GetDockerPath(), env: BuildDockerEnv(conf)}
-	if c.path == "" {
-		c.path = "docker"
-	}
-
-	// Create the container and keep the ID it prints.
+	// Create the container through the CLI the config selects.
+	c := OpenContainer(runner, conf, "")
 	out, err := c.runner.Run(ctx, c.path, buildCreateArgs(conf, name, outputDir), c.env)
 	if err != nil {
 		return nil, errors.Wrap(err, "docker create")
@@ -42,6 +37,17 @@ func CreateContainer(ctx context.Context, runner DockerRunner, conf *Config, nam
 		return nil, errors.New("docker create returned empty container id")
 	}
 	return c, nil
+}
+
+// OpenContainer addresses the existing container idOrName through the CLI
+// path and environment of conf, such as to remove a container a previous run
+// left behind. Docker accepts a container name wherever it takes an ID.
+func OpenContainer(runner DockerRunner, conf *Config, idOrName string) *Container {
+	path := conf.GetDockerPath()
+	if path == "" {
+		path = "docker"
+	}
+	return &Container{runner: runner, path: path, env: BuildDockerEnv(conf), id: idOrName}
 }
 
 // GetID returns the container ID.
