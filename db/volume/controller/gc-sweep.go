@@ -86,7 +86,8 @@ func (c *Controller) runGCSweep(ctx context.Context) error {
 
 	// Construct the collector for the volume reference graph. A block pass
 	// reads the whole graph, so it runs markIntervals intervals after the
-	// last one ended, or up to 8x that after passes that find little. The
+	// last one ended, or up to 8x that after passes that find little, and
+	// at least four times as long as the last pass spent marking. The
 	// schedule resumes from the volume, so a pass a restart cut short or
 	// postponed runs once the quiet start is over.
 	collector := block_gc.NewCollector(rg, vol, nil)

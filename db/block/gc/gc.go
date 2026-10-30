@@ -95,6 +95,11 @@ type Collector struct {
 // maxMarkBackoff caps the doublings of the mark interval at 8x.
 const maxMarkBackoff = 3
 
+// markRest is the least gap after a block pass, in multiples of the time it
+// spent marking, so marks take at most a fifth of the time on a store whose
+// pass outlasts the mark interval.
+const markRest = 4
+
 // sparseMarkDivisor sets the yield below which a block pass backs off: one
 // that finds fewer than 1/sparseMarkDivisor of its live blocks unreached.
 const sparseMarkDivisor = 16
@@ -123,7 +128,8 @@ func NewCollector(
 // counts one interval from now, and a next past the longest gap is pulled in
 // to it. Each pass that finds fewer than 1/16 of its live blocks unreached
 // doubles the gap before the next, up to 8x; a pass that finds more resets
-// it. Collect and CollectGraphOnly always run one.
+// it. The gap is at least markRest times the pass's mark time. Collect and
+// CollectGraphOnly always run one.
 func (c *Collector) SetMarkInterval(interval time.Duration, next time.Time) {
 	now := time.Now()
 	if next.IsZero() {
@@ -144,7 +150,8 @@ func (c *Collector) NextMark() time.Time {
 // sparse one, or one that blocks of unknown references stopped, which sweeps
 // nothing and would mark the whole store again for nothing until their lists
 // arrive. It resets the interval after a productive pass, keeps it after a
-// failed one, and counts the next gap from now.
+// failed one, and counts the next gap from now, at least markRest times the
+// pass's mark time.
 func (c *Collector) scheduleMark(stats *Stats, err error) {
 	switch {
 	case err != nil:
@@ -153,7 +160,8 @@ func (c *Collector) scheduleMark(stats *Stats, err error) {
 	default:
 		c.markBackoff = 0
 	}
-	c.nextMark = time.Now().Add(c.markInterval << c.markBackoff)
+	gap := max(c.markInterval<<c.markBackoff, stats.MarkDuration*markRest)
+	c.nextMark = time.Now().Add(gap)
 }
 
 // collectChunk bounds the candidates a budgeted collection sweeps between

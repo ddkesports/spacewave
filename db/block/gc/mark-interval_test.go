@@ -79,6 +79,14 @@ func TestCollector_ScheduleMark(t *testing.T) {
 		t.Fatalf("expected the base interval after a reset, got %v", gap)
 	}
 
+	// A productive pass that marked longer than the interval rests markRest
+	// times its mark, as the Mac's 46 minute pass on October 30 needed.
+	long := &Stats{LiveNodes: 14_303_629, UnreachedBlocks: 3_381_500, MarkDuration: 46 * time.Minute}
+	c.scheduleMark(long, nil)
+	if gap := time.Until(c.nextMark); gap > 184*time.Minute || gap < 184*time.Minute-time.Second {
+		t.Fatalf("expected a gap of markRest times the mark, got %v", gap)
+	}
+
 	// A pass that blocks of unknown references stopped backs off, however
 	// much it left unreached, as solid's passes did on October 27.
 	stopped := &Stats{LiveNodes: 9_064_682, UnreachedBlocks: 3_381_500, UnknownBlocks: 30_727}
