@@ -464,7 +464,7 @@ func (t *bstoreTracker) executeBlockStoreTracker(rctx context.Context) error {
 	// Read the local store first, then the backend's bucket, then peers.
 	localStore := block_store.NewStore(blockStoreLocalID, wb)
 	lowerOps := block_store.NewStoreReadThrough(
-		t.getRemote,
+		func() block.StoreOps { return t.getRemoteReads(placement) },
 		func() block.StoreOps { return t.a.getP2PStore(bucketID) },
 		nil,
 	)
