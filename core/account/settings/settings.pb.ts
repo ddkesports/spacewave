@@ -184,6 +184,12 @@ export interface SqlLocation {
    * Tls connects with TLS.
    */
   tls?: boolean
+  /**
+   * TlsCertSha256 is the hex SHA-256 of the server's certificate. Set, TLS
+   * trusts exactly that certificate in place of a CA and the host name, as
+   * for a server with a self-signed certificate.
+   */
+  tlsCertSha256?: string
 }
 
 export const SqlLocation: MessageType<SqlLocation> =
@@ -195,6 +201,7 @@ export const SqlLocation: MessageType<SqlLocation> =
       [3, 'database', 9],
       [4, 'table_prefix', 9],
       [5, 'tls', 8],
+      [6, 'tls_cert_sha256', 9],
     ],
   )
 

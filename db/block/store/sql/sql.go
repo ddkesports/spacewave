@@ -11,8 +11,11 @@ package block_store_sql
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/tls"
 	"database/sql"
 	"encoding/binary"
+	"encoding/hex"
 	"net"
 	"strconv"
 	"strings"
@@ -53,6 +56,9 @@ type Config struct {
 	Table string
 	// TLS connects with TLS.
 	TLS bool
+	// TLSCertSHA256 is the hex SHA-256 of the server's certificate. Set, TLS
+	// trusts exactly that certificate in place of a CA and the host name.
+	TLSCertSHA256 string
 }
 
 // Open opens a connection pool to the database. It connects lazily, so an
@@ -77,6 +83,9 @@ func Open(conf *Config) (*sql.DB, error) {
 	mc.MaxAllowedPacket = 0
 	if conf.TLS {
 		mc.TLSConfig = "true"
+	}
+	if conf.TLS && conf.TLSCertSHA256 != "" {
+		mc.TLS = pinnedTLS(conf.Host, conf.TLSCertSHA256)
 	}
 
 	// Build the connector the pool dials through.
@@ -403,3 +412,25 @@ func quoteName(name string) string {
 
 // _ is a type assertion
 var _ block.StoreOps = (*Store)(nil)
+
+// pinnedTLS returns a TLS config that trusts only the certificate whose
+// SHA-256 is pin, such as a server's self-signed one.
+func pinnedTLS(host, pin string) *tls.Config {
+	// Verify the leaf against the pin rather than a CA and the host name.
+	want := strings.ToLower(strings.ReplaceAll(pin, ":", ""))
+	return &tls.Config{
+		ServerName:         host,
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: true, // #nosec G402 -- VerifyConnection checks the pinned certificate.
+		VerifyConnection: func(cs tls.ConnectionState) error {
+			if len(cs.PeerCertificates) == 0 {
+				return errors.New("the server sent no certificate")
+			}
+			sum := sha256.Sum256(cs.PeerCertificates[0].Raw)
+			if hex.EncodeToString(sum[:]) != want {
+				return errors.New("the server's certificate does not match the pinned SHA-256")
+			}
+			return nil
+		},
+	}
+}

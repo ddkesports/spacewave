@@ -85,6 +85,10 @@ message SqlLocation {
   string table_prefix = 4;
   // Tls connects with TLS.
   bool tls = 5;
+  // TlsCertSha256 is the hex SHA-256 of the server's certificate. Set, TLS
+  // trusts exactly that certificate in place of a CA and the host name, as
+  // for a server with a self-signed certificate.
+  string tls_cert_sha256 = 6;
 }
 
 // S3Location locates an S3-compatible bucket and the key space it uses.

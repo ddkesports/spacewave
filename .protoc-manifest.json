@@ -1004,7 +1004,7 @@
       ]
     },
     "github.com/s4wave/spacewave/core/account/settings": {
-      "hash": "cb243538e8b6a6ac7fd11bab3e37f83379e8e148e7b30e42242b07aed401bb7f",
+      "hash": "a170b57f4d5403aba0bcb48dc819e1c615199518497cbd81165bb983fbd97d29",
       "generatedFiles": [
         "core/account/settings/settings.pb.go",
         "core/account/settings/settings.pb.ts"

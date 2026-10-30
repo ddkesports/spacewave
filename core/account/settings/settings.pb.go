@@ -251,6 +251,10 @@ type SqlLocation struct {
 	TablePrefix string `protobuf:"bytes,4,opt,name=table_prefix,json=tablePrefix,proto3" json:"tablePrefix,omitempty"`
 	// Tls connects with TLS.
 	Tls bool `protobuf:"varint,5,opt,name=tls,proto3" json:"tls,omitempty"`
+	// TlsCertSha256 is the hex SHA-256 of the server's certificate. Set, TLS
+	// trusts exactly that certificate in place of a CA and the host name, as
+	// for a server with a self-signed certificate.
+	TlsCertSha256 string `protobuf:"bytes,6,opt,name=tls_cert_sha256,json=tlsCertSha256,proto3" json:"tlsCertSha256,omitempty"`
 }
 
 func (x *SqlLocation) Reset() {
@@ -292,6 +296,13 @@ func (x *SqlLocation) GetTls() bool {
 		return x.Tls
 	}
 	return false
+}
+
+func (x *SqlLocation) GetTlsCertSha256() string {
+	if x != nil {
+		return x.TlsCertSha256
+	}
+	return ""
 }
 
 // S3Location locates an S3-compatible bucket and the key space it uses.
@@ -1247,6 +1258,7 @@ func (m *SqlLocation) CloneVT() *SqlLocation {
 	r.Database = m.Database
 	r.TablePrefix = m.TablePrefix
 	r.Tls = m.Tls
+	r.TlsCertSha256 = m.TlsCertSha256
 	if len(m.unknownFields) > 0 {
 		r.unknownFields = slices.Clone(m.unknownFields)
 	}
@@ -1929,6 +1941,9 @@ func (this *SqlLocation) EqualVT(that *SqlLocation) bool {
 		return false
 	}
 	if this.Tls != that.Tls {
+		return false
+	}
+	if this.TlsCertSha256 != that.TlsCertSha256 {
 		return false
 	}
 	return string(this.unknownFields) == string(that.unknownFields)
@@ -3180,6 +3195,11 @@ func (x *SqlLocation) MarshalProtoJSON(s *json.MarshalState) {
 		s.WriteObjectField("tls")
 		s.WriteBool(x.Tls)
 	}
+	if x.TlsCertSha256 != "" || s.HasField("tlsCertSha256") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("tlsCertSha256")
+		s.WriteString(x.TlsCertSha256)
+	}
 	s.WriteObjectEnd()
 }
 
@@ -3212,6 +3232,9 @@ func (x *SqlLocation) UnmarshalProtoJSON(s *json.UnmarshalState) {
 		case "tls":
 			s.AddField("tls")
 			x.Tls = s.ReadBool()
+		case "tls_cert_sha256", "tlsCertSha256":
+			s.AddField("tls_cert_sha256")
+			x.TlsCertSha256 = s.ReadString()
 		}
 	})
 }
@@ -4694,6 +4717,11 @@ func (m *SqlLocation) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	if m.unknownFields != nil {
 		i = protobuf_go_lite.EncodeRawBytes(dAtA, i, m.unknownFields)
 	}
+	if len(m.TlsCertSha256) > 0 {
+		i = protobuf_go_lite.EncodeString(dAtA, i, m.TlsCertSha256)
+		i--
+		dAtA[i] = 0x32
+	}
 	if m.Tls {
 		i = protobuf_go_lite.EncodeBool(dAtA, i, m.Tls)
 		i--
@@ -6098,6 +6126,7 @@ func (m *SqlLocation) SizeVT() (n int) {
 	n += protobuf_go_lite.SizeStringNonEmpty(1, m.Database)
 	n += protobuf_go_lite.SizeStringNonEmpty(1, m.TablePrefix)
 	n += protobuf_go_lite.SizeBoolNonZero(1, m.Tls)
+	n += protobuf_go_lite.SizeStringNonEmpty(1, m.TlsCertSha256)
 	n += len(m.unknownFields)
 	return n
 }
@@ -6829,6 +6858,10 @@ func (x *SqlLocation) MarshalProtoText() string {
 	if x.Tls != false {
 		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "tls")
 		protobuf_go_lite.TextWriteBool(&sb, x.Tls)
+	}
+	if x.TlsCertSha256 != "" {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "tls_cert_sha256")
+		protobuf_go_lite.TextWriteString(&sb, x.TlsCertSha256)
 	}
 	return protobuf_go_lite.TextFinishMessage(&sb)
 }
@@ -7720,6 +7753,16 @@ func (m *SqlLocation) UnmarshalVT(dAtA []byte) error {
 				return err
 			}
 			m.Tls = bool(v)
+		case 6:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TlsCertSha256", wireType)
+			}
+			var v string
+			v, iNdEx, err = protobuf_go_lite.DecodeString(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			m.TlsCertSha256 = v
 		default:
 			iNdEx = preIndex
 			skippy, err := protobuf_go_lite.Skip(dAtA[iNdEx:])
