@@ -18,6 +18,9 @@ type cursor struct {
 	path []frame
 	// err is the first read error.
 	err error
+	// scan reads the leaves without caching them, for a pass over the whole
+	// index that reads each leaf once.
+	scan bool
 }
 
 // valid reports whether the cursor is on an entry.
@@ -45,8 +48,12 @@ func (c *cursor) value() value {
 // each inner page when first is set and the last otherwise. With key set it
 // takes the child covering key instead.
 func (c *cursor) descend(page uint64, key []byte, first bool) {
+	read := c.p.node
+	if c.scan {
+		read = c.p.scanNode
+	}
 	for {
-		n, err := c.p.node(page)
+		n, err := read(page)
 		if err != nil {
 			c.err = err
 			return

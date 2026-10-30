@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
+	"github.com/s4wave/spacewave/db/block"
 	kvtest "github.com/s4wave/spacewave/db/kvtx/kvtest"
 )
 
@@ -737,8 +738,27 @@ func TestCheckpointNothingToFold(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The snapshot reads every key from the file.
+	// A background pass over the snapshot reads every key from the file and
+	// leaves no leaf in the cache.
 	db.p.cache.clear()
+	it := tx.Iterate(block.WithBackground(ctx), nil, true, false)
+	var seen int
+	for it.Next() {
+		seen++
+	}
+	if err := it.Err(); err != nil || seen != len(m) {
+		t.Fatalf("background pass saw %d of %d keys, err %v", seen, len(m), err)
+	}
+	it.Close()
+	for i := range db.p.cache.shards {
+		for j := range db.p.cache.shards[i].ring {
+			if slot := &db.p.cache.shards[i].ring[j]; slot.n != nil && slot.n.leaf {
+				t.Fatalf("background pass cached leaf page %d", slot.page)
+			}
+		}
+	}
+
+	// The snapshot reads every key from the file.
 	for k, v := range m {
 		got, ok, err := tx.Get(ctx, []byte(k))
 		if err != nil || !ok || !bytes.Equal(got, v) {

@@ -31,6 +31,20 @@ type pager struct {
 
 // node returns a decoded index page.
 func (p *pager) node(page uint64) (*node, error) {
+	return p.load(page, false)
+}
+
+// scanNode returns a decoded index page as node does, but leaves a leaf it
+// reads from the file uncached. A pass over the whole index reads each leaf
+// once, and caching those leaves would evict the pages lookups reuse. Inner
+// pages are cached either way, since every path passes through them.
+func (p *pager) scanNode(page uint64) (*node, error) {
+	return p.load(page, true)
+}
+
+// load returns a decoded index page, caching a page it reads unless scan is
+// set and the page is a leaf.
+func (p *pager) load(page uint64, scan bool) (*node, error) {
 	// Serve a cached page.
 	if n := p.cache.get(page); n != nil {
 		return n, nil
@@ -46,7 +60,9 @@ func (p *pager) node(page uint64) (*node, error) {
 	if err != nil {
 		return nil, errors.Wrapf(err, "page %d", page)
 	}
-	p.cache.put(page, n)
+	if !scan || !n.leaf {
+		p.cache.put(page, n)
+	}
 	return n, nil
 }
 

@@ -259,8 +259,9 @@ func (c *compactor) plan(ctx context.Context) (ok, busy bool, err error) {
 // last checkpoint lists its current value; keys added since reach the index
 // at the next checkpoint.
 func (c *compactor) scan(ctx context.Context, st *state) (refs []move, wrapped bool, err error) {
-	// Start at the cursor.
-	cur := cursor{p: c.db.p, root: st.root}
+	// Start at the cursor. The pass reads every leaf once, so it leaves them
+	// out of the cache.
+	cur := cursor{p: c.db.p, root: st.root, scan: true}
 	cur.seek(c.cursor, false)
 
 	// List the values outside the index, and the first key reached in each

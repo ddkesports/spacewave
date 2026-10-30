@@ -439,9 +439,11 @@ func (v *Volume) sweepBlockPass(ctx context.Context, actual *transactionRefGraph
 
 	// Mark the blocks. A block of unknown references may name any
 	// unreached block, so the pass sweeps nothing unless it can wait for
-	// the lists of all of them.
+	// the lists of all of them. The mark reads each list once, so it runs
+	// as background work, which keeps the index leaves it reads out of the
+	// page cache.
 	start := time.Now()
-	mark, err := markBlocks(ctx)
+	mark, err := markBlocks(block.WithBackground(ctx))
 	stats.MarkDuration += time.Since(start)
 	if err != nil {
 		return nil, false, err

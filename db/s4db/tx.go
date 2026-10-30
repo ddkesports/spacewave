@@ -5,6 +5,7 @@ import (
 	"context"
 	"slices"
 
+	"github.com/s4wave/spacewave/db/block"
 	"github.com/s4wave/spacewave/db/kvtx"
 	"github.com/tidwall/btree"
 )
@@ -250,8 +251,13 @@ func (t *Tx) ScanPrefixLens(ctx context.Context, prefix []byte, cb func(key []by
 }
 
 // Iterate returns an iterator over keys under prefix, always in key order.
+// When ctx is marked with block.WithBackground, the iterator leaves the
+// index leaves it reads out of the page cache, so a background pass over many
+// keys keeps the pages foreground lookups reuse.
 func (t *Tx) Iterate(ctx context.Context, prefix []byte, sort, reverse bool) kvtx.Iterator {
-	return t.iterate(prefix, reverse)
+	it := t.iterate(prefix, reverse)
+	it.tree.scan = block.IsBackground(ctx)
+	return it
 }
 
 // iterate returns an iterator over keys under prefix.

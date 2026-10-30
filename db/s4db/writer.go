@@ -1246,6 +1246,7 @@ func (w *writer) relocate(ctx context.Context, budget int64, visits int) error {
 	db, sp := w.db, w.sp
 	st := db.cur.Load()
 	it := newIterator(db.p, st, nil, nil, false)
+	it.tree.scan = true
 	if w.relocKey != nil {
 		_ = it.Seek(w.relocKey)
 	} else {
