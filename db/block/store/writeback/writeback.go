@@ -160,11 +160,15 @@ func (s *Store) SetPolicy(policy Policy) {
 
 // GetStatus returns the upload status and a channel closed when it changes.
 func (s *Store) GetStatus() (Status, <-chan struct{}) {
+	// Copy the status and its change channel.
 	var status Status
 	var changed <-chan struct{}
 	s.bcast.HoldLock(func(_ func(), getWaitCh func() <-chan struct{}) {
 		status, changed = s.status, getWaitCh()
 	})
+
+	// Add the read bound, which moves without a broadcast.
+	status.UploadReads = s.reads.getLimit()
 	return status, changed
 }
 
@@ -598,8 +602,8 @@ func (s *Store) clear(ctx context.Context, batch []pendingBlock) error {
 
 	// Remove uploaded block markers, count their cleared bytes, and read the
 	// write time of the queue's new head.
-	var cleared int
-	var clearedBytes, queuedBytes int64
+	var cleared, uploaded int
+	var clearedBytes, uploadedBytes, queuedBytes int64
 	var oldest time.Time
 	err = kvtx.RunTransaction(ctx, true, s.writeTx, func(ctx context.Context, tx kvtx.Tx) error {
 		// Delete the markers still queued, counting what they held, and queue
@@ -608,7 +612,7 @@ func (s *Store) clear(ctx context.Context, batch []pendingBlock) error {
 		if err != nil {
 			return err
 		}
-		cleared, clearedBytes, queuedBytes = 0, 0, 0
+		cleared, uploaded, clearedBytes, uploadedBytes, queuedBytes = 0, 0, 0, 0, 0
 		for _, pending := range batch {
 			if pending.queueKey == nil {
 				continue
@@ -632,6 +636,8 @@ func (s *Store) clear(ctx context.Context, batch []pendingBlock) error {
 					return err
 				}
 				queuedBytes += added
+				uploaded++
+				uploadedBytes += pending.size
 			}
 			cleared++
 			clearedBytes += pending.size
@@ -660,6 +666,8 @@ func (s *Store) clear(ctx context.Context, batch []pendingBlock) error {
 		// Apply the cleared counts and the new head, then wake watchers.
 		s.status.Pending -= cleared
 		s.status.PendingBytes -= clearedBytes
+		s.status.Uploaded += int64(uploaded)
+		s.status.UploadedBytes += uploadedBytes
 		s.status.EvictableBytes += queuedBytes
 		s.status.Err = nil
 		s.status.Oldest = oldest
