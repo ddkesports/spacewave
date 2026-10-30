@@ -71,6 +71,8 @@ type Store struct {
 	bcast broadcast.Broadcast
 	// status projects the committed markers and the upload policy.
 	status Status
+	// reads bounds the upload's local reads in flight by the disk's load.
+	reads *readGate
 }
 
 // GetStoreParts returns the local store that holds every block.
@@ -90,7 +92,7 @@ func NewStore(
 	enabled bool,
 ) (*Store, error) {
 	// Connect local block writes to the durable upload markers.
-	s := &Store{local: local, values: values, markers: markers}
+	s := &Store{local: local, values: values, markers: markers, reads: newReadGate()}
 	s.MarkingStore = NewMarkingStore(local, s.mark)
 
 	// Restore the pending upload counts, eviction queue size and completed
@@ -147,6 +149,7 @@ func NewStore(
 // SetPolicy sets when queued blocks upload and the resident budget, waking
 // Upload and budget watchers to apply it.
 func (s *Store) SetPolicy(policy Policy) {
+	s.reads.setPolicy(policy.MaxUploadReads, policy.UploadReadSlow)
 	s.bcast.HoldLock(func(broadcast func(), _ func() <-chan struct{}) {
 		if s.status.Policy != policy {
 			s.status.Policy = policy
@@ -442,25 +445,25 @@ func (s *Store) uploadBatch(ctx context.Context, remote block.StoreOps, batch []
 // without upload. A block it holds without its refs fails the chunk, since the
 // remote would keep it as a leaf.
 func (s *Store) uploadChunk(ctx context.Context, remote block.StoreOps, batch []pendingBlock, chunk []int) error {
-	// Read each block with its refs from the local store.
-	entries := make([]*block.PutBatchEntry, 0, len(chunk))
-	for _, i := range chunk {
-		pending := batch[i]
-		stored, err := s.local.GetStoredBlock(ctx, pending.ref)
-		if err != nil {
-			return errors.Wrap(err, "read pending block")
-		}
-		if stored == nil {
-			batch[i].dropped = true
-			continue
-		}
-		if !stored.RefsKnown {
-			return errors.Wrapf(block.ErrRefsUnknown, "upload block %s", pending.ref.MarshalString())
-		}
-		entries = append(entries, &block.PutBatchEntry{Ref: pending.ref, Data: stored.Data, Refs: stored.Refs, RefsKnown: true})
+	// Read the blocks with their refs from the local store, as many at once
+	// as the disk's load admits.
+	read := make([]*block.PutBatchEntry, len(chunk))
+	eg, egCtx := errgroup.WithContext(ctx)
+	for n, i := range chunk {
+		eg.Go(func() error {
+			return s.reads.read(egCtx, func() error {
+				entry, err := s.readPending(egCtx, &batch[i])
+				read[n] = entry
+				return err
+			})
+		})
+	}
+	if err := eg.Wait(); err != nil {
+		return err
 	}
 
 	// Write the read blocks to the remote in one batch.
+	entries := slices.DeleteFunc(read, func(entry *block.PutBatchEntry) bool { return entry == nil })
 	if len(entries) == 0 {
 		return nil
 	}
@@ -468,6 +471,33 @@ func (s *Store) uploadChunk(ctx context.Context, remote block.StoreOps, batch []
 		return errors.Wrap(err, "upload blocks")
 	}
 	return nil
+}
+
+// readPending reads the pending block with its refs from the local store. It
+// marks a block the store no longer holds dropped and returns nil, and fails
+// on a block held without its refs, since the remote would keep it as a leaf.
+func (s *Store) readPending(ctx context.Context, pending *pendingBlock) (*block.PutBatchEntry, error) {
+	// Read the block, marking it dropped when gone.
+	stored, err := s.local.GetStoredBlock(ctx, pending.ref)
+	if err != nil {
+		return nil, errors.Wrap(err, "read pending block")
+	}
+	if stored == nil {
+		pending.dropped = true
+		return nil, nil
+	}
+
+	// Upload only a block whose refs are known.
+	if !stored.RefsKnown {
+		return nil, errors.Wrapf(block.ErrRefsUnknown, "upload block %s", pending.ref.MarshalString())
+	}
+	return &block.PutBatchEntry{Ref: pending.ref, Data: stored.Data, Refs: stored.Refs, RefsKnown: true}, nil
+}
+
+// GetUploadReads returns how many local reads the upload currently keeps in
+// flight at most.
+func (s *Store) GetUploadReads() int {
+	return s.reads.getLimit()
 }
 
 // mark queues written blocks for upload in one transaction.

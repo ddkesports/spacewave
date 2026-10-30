@@ -325,6 +325,17 @@ export interface BlockStoreCache {
    * drops them, until a placement without it queues them for upload.
    */
   skipBackfill?: boolean
+  /**
+   * MaxUploadReads bounds the local reads the upload keeps in flight. The
+   * upload lowers its bound while local reads slow, yielding the disk to the
+   * store's own reads. Zero uses 32.
+   */
+  maxUploadReads?: number
+  /**
+   * UploadReadSlowMillis is the least local read time the upload counts as
+   * the disk being loaded. Zero uses 5.
+   */
+  uploadReadSlowMillis?: number
 }
 
 export const BlockStoreCache: MessageType<BlockStoreCache> =
@@ -336,6 +347,8 @@ export const BlockStoreCache: MessageType<BlockStoreCache> =
       [3, 'resident_high_bytes', 4],
       [4, 'resident_low_bytes', 4],
       [5, 'skip_backfill', 8],
+      [6, 'max_upload_reads', 13],
+      [7, 'upload_read_slow_millis', 13],
     ],
   )
 

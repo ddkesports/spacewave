@@ -444,6 +444,13 @@ type BlockStoreCache struct {
 	// The blocks stored before stay on the local disk alone, and eviction never
 	// drops them, until a placement without it queues them for upload.
 	SkipBackfill bool `protobuf:"varint,5,opt,name=skip_backfill,json=skipBackfill,proto3" json:"skipBackfill,omitempty"`
+	// MaxUploadReads bounds the local reads the upload keeps in flight. The
+	// upload lowers its bound while local reads slow, yielding the disk to the
+	// store's own reads. Zero uses 32.
+	MaxUploadReads uint32 `protobuf:"varint,6,opt,name=max_upload_reads,json=maxUploadReads,proto3" json:"maxUploadReads,omitempty"`
+	// UploadReadSlowMillis is the least local read time the upload counts as
+	// the disk being loaded. Zero uses 5.
+	UploadReadSlowMillis uint32 `protobuf:"varint,7,opt,name=upload_read_slow_millis,json=uploadReadSlowMillis,proto3" json:"uploadReadSlowMillis,omitempty"`
 }
 
 func (x *BlockStoreCache) Reset() {
@@ -485,6 +492,20 @@ func (x *BlockStoreCache) GetSkipBackfill() bool {
 		return x.SkipBackfill
 	}
 	return false
+}
+
+func (x *BlockStoreCache) GetMaxUploadReads() uint32 {
+	if x != nil {
+		return x.MaxUploadReads
+	}
+	return 0
+}
+
+func (x *BlockStoreCache) GetUploadReadSlowMillis() uint32 {
+	if x != nil {
+		return x.UploadReadSlowMillis
+	}
+	return 0
 }
 
 // AccountSession is an approved account replica, distinct from a managed Device.
@@ -1319,6 +1340,8 @@ func (m *BlockStoreCache) CloneVT() *BlockStoreCache {
 	r.ResidentHighBytes = m.ResidentHighBytes
 	r.ResidentLowBytes = m.ResidentLowBytes
 	r.SkipBackfill = m.SkipBackfill
+	r.MaxUploadReads = m.MaxUploadReads
+	r.UploadReadSlowMillis = m.UploadReadSlowMillis
 	if len(m.unknownFields) > 0 {
 		r.unknownFields = slices.Clone(m.unknownFields)
 	}
@@ -2040,6 +2063,12 @@ func (this *BlockStoreCache) EqualVT(that *BlockStoreCache) bool {
 		return false
 	}
 	if this.SkipBackfill != that.SkipBackfill {
+		return false
+	}
+	if this.MaxUploadReads != that.MaxUploadReads {
+		return false
+	}
+	if this.UploadReadSlowMillis != that.UploadReadSlowMillis {
 		return false
 	}
 	return string(this.unknownFields) == string(that.unknownFields)
@@ -3433,6 +3462,16 @@ func (x *BlockStoreCache) MarshalProtoJSON(s *json.MarshalState) {
 		s.WriteObjectField("skipBackfill")
 		s.WriteBool(x.SkipBackfill)
 	}
+	if x.MaxUploadReads != 0 || s.HasField("maxUploadReads") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("maxUploadReads")
+		s.WriteUint32(x.MaxUploadReads)
+	}
+	if x.UploadReadSlowMillis != 0 || s.HasField("uploadReadSlowMillis") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("uploadReadSlowMillis")
+		s.WriteUint32(x.UploadReadSlowMillis)
+	}
 	s.WriteObjectEnd()
 }
 
@@ -3465,6 +3504,12 @@ func (x *BlockStoreCache) UnmarshalProtoJSON(s *json.UnmarshalState) {
 		case "skip_backfill", "skipBackfill":
 			s.AddField("skip_backfill")
 			x.SkipBackfill = s.ReadBool()
+		case "max_upload_reads", "maxUploadReads":
+			s.AddField("max_upload_reads")
+			x.MaxUploadReads = s.ReadUint32()
+		case "upload_read_slow_millis", "uploadReadSlowMillis":
+			s.AddField("upload_read_slow_millis")
+			x.UploadReadSlowMillis = s.ReadUint32()
 		}
 	})
 }
@@ -4903,6 +4948,16 @@ func (m *BlockStoreCache) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	if m.unknownFields != nil {
 		i = protobuf_go_lite.EncodeRawBytes(dAtA, i, m.unknownFields)
 	}
+	if m.UploadReadSlowMillis != 0 {
+		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(m.UploadReadSlowMillis))
+		i--
+		dAtA[i] = 0x38
+	}
+	if m.MaxUploadReads != 0 {
+		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(m.MaxUploadReads))
+		i--
+		dAtA[i] = 0x30
+	}
 	if m.SkipBackfill {
 		i = protobuf_go_lite.EncodeBool(dAtA, i, m.SkipBackfill)
 		i--
@@ -6178,6 +6233,8 @@ func (m *BlockStoreCache) SizeVT() (n int) {
 	n += protobuf_go_lite.SizeVarintNonZero(1, m.ResidentHighBytes)
 	n += protobuf_go_lite.SizeVarintNonZero(1, m.ResidentLowBytes)
 	n += protobuf_go_lite.SizeBoolNonZero(1, m.SkipBackfill)
+	n += protobuf_go_lite.SizeVarintNonZero(1, m.MaxUploadReads)
+	n += protobuf_go_lite.SizeVarintNonZero(1, m.UploadReadSlowMillis)
 	n += len(m.unknownFields)
 	return n
 }
@@ -6952,6 +7009,14 @@ func (x *BlockStoreCache) MarshalProtoText() string {
 	if x.SkipBackfill != false {
 		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "skip_backfill")
 		protobuf_go_lite.TextWriteBool(&sb, x.SkipBackfill)
+	}
+	if x.MaxUploadReads != 0 {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "max_upload_reads")
+		protobuf_go_lite.TextWriteUint(&sb, x.MaxUploadReads)
+	}
+	if x.UploadReadSlowMillis != 0 {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "upload_read_slow_millis")
+		protobuf_go_lite.TextWriteUint(&sb, x.UploadReadSlowMillis)
 	}
 	return protobuf_go_lite.TextFinishMessage(&sb)
 }
@@ -8048,6 +8113,24 @@ func (m *BlockStoreCache) UnmarshalVT(dAtA []byte) error {
 				return err
 			}
 			m.SkipBackfill = bool(v)
+		case 6:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field MaxUploadReads", wireType)
+			}
+			m.MaxUploadReads = 0
+			m.MaxUploadReads, iNdEx, err = protobuf_go_lite.DecodeVarintUint32(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+		case 7:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field UploadReadSlowMillis", wireType)
+			}
+			m.UploadReadSlowMillis = 0
+			m.UploadReadSlowMillis, iNdEx, err = protobuf_go_lite.DecodeVarintUint32(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := protobuf_go_lite.Skip(dAtA[iNdEx:])

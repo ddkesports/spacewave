@@ -106,6 +106,8 @@ func uploadPolicy(cache *account_settings.BlockStoreCache) block_store_writeback
 		MaxPendingBytes: int64(min(cache.GetMaxPendingBytes(), math.MaxInt64)),
 		ResidentHigh:    int64(high),
 		ResidentLow:     int64(low),
+		MaxUploadReads:  int(cache.GetMaxUploadReads()),
+		UploadReadSlow:  time.Duration(cache.GetUploadReadSlowMillis()) * time.Millisecond,
 	}
 }
 

@@ -145,6 +145,13 @@ message BlockStoreCache {
   // The blocks stored before stay on the local disk alone, and eviction never
   // drops them, until a placement without it queues them for upload.
   bool skip_backfill = 5;
+  // MaxUploadReads bounds the local reads the upload keeps in flight. The
+  // upload lowers its bound while local reads slow, yielding the disk to the
+  // store's own reads. Zero uses 32.
+  uint32 max_upload_reads = 6;
+  // UploadReadSlowMillis is the least local read time the upload counts as
+  // the disk being loaded. Zero uses 5.
+  uint32 upload_read_slow_millis = 7;
 }
 
 // AccountSession is an approved account replica, distinct from a managed Device.
