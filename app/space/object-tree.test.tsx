@@ -27,14 +27,6 @@ describe('HIDDEN_OBJECT_TYPES', () => {
   it('contains space/settings', () => {
     expect(HIDDEN_OBJECT_TYPES.has('space/settings')).toBe(true)
   })
-
-  it('contains the SpaceSettings block type', () => {
-    expect(
-      HIDDEN_OBJECT_TYPES.has(
-        'github.com/s4wave/spacewave/core/space/world.SpaceSettings',
-      ),
-    ).toBe(true)
-  })
 })
 
 describe('isHiddenSpaceObject', () => {
@@ -43,12 +35,7 @@ describe('isHiddenSpaceObject', () => {
   })
 
   it('hides the SpaceSettings block type', () => {
-    expect(
-      isHiddenSpaceObject(
-        'custom-settings',
-        'github.com/s4wave/spacewave/core/space/world.SpaceSettings',
-      ),
-    ).toBe(true)
+    expect(isHiddenSpaceObject('custom-settings', 'space/settings')).toBe(true)
   })
 
   it('hides object types marked hidden or internal by metadata', () => {
@@ -247,10 +234,6 @@ describe('buildObjectLevel', () => {
     const result = buildObjectLevel(
       [
         { objectKey: 'settings', typeId: 'space/settings' },
-        {
-          objectKey: 'settings-block',
-          typeId: 'github.com/s4wave/spacewave/core/space/world.SpaceSettings',
-        },
         { objectKey: 'doc', typeId: 'canvas' },
       ],
       [],

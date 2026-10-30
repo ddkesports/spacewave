@@ -17,11 +17,6 @@ import (
 // SpaceSettingsObjectKey is the object key for the SpaceSettings.
 const SpaceSettingsObjectKey = "settings"
 
-// LegacySpaceSettingsTypeID is the type ID that Spaces written before
-// SpaceSettingsTypeID still carry on their settings object. Readers resolve it
-// to SpaceSettingsTypeID; nothing writes it.
-const LegacySpaceSettingsTypeID = "github.com/s4wave/spacewave/core/space/world.SpaceSettings"
-
 // NewSpaceSettingsBlock constructs a new SpaceSettings block.
 func NewSpaceSettingsBlock() block.Block {
 	return &SpaceSettings{}

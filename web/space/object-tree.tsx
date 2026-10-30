@@ -69,10 +69,7 @@ export interface SpaceObjectTargets {
 export type ObjectTypeMetadataById = ReadonlyMap<string, ObjectTypeMetadata>
 
 // HIDDEN_OBJECT_TYPES is the set of object types hidden from the tree.
-export const HIDDEN_OBJECT_TYPES = new Set([
-  'github.com/s4wave/spacewave/core/space/world.SpaceSettings',
-  SPACE_SETTINGS_BLOCK_TYPE,
-])
+export const HIDDEN_OBJECT_TYPES = new Set([SPACE_SETTINGS_BLOCK_TYPE])
 
 // isHiddenSpaceObject returns whether an object should be hidden from space
 // object browsers and pickers.

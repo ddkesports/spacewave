@@ -25,7 +25,6 @@ func TestLookupBlockType(t *testing.T) {
 		want   block.Block
 	}{
 		{space_world.SpaceSettingsTypeID, (*space_world.SpaceSettings)(nil)},
-		{space_world.LegacySpaceSettingsTypeID, (*space_world.SpaceSettings)(nil)},
 		{s4wave_vm.V86ImageTypeID, (*s4wave_vm.V86Image)(nil)},
 		{s4wave_vm.WasiVmImageTypeID, (*s4wave_vm.WasiVmImage)(nil)},
 		{"sync/app/notes", (*byteslice.ByteSlice)(nil)},

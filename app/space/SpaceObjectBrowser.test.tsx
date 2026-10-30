@@ -197,27 +197,6 @@ describe('SpaceObjectBrowser', () => {
     expect(screen.queryByText('settings')).toBeNull()
   })
 
-  it('hides the fully-qualified SpaceSettings type from the tree', async () => {
-    const fullyQualifiedSettingsState: BrowserSpace = {
-      objects: [
-        {
-          objectKey: 'settings',
-          objectType:
-            'github.com/s4wave/spacewave/core/space/world.SpaceSettings',
-        },
-        { objectKey: 'canvas-1', objectType: 'canvas' },
-      ],
-      settings: {},
-    }
-    renderBrowser(fullyQualifiedSettingsState)
-    await waitFor(() => {
-      expect(
-        screen.getByRole('treeitem', { name: /Canvas 1, Canvas/i }),
-      ).toBeDefined()
-    })
-    expect(screen.queryByText('settings')).toBeNull()
-  })
-
   it('renders virtual folder nodes for prefix paths', async () => {
     renderBrowser()
     await waitFor(() => {

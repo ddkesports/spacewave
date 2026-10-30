@@ -10,13 +10,12 @@ import (
 	s4wave_device "github.com/s4wave/spacewave/sdk/device"
 )
 
-// TestLookupObjectType covers the Device object type and the legacy
-// SpaceSettings ID in the native registry; the GoScript registry has its own
-// browser-tagged coverage.
+// TestLookupObjectType covers the Device and SpaceSettings object types in the
+// native registry; the GoScript registry has its own browser-tagged coverage.
 func TestLookupObjectType(t *testing.T) {
 	for _, row := range []struct{ typeID, want string }{
 		{s4wave_device.DeviceTypeID, s4wave_device.DeviceTypeID},
-		{space_world.LegacySpaceSettingsTypeID, space_world.SpaceSettingsTypeID},
+		{space_world.SpaceSettingsTypeID, space_world.SpaceSettingsTypeID},
 	} {
 		got, err := LookupObjectType(context.Background(), row.typeID)
 		if err != nil {

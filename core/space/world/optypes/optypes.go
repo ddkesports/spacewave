@@ -60,8 +60,6 @@ var schema = world.NewSchema(
 		// VM images resolve here because the CDN catalog Space that publishes
 		// them is mounted without the WasiVM plugin.
 		{ID: s4wave_vm.WasiVmImageTypeID, New: func() any { return new(s4wave_vm.WasiVmImage) }},
-		// Older Spaces stored their settings under the Go type name.
-		{ID: space_world.LegacySpaceSettingsTypeID, New: func() any { return new(space_world.SpaceSettings) }},
 	},
 	buildTypes,
 )
