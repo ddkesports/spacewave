@@ -42,6 +42,8 @@ var putPathNames = [numPutPaths]string{"direct", "publication", "owned", "fill",
 type putCount struct {
 	// blocks and bytes are the flow's blocks and their length.
 	blocks, bytes atomic.Uint64
+	// existing counts the path's puts of blocks the volume held already.
+	existing atomic.Uint64
 	// refused counts the path's puts refused for a new block without its
 	// references.
 	refused atomic.Uint64
@@ -84,17 +86,19 @@ func (v *Volume) SetValueFlows(fn func() []volume.ValueFlow) {
 }
 
 // GetFlows returns the blocks each write path stored that the volume did not
-// hold, the puts it refused, and the values its storage wrote and freed, since the volume opened.
+// hold, its puts of blocks the volume held, the puts it refused, and the
+// values its storage wrote and freed, since the volume opened.
 func (v *Volume) GetFlows() *volume.VolumeFlows {
 	// Report each write path.
 	flows := &volume.VolumeFlows{VolumeID: v.GetID()}
 	for path := range numPutPaths {
 		c := &v.puts[path]
 		flows.Puts = append(flows.Puts, volume.PutFlow{
-			Path:    putPathNames[path],
-			Blocks:  c.blocks.Load(),
-			Bytes:   c.bytes.Load(),
-			Refused: c.refused.Load(),
+			Path:     putPathNames[path],
+			Blocks:   c.blocks.Load(),
+			Bytes:    c.bytes.Load(),
+			Existing: c.existing.Load(),
+			Refused:  c.refused.Load(),
 		})
 	}
 
@@ -105,10 +109,11 @@ func (v *Volume) GetFlows() *volume.VolumeFlows {
 	return flows
 }
 
-// countPut counts a block of n bytes that path stored, unless the volume held
-// it already.
+// countPut counts a block of n bytes that path stored, or a put of a block
+// the volume held already.
 func (v *Volume) countPut(path putPath, n int, existed bool) {
 	if existed {
+		v.puts[path].existing.Add(1)
 		return
 	}
 	v.puts[path].blocks.Add(1)
@@ -116,22 +121,29 @@ func (v *Volume) countPut(path putPath, n int, existed bool) {
 }
 
 // countPutBatch counts the entries path stored that the volume did not hold,
-// as existed reports them. A tombstone stores no block.
+// and those it held, as existed reports them. A tombstone stores no block.
 func (v *Volume) countPutBatch(path putPath, entries []*block.PutBatchEntry, existed []bool) {
-	// Sum the new blocks.
-	var blocks, bytes uint64
+	// Sum the new blocks and the held ones.
+	var blocks, bytes, existing uint64
 	for i, e := range entries {
-		if e.Tombstone || (i < len(existed) && existed[i]) {
-			continue
+		switch {
+		case e.Tombstone:
+		case i < len(existed) && existed[i]:
+			existing++
+		default:
+			blocks++
+			bytes += uint64(len(e.Data))
 		}
-		blocks++
-		bytes += uint64(len(e.Data))
 	}
 
 	// Count them.
+	c := &v.puts[path]
 	if blocks != 0 {
-		v.puts[path].blocks.Add(blocks)
-		v.puts[path].bytes.Add(bytes)
+		c.blocks.Add(blocks)
+		c.bytes.Add(bytes)
+	}
+	if existing != 0 {
+		c.existing.Add(existing)
 	}
 }
 

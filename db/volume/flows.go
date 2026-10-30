@@ -6,7 +6,8 @@ import (
 )
 
 // PutFlow counts the blocks one write path stored that the volume did not
-// hold, and the puts it refused, since the volume opened.
+// hold, its puts of blocks the volume held, and the puts it refused, since the
+// volume opened.
 type PutFlow struct {
 	// Path names the write path, such as "fill".
 	Path string
@@ -14,6 +15,8 @@ type PutFlow struct {
 	Blocks uint64
 	// Bytes is their total length.
 	Bytes uint64
+	// Existing is the number of puts of blocks the volume held already.
+	Existing uint64
 	// Refused is the number of puts refused with block.ErrRefsUnknown for a
 	// new block written without its references.
 	Refused uint64

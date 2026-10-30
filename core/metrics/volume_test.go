@@ -66,7 +66,7 @@ type flowVolume struct {
 func (v *flowVolume) GetFlows() *volume.VolumeFlows {
 	return &volume.VolumeFlows{
 		VolumeID: "test/held",
-		Puts:     []volume.PutFlow{{Path: "fill", Blocks: 3, Bytes: 4096}},
+		Puts:     []volume.PutFlow{{Path: "fill", Blocks: 3, Bytes: 4096, Existing: 5}},
 		Values:   []volume.ValueFlow{{Family: "graph", Written: 1 << 20, Freed: 1 << 19}},
 	}
 }
@@ -83,6 +83,7 @@ func TestVolumeFlowsScrape(t *testing.T) {
 	want := map[string]float64{
 		"spacewave_volume_put_blocks_total{path=fill}":             3,
 		"spacewave_volume_put_bytes_total{path=fill}":              4096,
+		"spacewave_volume_put_existing_blocks_total{path=fill}":    5,
 		"spacewave_volume_value_written_bytes_total{family=graph}": 1 << 20,
 		"spacewave_volume_value_freed_bytes_total{family=graph}":   1 << 19,
 	}

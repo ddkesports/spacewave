@@ -13,11 +13,12 @@ import (
 
 // TestFlowsCountNewBlocksByPath proves each write path counts the blocks it
 // stored that the volume did not hold, so the flows name the caller that grows
-// the storage. Each path refuses a new block written without its references,
+// the storage, and its puts of blocks the volume held. Each path refuses a new block written without its references,
 // stores nothing for it, counts the refusal, and logs its first caller once.
 func TestFlowsCountNewBlocksByPath(t *testing.T) {
-	// A direct write counts once; writing the same block again does not, and
-	// writing it again without its references passes, since it is stored.
+	// A direct write counts once; writing the same block again counts as
+	// existing, and writing it again without its references passes, since it
+	// is stored.
 	v, _ := newPublicationTestVolume(t)
 	logger, hook := logrus_test.NewNullLogger()
 	v.SetLogger(logrus.NewEntry(logger))
@@ -31,7 +32,7 @@ func TestFlowsCountNewBlocksByPath(t *testing.T) {
 	}
 
 	// An owned write and a cache fill count under their own paths, and a
-	// repeated fill does not count.
+	// repeated fill counts as existing.
 	owned := []byte("owned block")
 	if _, _, err := v.PrepareOwnedBlock(ctx, "bucket", owned, known); err != nil {
 		t.Fatal(err)
@@ -111,12 +112,13 @@ func TestFlowsCountNewBlocksByPath(t *testing.T) {
 		}
 	}
 
-	// Each path reports exactly its own blocks and one refusal.
+	// Each path reports exactly its own blocks, its repeated puts and one
+	// refusal.
 	want := []volume.PutFlow{
-		{Path: "direct", Blocks: 1, Bytes: uint64(len(direct)), Refused: 1},
+		{Path: "direct", Blocks: 1, Bytes: uint64(len(direct)), Existing: 2, Refused: 1},
 		{Path: "publication", Blocks: 1, Bytes: uint64(len(p.Entries[0].Data)), Refused: 1},
 		{Path: "owned", Blocks: 1, Bytes: uint64(len(owned)), Refused: 1},
-		{Path: "fill", Blocks: 1, Bytes: uint64(len(fill)), Refused: 1},
+		{Path: "fill", Blocks: 1, Bytes: uint64(len(fill)), Existing: 1, Refused: 1},
 		{Path: "staged", Blocks: 2, Bytes: uint64(staged), Refused: 1},
 		{Path: "roots", Blocks: 1, Bytes: uint64(len(rootData)), Refused: 1},
 	}

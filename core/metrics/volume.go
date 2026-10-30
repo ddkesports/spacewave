@@ -75,6 +75,11 @@ var (
 		"Length of the blocks the volume stored that it did not hold, by write path, since it opened.",
 		[]string{volumeLabel, "path"}, nil,
 	)
+	volumePutExistingDesc = prometheus.NewDesc(
+		"spacewave_volume_put_existing_blocks_total",
+		"Puts of blocks the volume held already, by write path, since it opened.",
+		[]string{volumeLabel, "path"}, nil,
+	)
 	volumePutRefusedDesc = prometheus.NewDesc(
 		"spacewave_volume_put_refused_total",
 		"Puts the volume refused for a new block written without its references, by write path, since it opened.",
@@ -101,7 +106,7 @@ func (volumeCollector) Describe(ch chan<- *prometheus.Desc) {
 		volumeGCPhaseDesc, volumeGCPhaseSecondsDesc, volumeFileBytesDesc,
 		volumeLiveValueBytesDesc, volumeFreeDiskBytesDesc, volumeSizesAgeSecondsDesc,
 		volumePublicationPendingDesc, volumePublicationPendingBytesDesc, volumeWriteReserveDesc,
-		volumeReserveBytesDesc, volumePutBlocksDesc, volumePutBytesDesc,
+		volumeReserveBytesDesc, volumePutBlocksDesc, volumePutBytesDesc, volumePutExistingDesc,
 		volumePutRefusedDesc, volumeValueWrittenBytesDesc, volumeValueFreedBytesDesc,
 	} {
 		ch <- d
@@ -122,11 +127,13 @@ func (volumeCollector) Collect(ch chan<- prometheus.Metric) {
 
 // collectFlows sends the counters of the data one volume wrote.
 func collectFlows(ch chan<- prometheus.Metric, f *volume.VolumeFlows) {
-	// Report the new blocks of each write path, and the puts it refused.
+	// Report the new blocks of each write path, its puts of held blocks, and
+	// the puts it refused.
 	id := f.VolumeID
 	for _, p := range f.Puts {
 		ch <- prometheus.MustNewConstMetric(volumePutBlocksDesc, prometheus.CounterValue, float64(p.Blocks), id, p.Path)
 		ch <- prometheus.MustNewConstMetric(volumePutBytesDesc, prometheus.CounterValue, float64(p.Bytes), id, p.Path)
+		ch <- prometheus.MustNewConstMetric(volumePutExistingDesc, prometheus.CounterValue, float64(p.Existing), id, p.Path)
 		ch <- prometheus.MustNewConstMetric(volumePutRefusedDesc, prometheus.CounterValue, float64(p.Refused), id, p.Path)
 	}
 

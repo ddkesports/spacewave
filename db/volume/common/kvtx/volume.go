@@ -416,11 +416,13 @@ func (v *Volume) PutBlock(ctx context.Context, data []byte, opts *block.PutOpts)
 		return nil, exists, err
 	}
 
-	// Count the block and wake Volume statistics watchers when it adds
+	// Count the block, and wake Volume statistics watchers when it adds
 	// stored data.
-	if ref != nil && !exists {
-		v.countPut(putDirect, len(data), false)
-		v.broadcastStorageStatsChanged()
+	if ref != nil {
+		v.countPut(putDirect, len(data), exists)
+		if !exists {
+			v.broadcastStorageStatsChanged()
+		}
 	}
 
 	// Make the Volume durable when the block write requests synchronization.
