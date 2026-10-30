@@ -319,8 +319,9 @@ func (s *Store) evictBatch(
 		return false, errors.Wrap(err, "check remote blocks")
 	}
 
-	// Drop the values the remote holds, and decide each entry.
+	// Decide each entry.
 	var requeue []evictEntry
+	var drop []*block.PutBatchEntry
 	var evictedBytes int64
 	for i, entry := range batch {
 		switch {
@@ -330,12 +331,19 @@ func (s *Store) evictBatch(
 		case keep != nil && keep(entry.hash):
 			requeue = append(requeue, entry)
 		default:
-			if err := s.values.RmBlock(ctx, refs[i]); err != nil {
-				return false, errors.Wrap(err, "evict block")
-			}
-			result.Evicted++
+			drop = append(drop, &block.PutBatchEntry{Ref: refs[i], Tombstone: true})
 			evictedBytes += entry.size
 		}
+	}
+
+	// Drop the values the remote holds in one write, not one per block: the
+	// local writer is shared with every other write, so a write per block
+	// bounds eviction to a few blocks a second under load.
+	if len(drop) != 0 {
+		if _, err := s.values.PutBlockBatch(ctx, drop); err != nil {
+			return false, errors.Wrap(err, "evict blocks")
+		}
+		result.Evicted += len(drop)
 	}
 
 	// Delete the walked entries and queue the kept ones at the new epoch. A

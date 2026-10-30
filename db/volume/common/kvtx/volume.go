@@ -368,9 +368,12 @@ func (v *Volume) GetRefGraph() block_gc.RefGraphOps {
 // PutBlockBatch forwards batched writes to the embedded store when supported.
 // It returns volume.ErrReserve while the volume is in the reserve state.
 func (v *Volume) PutBlockBatch(ctx context.Context, entries []*block.PutBatchEntry) ([]bool, error) {
-	// Refuse new data below the disk reserve, then write the batch.
-	if err := v.checkReserve(ctx, batchBytes(entries)); err != nil {
-		return nil, err
+	// Refuse new data below the disk reserve, then write the batch. A batch of
+	// tombstones only frees space, so it runs below the reserve too.
+	if !onlyTombstones(entries) {
+		if err := v.checkReserve(ctx, batchBytes(entries)); err != nil {
+			return nil, err
+		}
 	}
 	existed, err := v.reader().PutBlockBatch(ctx, entries)
 	if err != nil {
