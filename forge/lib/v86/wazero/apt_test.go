@@ -32,7 +32,7 @@ func TestV86WazeroAptWritableRoot(t *testing.T) {
 	defer releaseRoot()
 
 	// Instantiate the V86 guest with the Go host runtime.
-	instance, err := InstantiateHostRuntime(ctx, assets.Wasm, HostRuntimeOptions{})
+	instance, err := InstantiateHostRuntime(ctx, readTestFile(t, assets.Wasm), HostRuntimeOptions{})
 	if err != nil {
 		t.Fatalf("instantiate v86 wasm with wazero host runtime: %v", err)
 	}

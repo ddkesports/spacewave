@@ -29,10 +29,8 @@ type rootfsSource struct {
 }
 
 // resolveRootfs finds the root filesystem of the VM vmKey in ws: the
-// wasivm/rootfs edge when set, else the wasivmimage/rootfs edge of the image
-// linked by wasivm/image, else that edge on the published image named by the
-// image's cdn_source. A published image's CDN Space stays mounted until the
-// source is released or ctx ends, so the run reads the filesystem lazily.
+// wasivm/rootfs edge when set, else the root filesystem of the image linked by
+// wasivm/image, which the run reads lazily.
 func resolveRootfs(
 	ctx context.Context,
 	le *logrus.Entry,
@@ -57,7 +55,22 @@ func resolveRootfs(
 	if !ok {
 		return nil, errors.New("the VM has no root filesystem or image")
 	}
-	key, ok, err = world.LookupGraphObjectKey(ctx, ws, imageKey, string(s4wave_vm.PredWasiVmImageRootfs))
+	return resolveImageRootfs(ctx, le, b, ws, imageKey)
+}
+
+// resolveImageRootfs finds the root filesystem of the image imageKey in ws: its
+// wasivmimage/rootfs edge, else that edge on the published image named by its
+// cdn_source, whose CDN Space stays mounted until the source is released or
+// ctx ends.
+func resolveImageRootfs(
+	ctx context.Context,
+	le *logrus.Entry,
+	b bus.Bus,
+	ws world.WorldState,
+	imageKey string,
+) (*rootfsSource, error) {
+	// Prefer the filesystem linked to the image itself.
+	key, ok, err := world.LookupGraphObjectKey(ctx, ws, imageKey, string(s4wave_vm.PredWasiVmImageRootfs))
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +78,7 @@ func resolveRootfs(
 		return &rootfsSource{ws: ws, key: key, release: func() {}}, nil
 	}
 
-	// Fall back to the published image the linked image reads from.
+	// Fall back to the published image the image reads from.
 	src, err := readImageCdnSource(ctx, ws, imageKey)
 	if err != nil {
 		return nil, err

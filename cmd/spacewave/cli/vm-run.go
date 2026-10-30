@@ -81,8 +81,14 @@ func runV86Interactive(c *cli.Context, args *v86RunArgs) error {
 		defer release()
 	}
 
+	// Read the emulator.
+	wasm, err := os.ReadFile(assets.Wasm)
+	if err != nil {
+		return errors.Wrap(err, "read v86 wasm")
+	}
+
 	// Instantiate the host runtime and initialize the CPU.
-	instance, err := v86_wazero.InstantiateHostRuntime(ctx, assets.Wasm, v86_wazero.HostRuntimeOptions{})
+	instance, err := v86_wazero.InstantiateHostRuntime(ctx, wasm, v86_wazero.HostRuntimeOptions{})
 	if err != nil {
 		return errors.Wrap(err, "instantiate v86 runtime")
 	}

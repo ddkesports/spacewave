@@ -111,12 +111,7 @@ func New(ctx context.Context, rt engine.Runtime, cfg *Config) (*Kernel, error) {
 	// Fill in the configuration defaults.
 	env := cfg.Env
 	if env == nil {
-		env = map[string]string{
-			"PATH":  "/bin:/usr/bin:/sbin:/usr/sbin",
-			"HOME":  "/root",
-			"TERM":  "xterm",
-			"SHELL": "/bin/sh",
-		}
+		env = DefaultEnv()
 	}
 	k := &Kernel{
 		runtime:       rt,

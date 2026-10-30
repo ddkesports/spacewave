@@ -41,16 +41,6 @@ func CompileImportReport(ctx context.Context, wasmPath string) (*ImportReport, e
 	return importReport(compiled, wasmBytes)
 }
 
-// TryInstantiateEmscriptenV86 instantiates the artifact with default options
-func TryInstantiateEmscriptenV86(ctx context.Context, wasmPath string) (*ImportReport, error) {
-	host, err := InstantiateHostRuntime(ctx, wasmPath, HostRuntimeOptions{})
-	if err != nil {
-		return nil, err
-	}
-	defer host.Close(ctx)
-	return host.Report, nil
-}
-
 // importReport summarizes the imports of a compiled v86 module and verifies
 func importReport(compiled wazero.CompiledModule, wasmBytes []byte) (*ImportReport, error) {
 	// Record the imported v86 function signatures.

@@ -3,7 +3,6 @@ package v86_wazero
 import (
 	"context"
 	"io"
-	"os"
 	"sync/atomic"
 	"time"
 
@@ -68,14 +67,9 @@ type HostRuntime struct {
 	Logs              []string
 }
 
-// InstantiateHostRuntime compiles and instantiates the v86 wasm image and
-func InstantiateHostRuntime(ctx context.Context, wasmPath string, opts HostRuntimeOptions) (*HostRuntime, error) {
-	// Read the v86 wasm image before allocating the host runtime.
-	wasmBytes, err := os.ReadFile(wasmPath)
-	if err != nil {
-		return nil, errors.Wrap(err, "read v86 wasm")
-	}
-
+// InstantiateHostRuntime compiles and instantiates the v86 wasm image
+// wasmBytes with the Go host runtime that serves its devices.
+func InstantiateHostRuntime(ctx context.Context, wasmBytes []byte, opts HostRuntimeOptions) (*HostRuntime, error) {
 	// Create a wazero runtime that closes if host instantiation fails.
 	r := wazero.NewRuntime(ctx)
 	closeOnError := true

@@ -68,24 +68,8 @@ func newV86MountResolver(
 // vgabios until a per-asset override is added.
 func (r *v86MountResolver) resolve(ctx context.Context, name string) (*unixfs.FSHandle, error) {
 	// Select the VM override and image asset predicates for the requested mount.
-	var overridePred, imagePred quad.IRI
-	switch name {
-	case "", "rootfs":
-		overridePred = s4wave_vm.PredV86RootfsOverride
-		imagePred = s4wave_vm.PredV86ImageRootfs
-	case "kernel":
-		overridePred = s4wave_vm.PredV86KernelOverride
-		imagePred = s4wave_vm.PredV86ImageKernel
-	case "seabios":
-		overridePred = s4wave_vm.PredV86BiosOverride
-		imagePred = s4wave_vm.PredV86ImageBiosSeabios
-	case "vgabios":
-		overridePred = s4wave_vm.PredV86BiosOverride
-		imagePred = s4wave_vm.PredV86ImageBiosVgabios
-	case "wasm":
-		overridePred = s4wave_vm.PredV86WasmOverride
-		imagePred = s4wave_vm.PredV86ImageWasm
-	default:
+	overridePred, imagePred, ok := v86AssetPreds(name)
+	if !ok {
 		return nil, unixfs_errors.ErrNotExist
 	}
 
@@ -98,7 +82,7 @@ func (r *v86MountResolver) resolve(ctx context.Context, name string) (*unixfs.FS
 		return openFSHandleForObject(ctx, r.le, r.ws, targetKey)
 	}
 
-	// Resolve the linked image and its requested filesystem asset.
+	// Open the requested asset of the linked image.
 	imageKey, ok, err := world.LookupGraphObjectKey(ctx, r.ws, r.objectKey, string(s4wave_vm.PredV86Image))
 	if err != nil {
 		return nil, err
@@ -106,6 +90,32 @@ func (r *v86MountResolver) resolve(ctx context.Context, name string) (*unixfs.FS
 	if !ok {
 		return nil, errors.Errorf("no v86/image edge on %s", r.objectKey)
 	}
+	return r.openImageAsset(ctx, imageKey, imagePred)
+}
+
+// v86AssetPreds returns the VM override and image predicates of the asset
+// mounted as name, or false for an unknown name.
+func v86AssetPreds(name string) (overridePred, imagePred quad.IRI, ok bool) {
+	switch name {
+	case "", "rootfs":
+		return s4wave_vm.PredV86RootfsOverride, s4wave_vm.PredV86ImageRootfs, true
+	case "kernel":
+		return s4wave_vm.PredV86KernelOverride, s4wave_vm.PredV86ImageKernel, true
+	case "seabios":
+		return s4wave_vm.PredV86BiosOverride, s4wave_vm.PredV86ImageBiosSeabios, true
+	case "vgabios":
+		return s4wave_vm.PredV86BiosOverride, s4wave_vm.PredV86ImageBiosVgabios, true
+	case "wasm":
+		return s4wave_vm.PredV86WasmOverride, s4wave_vm.PredV86ImageWasm, true
+	default:
+		return "", "", false
+	}
+}
+
+// openImageAsset opens the imagePred asset of the V86Image imageKey: the
+// image's own edge, else the edge on the published image its cdn_source names.
+func (r *v86MountResolver) openImageAsset(ctx context.Context, imageKey string, imagePred quad.IRI) (*unixfs.FSHandle, error) {
+	// Prefer the asset linked to the image itself.
 	assetKey, ok, err := world.LookupGraphObjectKey(ctx, r.ws, imageKey, string(imagePred))
 	if err != nil {
 		return nil, err
@@ -114,7 +124,7 @@ func (r *v86MountResolver) resolve(ctx context.Context, name string) (*unixfs.FS
 		return openFSHandleForObject(ctx, r.le, r.ws, assetKey)
 	}
 
-	// Fall back to the published image the linked image reads from.
+	// Fall back to the published image the image reads from.
 	src, err := readV86ImageCdnSource(ctx, r.ws, imageKey)
 	if err != nil {
 		return nil, err

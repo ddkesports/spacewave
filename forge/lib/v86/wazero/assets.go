@@ -271,13 +271,17 @@ func lookupEdge(ctx context.Context, ws world_state.WorldState, subject, pred st
 
 // readUnixFSAsset extracts a single file from a unixfs object by name.
 func readUnixFSAsset(ctx context.Context, le *logrus.Entry, ws world_state.WorldState, objectKey, fileName string) ([]byte, error) {
-	// Hold the object's filesystem while reading its selected asset.
 	fsh, err := openFSHandleForObject(ctx, le, ws, objectKey)
 	if err != nil {
 		return nil, err
 	}
 	defer fsh.Release()
+	return readFSHandleAsset(ctx, fsh, fileName)
+}
 
+// readFSHandleAsset reads the file fileName from the filesystem fsh, or its
+// only file under another name.
+func readFSHandleAsset(ctx context.Context, fsh *unixfs.FSHandle, fileName string) ([]byte, error) {
 	// Prefer the conventional filename over a single-file object fallback.
 	bfs := unixfs_billy.NewBillyFS(ctx, fsh, "", time.Time{})
 	if data, err := billy_util.ReadFile(bfs, fileName); err == nil {
@@ -290,7 +294,7 @@ func readUnixFSAsset(ctx context.Context, le *logrus.Entry, ws world_state.World
 		return nil, err
 	}
 	if len(entries) != 1 || entries[0].IsDir() {
-		return nil, errors.Errorf("asset object %q does not contain %q or a single file", objectKey, fileName)
+		return nil, errors.Errorf("asset does not contain %q or a single file", fileName)
 	}
 	return billy_util.ReadFile(bfs, entries[0].Name())
 }

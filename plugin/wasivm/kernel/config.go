@@ -37,12 +37,22 @@ type Config struct {
 	// program is installed executable and any other file read-write.
 	Files map[string][]byte
 
-	// Env is the processes' environment. When nil, it holds PATH, HOME, TERM
-	// and SHELL.
+	// Env is the processes' environment. When nil, it is DefaultEnv.
 	Env map[string]string
 
 	// InitPath is the program Boot runs. It defaults to "/init".
 	InitPath string
 	// InitArgs are the arguments Boot passes after the program's path.
 	InitArgs []string
+}
+
+// DefaultEnv returns a new copy of the environment processes get when
+// Config.Env is nil: PATH, HOME, TERM and SHELL.
+func DefaultEnv() map[string]string {
+	return map[string]string{
+		"PATH":  "/bin:/usr/bin:/sbin:/usr/sbin",
+		"HOME":  "/root",
+		"TERM":  "xterm",
+		"SHELL": "/bin/sh",
+	}
 }

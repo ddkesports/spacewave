@@ -82,7 +82,7 @@ func TestV86WazeroInstantiateHostRuntime(t *testing.T) {
 	}
 
 	// Instantiate the V86 wasm module with the Go host runtime.
-	instance, err := InstantiateHostRuntime(ctx, assets.Wasm, HostRuntimeOptions{})
+	instance, err := InstantiateHostRuntime(ctx, readTestFile(t, assets.Wasm), HostRuntimeOptions{})
 	if err != nil {
 		t.Fatalf("instantiate v86 wasm with wazero host runtime: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestV86WazeroCPUSetupAndMainLoop(t *testing.T) {
 	}
 
 	// Instantiate the V86 wasm module with the Go host runtime.
-	instance, err := InstantiateHostRuntime(ctx, assets.Wasm, HostRuntimeOptions{})
+	instance, err := InstantiateHostRuntime(ctx, readTestFile(t, assets.Wasm), HostRuntimeOptions{})
 	if err != nil {
 		t.Fatalf("instantiate v86 wasm with wazero host runtime: %v", err)
 	}
@@ -208,7 +208,7 @@ func TestV86WazeroV86FSDeviceProbe(t *testing.T) {
 	defer releaseRoot()
 
 	// Instantiate the V86 wasm module with the Go host runtime.
-	instance, err := InstantiateHostRuntime(ctx, assets.Wasm, HostRuntimeOptions{})
+	instance, err := InstantiateHostRuntime(ctx, readTestFile(t, assets.Wasm), HostRuntimeOptions{})
 	if err != nil {
 		t.Fatalf("instantiate v86 wasm with wazero host runtime: %v", err)
 	}
@@ -294,7 +294,7 @@ func TestV86WazeroV86FSRootShell(t *testing.T) {
 	defer releaseRoot()
 
 	// Instantiate the V86 wasm module with the Go host runtime.
-	instance, err := InstantiateHostRuntime(ctx, assets.Wasm, HostRuntimeOptions{})
+	instance, err := InstantiateHostRuntime(ctx, readTestFile(t, assets.Wasm), HostRuntimeOptions{})
 	if err != nil {
 		t.Fatalf("instantiate v86 wasm with wazero host runtime: %v", err)
 	}
@@ -401,7 +401,7 @@ func TestV86WazeroHost9PRootShell(t *testing.T) {
 	}
 
 	// Instantiate the V86 wasm module with the Go host runtime.
-	instance, err := InstantiateHostRuntime(ctx, assets.Wasm, HostRuntimeOptions{})
+	instance, err := InstantiateHostRuntime(ctx, readTestFile(t, assets.Wasm), HostRuntimeOptions{})
 	if err != nil {
 		t.Fatalf("instantiate v86 wasm with wazero host runtime: %v", err)
 	}
@@ -687,4 +687,14 @@ func runV86WazeroTests() bool {
 
 func runV86WazeroBootTests() bool {
 	return strings.EqualFold(strings.TrimSpace(os.Getenv("RUN_V86_WAZERO_BOOT")), "true")
+}
+
+// readTestFile reads the file at path or fails the test.
+func readTestFile(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
