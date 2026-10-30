@@ -25,7 +25,7 @@ const epochKey = "epoch"
 const evictableBytesKey = "evictable-bytes"
 
 // evictBatchBlocks bounds the entries one eviction step reads and commits.
-const evictBatchBlocks = 256
+const evictBatchBlocks = 1024
 
 // EvictResult reports what an eviction pass did.
 type EvictResult struct {
