@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	account_settings "github.com/s4wave/spacewave/core/account/settings"
 	"github.com/s4wave/spacewave/db/block"
@@ -11,20 +12,31 @@ import (
 	"github.com/s4wave/spacewave/net/hash"
 )
 
-// readSetMax bounds the blocks a read set records between eviction passes.
-// Reads past it go unrecorded, so their blocks age as if unread.
+// readSetMax bounds the blocks a read set records in one generation. Reads
+// past it go unrecorded, so their blocks age as if unread.
 const readSetMax = 1 << 20
 
-// readSet records the blocks read from the local store since the last
-// eviction pass, which the next pass keeps.
+// readKeepAge is how long a read keeps its block from eviction, at least. A
+// pass can follow the last within seconds, so a set taken at each pass would
+// keep a block only for those seconds, and the blocks a World reads every few
+// minutes would leave and be read back from the backend each time.
+const readKeepAge = 10 * time.Minute
+
+// readSet records the blocks read from the local store, which eviction keeps
+// for at least readKeepAge after the read. It holds two generations: the
+// reads since the last turn and the ones before it.
 type readSet struct {
 	// enabled is set while the placement has a resident budget, before the
 	// budget reaches the store, so reads after it are recorded.
 	enabled atomic.Bool
-	// mtx guards hashes.
+	// mtx guards the fields below.
 	mtx sync.Mutex
-	// hashes holds the raw hashes of the blocks read.
+	// hashes holds the raw hashes of the blocks read since turned.
 	hashes map[string]struct{}
+	// prev holds the hashes of the generation before.
+	prev map[string]struct{}
+	// turned is when hashes started, zero before the first pass.
+	turned time.Time
 }
 
 // add records a read of the block with hash h.
@@ -45,18 +57,30 @@ func (r *readSet) add(h *hash.Hash) {
 	}
 }
 
-// take starts a new set and returns the recorded one as a keep test.
+// take returns a keep test for an eviction pass: it keeps the blocks read in
+// both generations, so every block read within readKeepAge. It turns the
+// generations once the current one is readKeepAge old.
 func (r *readSet) take() func(*hash.Hash) bool {
-	// Swap in a new set.
+	// Turn the generations when the current one is old enough, timing the
+	// first from the first pass.
 	r.mtx.Lock()
-	hashes := r.hashes
-	r.hashes = nil
+	switch now := time.Now(); {
+	case r.turned.IsZero():
+		r.turned = now
+	case now.Sub(r.turned) >= readKeepAge:
+		r.prev, r.hashes, r.turned = r.hashes, nil, now
+	}
 	r.mtx.Unlock()
 
-	// Keep the blocks the old set recorded.
+	// Keep the blocks either generation recorded.
 	return func(h *hash.Hash) bool {
-		_, ok := hashes[string(h.GetHash())]
-		return ok
+		// Look the hash up in both generations.
+		key := h.GetHash()
+		r.mtx.Lock()
+		defer r.mtx.Unlock()
+		_, cur := r.hashes[string(key)]
+		_, prev := r.prev[string(key)]
+		return cur || prev
 	}
 }
 

@@ -178,6 +178,11 @@ func readEpoch(ctx context.Context, tx kvtx.Tx) (uint64, error) {
 // values and queues it for eviction at the current epoch. It changes no
 // ownership, so call it only for a block the reference graph still tracks.
 func (s *Store) Refill(ctx context.Context, ref *block.BlockRef, stored *block.StoredBlock) error {
+	// Commit ordered: the remote holds the block, so a crash that loses the
+	// refill loses nothing, and a refill per read must not each wait on a
+	// flush to the drive that other writes share.
+	ctx = kvtx.WithOrderedCommitContext(ctx)
+
 	// Write the value below the ownership layer.
 	if _, _, err := s.values.PutBlock(ctx, stored.Data, stored.PutOpts(ref)); err != nil {
 		return errors.Wrap(err, "refill block")
@@ -225,6 +230,11 @@ func (s *Store) Evict(
 	maxBytes int64,
 	keep func(*hash.Hash) bool,
 ) (EvictResult, error) {
+	// Commit the pass ordered: it drops only values the remote holds, so a
+	// crash that loses its commits leaves values the next pass drops again,
+	// and its writes must not each wait on a flush that other writes share.
+	ctx = kvtx.WithOrderedCommitContext(ctx)
+
 	// Serialize the pass with other passes.
 	var result EvictResult
 	release, err := s.evictMtx.Lock(ctx)
