@@ -77,6 +77,26 @@ func TestWorldReplacementsMatchDiff(t *testing.T) {
 		return oref
 	}
 
+	// putRoot puts one block through a World cursor as an object root, the way
+	// the Notes object block writes, and returns its object ref.
+	putRoot := func(msg string) *bucket.ObjectRef {
+		var oref *bucket.ObjectRef
+		err := ws.AccessWorldState(ctx, nil, func(bls *bucket_lookup.Cursor) error {
+			// Encode the block and put it as the object's root.
+			data, err := block_mock.NewExample(msg).MarshalVT()
+			if err != nil {
+				return err
+			}
+			oref = bls.GetRef().Clone()
+			oref.RootRef, _, err = bls.PutBlock(ctx, data, &block.PutOpts{RefsKnown: true})
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return oref
+	}
+
 	// createObject creates an object at a new chain.
 	createObject := func(key string) {
 		obj, err := ws.CreateObject(ctx, key, writeChain(key))
@@ -159,4 +179,24 @@ func TestWorldReplacementsMatchDiff(t *testing.T) {
 		t.Fatal(err)
 	}
 	commit("delete")
+
+	// Create an object holding one put block, then replace the block.
+	obj, err = ws.CreateObject(ctx, "n", putRoot("note"))
+	world.ReleaseObjectState(obj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit("put")
+
+	// Point n at a second put block.
+	obj, _, err = ws.GetObject(ctx, "n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = obj.SetRootRef(ctx, putRoot("note edited"))
+	world.ReleaseObjectState(obj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit("put edit")
 }

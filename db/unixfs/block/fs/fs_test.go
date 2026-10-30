@@ -9,6 +9,8 @@ import (
 	"time"
 
 	billy_util "github.com/go-git/go-billy/v6/util"
+	"github.com/s4wave/spacewave/db/block"
+	block_mock "github.com/s4wave/spacewave/db/block/mock"
 	"github.com/s4wave/spacewave/db/testbed"
 	"github.com/s4wave/spacewave/db/unixfs"
 	unixfs_billy "github.com/s4wave/spacewave/db/unixfs/billy"
@@ -31,8 +33,9 @@ func TestFS(t *testing.T) {
 		t.Fatal(err.Error())
 	}
 
-	// Build a fresh writable filesystem handle for each interface case.
-	buildFsHandle := func() *unixfs.FSHandle {
+	// Build a fresh writable filesystem handle for each interface case, with a
+	// check that the pages each write replaced match the diff of the roots.
+	buildFsHandle := func() (*unixfs.FSHandle, func(t *testing.T, name string)) {
 		// Open an empty bucket cursor for the filesystem root.
 		oc, err := tb.BuildEmptyCursor(ctx)
 		if err != nil {
@@ -54,6 +57,17 @@ func TestFS(t *testing.T) {
 		}
 		oc.SetRootRef(rootRef)
 
+		// Record what each write replaces, checked against the diff of the roots.
+		log := block.NewReplacementLog(rootRef)
+		oc.SetReplacementLog(log)
+		check := func(t *testing.T, name string) {
+			to := oc.GetRef().GetRootRef()
+			if err := block_mock.CheckReplacements(ctx, oc.GetBucket(), rootRef, to, log.Take(to)); err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			rootRef = to
+		}
+
 		// construct the fscursor
 		wr := NewFSWriter()
 		fs := NewFS(ctx, unixfs_block.NodeType_NodeType_DIRECTORY, oc, wr)
@@ -73,11 +87,11 @@ func TestFS(t *testing.T) {
 			fsHandle.Release()
 			t.Fail()
 		}
-		return fsHandle
+		return fsHandle, check
 	}
 
 	// Exercise directory creation and file readback through a filesystem handle.
-	testFsHandle := func(t *testing.T, h *unixfs.FSHandle) {
+	testFsHandle := func(t *testing.T, h *unixfs.FSHandle, check func(t *testing.T, name string)) {
 		// Check that a missing filesystem entry returns ErrNotExist.
 		_, err = h.Lookup(ctx, "does-not-exist")
 		if err != unixfs_errors.ErrNotExist {
@@ -97,6 +111,7 @@ func TestFS(t *testing.T) {
 		if err != nil {
 			t.Fatal(err.Error())
 		}
+		check(t, "mkdir")
 
 		// Open the new directory for file creation.
 		dirHandle, err := h.Lookup(ctx, testDirName)
@@ -117,6 +132,7 @@ func TestFS(t *testing.T) {
 		); err != nil {
 			t.Fatal(err.Error())
 		}
+		check(t, "mknod")
 
 		// Resolve the new file through its path from the root.
 		fileContents := []byte("hello world")
@@ -134,6 +150,13 @@ func TestFS(t *testing.T) {
 		if err := fileHandle.WriteAt(ctx, 0, fileContents, time.Time{}); err != nil {
 			t.Fatal(err.Error())
 		}
+		sync := func(name string) {
+			if err := h.Sync(ctx); err != nil {
+				t.Fatal(err.Error())
+			}
+			check(t, name)
+		}
+		sync("write")
 
 		// Read the file through the Billy filesystem adapter.
 		bfs := unixfs_billy.NewBillyFS(ctx, h, "", time.Time{})
@@ -146,22 +169,43 @@ func TestFS(t *testing.T) {
 		if !bytes.Equal(readData, fileContents) {
 			t.FailNow()
 		}
+
+		// Grow the file into a chunked blob, then overwrite part of it.
+		large := bytes.Repeat([]byte("0123456789abcdef"), 1<<17)
+		if err := fileHandle.WriteAt(ctx, 0, large, time.Time{}); err != nil {
+			t.Fatal(err.Error())
+		}
+		sync("grow")
+		if err := fileHandle.WriteAt(ctx, 1<<20, []byte("overwritten"), time.Time{}); err != nil {
+			t.Fatal(err.Error())
+		}
+		sync("overwrite")
+
+		// Move the file to the root, then remove it and its directory.
+		if err := fileHandle.Rename(ctx, h, "moved.txt", time.Time{}); err != nil {
+			t.Fatal(err.Error())
+		}
+		sync("rename")
+		if err := h.Remove(ctx, []string{"moved.txt", testDirName}, time.Time{}); err != nil {
+			t.Fatal(err.Error())
+		}
+		sync("remove")
 	}
 
 	// First try accessing fsHandle directly.
 	t.Run("fsHandle", func(t *testing.T) {
 		// Open a fresh filesystem handle for the direct interface case.
-		fsHandle := buildFsHandle()
+		fsHandle, check := buildFsHandle()
 		defer fsHandle.Release()
 
 		// Exercise directory creation and file readback on the direct handle.
-		testFsHandle(t, fsHandle)
+		testFsHandle(t, fsHandle, check)
 	})
 
 	// Test accessing via the FSHandle FSCursor.
 	t.Run("fsHandle_FSCursor", func(t *testing.T) {
 		// Open a fresh filesystem handle for the cursor adapter case.
-		fsHandle := buildFsHandle()
+		fsHandle, check := buildFsHandle()
 
 		// NOTE: we pass releaseHandle to true below: the fsHandleCursor will release the fs handle.
 		// defer fsHandle.Release()
@@ -175,13 +219,13 @@ func TestFS(t *testing.T) {
 		defer fsHandleCursorHandle.Release()
 
 		// Exercise directory creation and file readback through the cursor adapter.
-		testFsHandle(t, fsHandleCursorHandle)
+		testFsHandle(t, fsHandleCursorHandle, check)
 	})
 
 	// Test accessing via the FSHandle FSCursor.
 	t.Run("fsHandle_FSCursor_WithGetter", func(t *testing.T) {
 		// Open a fresh filesystem handle for the cursor getter case.
-		fsHandle := buildFsHandle()
+		fsHandle, check := buildFsHandle()
 		defer fsHandle.Release()
 
 		// Provide cursors by cloning the live filesystem handle.
@@ -207,6 +251,6 @@ func TestFS(t *testing.T) {
 		defer fsHandleCursorHandle.Release()
 
 		// Exercise directory creation and file readback through the cursor getter.
-		testFsHandle(t, fsHandleCursorHandle)
+		testFsHandle(t, fsHandleCursorHandle, check)
 	})
 }

@@ -7,15 +7,16 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/s4wave/spacewave/db/block"
+	block_mock "github.com/s4wave/spacewave/db/block/mock"
 )
 
-// graphTestStore records the refs of each put and serves them with the bytes.
-// Blocks put without refs read as byte-only.
+// graphTestStore records the refs of each put and serves them with the bytes,
+// counting reads and keeping the write order. Blocks put without refs read as
+// byte-only.
 type graphTestStore struct {
-	block.StoreOps
+	*block_mock.RefStore
 
-	mu   sync.Mutex
-	refs map[string][]*block.BlockRef
+	mu sync.Mutex
 	// reads counts GetStoredBlock calls.
 	reads int
 	// puts lists the refs of written blocks in write order.
@@ -23,10 +24,7 @@ type graphTestStore struct {
 }
 
 func newGraphTestStore() *graphTestStore {
-	return &graphTestStore{
-		StoreOps: newOverlayMemoryStore(),
-		refs:     make(map[string][]*block.BlockRef),
-	}
+	return &graphTestStore{RefStore: block_mock.NewRefStore(newOverlayMemoryStore())}
 }
 
 func (s *graphTestStore) PutBlockBatch(ctx context.Context, entries []*block.PutBatchEntry) ([]bool, error) {
@@ -42,33 +40,23 @@ func (s *graphTestStore) PutBlockBatch(ctx context.Context, entries []*block.Put
 }
 
 func (s *graphTestStore) PutBlock(ctx context.Context, data []byte, opts *block.PutOpts) (*block.BlockRef, bool, error) {
-	// Store the bytes in the backing memory store.
-	ref, existed, err := s.StoreOps.PutBlock(ctx, data, opts)
+	// Store the block and its refs, then record the write order.
+	ref, existed, err := s.RefStore.PutBlock(ctx, data, opts)
 	if err != nil {
 		return nil, false, err
 	}
-
-	// Record the write order and the refs the write declared.
 	s.mu.Lock()
 	s.puts = append(s.puts, ref.MarshalString())
-	if opts.GetRefs() != nil || opts.GetRefsKnown() {
-		s.refs[ref.MarshalString()] = opts.GetRefs()
-	}
 	s.mu.Unlock()
 	return ref, existed, nil
 }
 
 func (s *graphTestStore) GetStoredBlock(ctx context.Context, ref *block.BlockRef) (*block.StoredBlock, error) {
-	// Read the stored block with its recorded outgoing references.
+	// Count the read, then serve the block with its refs.
 	s.mu.Lock()
 	s.reads++
-	refs, known := s.refs[ref.MarshalString()]
 	s.mu.Unlock()
-	stored, err := block.GetBlockWithoutRefs(ctx, s, ref)
-	if stored != nil {
-		stored.Refs, stored.RefsKnown = refs, known
-	}
-	return stored, err
+	return s.RefStore.GetStoredBlock(ctx, ref)
 }
 
 // put writes a block with refs, marking a leaf with an empty list.
@@ -117,13 +105,13 @@ func TestCopyGraphRebuildsGraphInPostOrder(t *testing.T) {
 
 	// The destination holds every unknown block with its refs, read once.
 	for _, ref := range []*block.BlockRef{root, left, right, shared} {
-		want := src.refs[ref.MarshalString()]
-		got, ok := dst.refs[ref.MarshalString()]
+		want, _ := src.GetRefs(ref)
+		got, ok := dst.GetRefs(ref)
 		if !ok || len(got) != len(want) {
 			t.Fatalf("dst refs of %s = %v, want %v", ref.MarshalString(), got, want)
 		}
 	}
-	if _, ok := dst.refs[skipped.MarshalString()]; ok {
+	if _, ok := dst.GetRefs(skipped); ok {
 		t.Fatal("known subtree was copied")
 	}
 	if src.reads != 4 {

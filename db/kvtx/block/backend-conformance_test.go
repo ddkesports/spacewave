@@ -306,9 +306,12 @@ func testBackendWriteDeleteCommitChurn(t *testing.T, impl KVImplType) {
 	}
 }
 
+// backendConformanceRoot is a saved KV root whose writes record the pages
+// they replace, checked at each commit against the diff of the two roots.
 type backendConformanceRoot struct {
 	store   block.StoreOps
 	rootRef *block.BlockRef
+	log     *block.ReplacementLog
 }
 
 func backendConformanceImpls() []KVImplType {
@@ -322,14 +325,14 @@ func backendConformanceImpls() []KVImplType {
 func newBackendConformanceRoot(t *testing.T, ctx context.Context, impl KVImplType) *backendConformanceRoot {
 	// Persist an empty KV root in the mock block store.
 	t.Helper()
-	store := block_mock.NewMockStore(0)
+	store := block_mock.NewRefStore(nil)
 	btx, rootCursor := block.NewTransaction(store, nil, nil, nil)
 	rootCursor.SetBlock(NewKeyValueStore(impl), true)
 	rootRef, _, err := btx.Write(ctx, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &backendConformanceRoot{store: store, rootRef: rootRef}
+	return &backendConformanceRoot{store: store, rootRef: rootRef, log: block.NewReplacementLog(rootRef)}
 }
 
 func (r *backendConformanceRoot) newReadTx(t *testing.T, ctx context.Context) kvtx.BlockTx {
@@ -347,9 +350,10 @@ func (r *backendConformanceRoot) newWriteTx(
 	t *testing.T,
 	ctx context.Context,
 ) (*block.Cursor, *block.Transaction, kvtx.BlockTx) {
-	// Open a KV writer against the saved root.
+	// Open a KV writer against the saved root, recording what it replaces.
 	t.Helper()
 	btx, rootCursor := block.NewTransaction(r.store, nil, r.rootRef, nil)
+	btx.RecordReplacements(r.log)
 	tx, err := BuildKvTransaction(ctx, rootCursor, true)
 	if err != nil {
 		t.Fatal(err)
@@ -371,6 +375,12 @@ func (r *backendConformanceRoot) commit(
 	}
 	tx.Discard()
 	rootRef, _, err := btx.Write(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Check the record of the commit against the diff of the roots.
+	err = block_mock.CheckReplacements(ctx, r.store, r.rootRef, rootRef, r.log.Take(rootRef))
 	if err != nil {
 		t.Fatal(err)
 	}
