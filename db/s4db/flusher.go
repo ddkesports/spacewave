@@ -48,6 +48,11 @@ type flusher struct {
 	err error
 	// closed stops arming the deadline.
 	closed bool
+
+	// flushes and flushNanos count the shared flushes and their time. They
+	// are safe without bcast.
+	flushes    atomic.Uint64
+	flushNanos atomic.Int64
 }
 
 // newFlusher returns a flusher of s whose published state is cur.
@@ -184,7 +189,10 @@ func (f *flusher) syncThrough(ctx context.Context, seq, ckpt uint64) error {
 		l.Unlock()
 
 		// Flush and wake the waiters.
+		start := time.Now()
 		err := f.s.flushDurable()
+		f.flushes.Add(1)
+		f.flushNanos.Add(int64(time.Since(start)))
 		l = f.bcast.Lock()
 		f.flushing = false
 		if err == nil {

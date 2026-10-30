@@ -7,6 +7,7 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/aperturerobotics/util/csync"
 	"github.com/pkg/errors"
@@ -55,6 +56,8 @@ type writer struct {
 	building atomic.Bool
 	// builds counts running background checkpoints, so Close can wait.
 	builds sync.WaitGroup
+	// stats counts the checkpoint work and the writers' waits for it.
+	stats writerStats
 	// beforeBuild, when set by a test, runs as a background checkpoint
 	// starts building its tree.
 	beforeBuild func()
@@ -762,15 +765,26 @@ func (w *writer) waitBuild(ctx context.Context, wrote int64) error {
 	}
 
 	// Wait for the build to end or the state to come back within bounds.
-	return db.bcast.Wait(ctx, func(_ func(), _ func() <-chan struct{}) (bool, error) {
+	start := time.Now()
+	err := db.bcast.Wait(ctx, func(_ func(), _ func() <-chan struct{}) (bool, error) {
 		return !w.building.Load() || within(), nil
 	})
+	w.stats.buildWaits.Add(1)
+	w.stats.buildWaitNanos.Add(int64(time.Since(start)))
+	return err
 }
 
 // runCheckpoint builds the tree of st, which the snapshot in stripe keeps,
 // and writes its pages, holding the writer lock only to reserve pages, to
 // write them to a shared file, and to save the tree. The next commit reports a failure.
 func (w *writer) runCheckpoint(st *state, stripe int) {
+	// Count the checkpoint's time once it ends.
+	start := time.Now()
+	defer func() {
+		w.stats.checkpoints.Add(1)
+		w.stats.checkpointNanos.Add(int64(time.Since(start)))
+	}()
+
 	// Reserve the tree's pages under the writer lock as it builds.
 	ctx := context.Background()
 	t := w.newTree(st)
@@ -809,6 +823,7 @@ func (w *writer) runCheckpoint(st *state, stripe int) {
 		if t.sp != w.sp || w.closing.Load() {
 			return errDropped
 		}
+		w.stats.checkpointBytes.Add(uint64(len(buf)))
 		return write(buf, page)
 	}
 

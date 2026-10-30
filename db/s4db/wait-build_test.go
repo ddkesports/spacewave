@@ -104,6 +104,17 @@ func TestSmallCommitSkipsBuildWait(t *testing.T) {
 		t.Fatal("bulk commit did not return after the build")
 	}
 
+	// The stats count the wait and, once it ends, the checkpoint it waited
+	// for.
+	db.w.builds.Wait()
+	stats := db.Stats()
+	if stats.BuildWaits != 1 || stats.BuildWaitTime < 100*time.Millisecond {
+		t.Fatalf("build waits %d for %v, want 1 for at least 100ms", stats.BuildWaits, stats.BuildWaitTime)
+	}
+	if stats.Checkpoints < 1 || stats.CheckpointBytes == 0 || stats.CheckpointTime < 100*time.Millisecond {
+		t.Fatalf("checkpoints %d of %d bytes in %v", stats.Checkpoints, stats.CheckpointBytes, stats.CheckpointTime)
+	}
+
 	// The small commit's key reads back.
 	rtx, err := db.NewTransaction(ctx, false)
 	if err != nil {
