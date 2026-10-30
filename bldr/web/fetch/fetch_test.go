@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aperturerobotics/starpc/srpc"
 	"github.com/pkg/errors"
@@ -26,7 +27,18 @@ func TestFetch(t *testing.T) {
 	testWasmFilename := "hello-world.wasm.br"
 
 	// Serve the compressed WebAssembly fixture through the fetch RPC service.
+	streamDone := make(chan error, 1)
 	fetchServer := NewFetchServer(func(rw http.ResponseWriter, req *http.Request) {
+		// Stream one event, flush, and hold the response open like a watch
+		// until the caller goes away.
+		if req.URL.Path == "/watch" {
+			_, _ = rw.Write([]byte("event\n"))
+			rw.(http.Flusher).Flush()
+			<-req.Context().Done()
+			streamDone <- req.Context().Err()
+			return
+		}
+
 		// Echo a posted body back to the caller.
 		if req.Method == http.MethodPost {
 			_, _ = io.Copy(rw, req.Body)
@@ -127,6 +139,26 @@ func TestFetch(t *testing.T) {
 	_ = res.Body.Close()
 	if res.StatusCode != http.StatusNotModified || res.Header.Get("Content-Type") != "" {
 		t.Fatalf("transport 304: status %d, content type %q", res.StatusCode, res.Header.Get("Content-Type"))
+	}
+
+	// Read the first event of a held-open stream, then close it: the handler
+	// sees its request context end.
+	res, err = hc.Get("http://plugin/watch")
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+	event := make([]byte, len("event\n"))
+	if _, err := io.ReadFull(res.Body, event); err != nil || string(event) != "event\n" {
+		t.Fatalf("transport watch: event %q, err %v", event, err)
+	}
+	_ = res.Body.Close()
+	select {
+	case err := <-streamDone:
+		if err == nil {
+			t.Fatal("transport watch: handler context not canceled")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("transport watch: handler still running after close")
 	}
 
 	// Post a body larger than one data packet and read its echo.

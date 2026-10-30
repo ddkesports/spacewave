@@ -86,6 +86,13 @@ func (w *FetchResponseWriter) Write(p []byte) (int, error) {
 	return written, nil
 }
 
+// Flush sends the response headers if they are still pending. Write sends
+// each body packet as it is written, so a streaming handler, such as a watch,
+// needs no other flushing.
+func (w *FetchResponseWriter) Flush() {
+	w.WriteHeader(200)
+}
+
 // BodyAborter is a ResponseWriter that can mark an in-flight response body as
 // failed after headers were already sent. Proxies use it to prevent a
 // truncated upstream body from completing with a clean done packet.
@@ -132,4 +139,7 @@ func statusAllowsBody(status int) bool {
 }
 
 // _ is a type assertion
-var _ http.ResponseWriter = (*FetchResponseWriter)(nil)
+var (
+	_ http.ResponseWriter = (*FetchResponseWriter)(nil)
+	_ http.Flusher        = (*FetchResponseWriter)(nil)
+)
