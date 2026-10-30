@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"github.com/pkg/errors"
+	space_world "github.com/s4wave/spacewave/core/space/world"
 )
 
 // ErrHandlerMissing identifies an ObjectType with no migration classification.
@@ -41,10 +42,14 @@ func (r *Registry) Register(handler Handler) error {
 	return nil
 }
 
-// Lookup returns the handler for an ObjectType, or nil when unclassified.
+// Lookup returns the handler for an ObjectType, or nil when unclassified. The
+// legacy SpaceSettings ID resolves to the current one.
 func (r *Registry) Lookup(typeID string) Handler {
 	if r == nil {
 		return nil
+	}
+	if typeID == space_world.LegacySpaceSettingsTypeID {
+		typeID = space_world.SpaceSettingsTypeID
 	}
 	return r.handlers[typeID]
 }

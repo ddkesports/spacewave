@@ -52,7 +52,8 @@ func TestBuiltInHandlersDecodeAndSerializePopulatedWorldPayloads(t *testing.T) {
 		typeID  string
 		payload block.Block
 	}{
-		{"settings", "github.com/s4wave/spacewave/core/space/world.SpaceSettings", space_world.NewSpaceSettingsBlock()},
+		{"settings", space_world.SpaceSettingsTypeID, space_world.NewSpaceSettingsBlock()},
+		{"legacy-settings", space_world.LegacySpaceSettingsTypeID, space_world.NewSpaceSettingsBlock()},
 		{"layout", s4wave_layout_world.ObjectLayoutTypeID, s4wave_layout_world.NewObjectLayoutBlock()},
 		{"unixfs", s4wave_unixfs_world.UnixFSTypeID, unixfs_block.NewFSNodeBlock()},
 		{"git-repo", git_world.GitRepoTypeID, git_block.NewRepo()},

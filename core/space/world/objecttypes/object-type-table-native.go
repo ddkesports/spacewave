@@ -7,6 +7,7 @@ import (
 
 	"github.com/aperturerobotics/controllerbus/bus"
 	"github.com/aperturerobotics/starpc/srpc"
+	space_world "github.com/s4wave/spacewave/core/space/world"
 	"github.com/s4wave/spacewave/db/world"
 	s4wave_org "github.com/s4wave/spacewave/sdk/org"
 	s4wave_org_world "github.com/s4wave/spacewave/sdk/org/world"
@@ -15,10 +16,8 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-const spaceSettingsTypeID = "github.com/s4wave/spacewave/core/space/world.SpaceSettings"
-
 var compiledObjectTypes = extendObjectTypes(commonObjectTypes, map[string]objecttype.ObjectType{
-	spaceSettingsTypeID:              objecttype.NewObjectType(spaceSettingsTypeID, spaceSettingsReadOnlyFactory),
+	space_world.SpaceSettingsTypeID:  objecttype.NewObjectType(space_world.SpaceSettingsTypeID, spaceSettingsReadOnlyFactory),
 	s4wave_org.OrgStateTypeID:        s4wave_org_world.OrganizationType,
 	s4wave_secret_world.SecretTypeID: s4wave_secret_world.SecretType,
 })

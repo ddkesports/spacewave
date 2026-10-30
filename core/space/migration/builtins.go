@@ -3,6 +3,7 @@ package space_migration
 import (
 	bldr_manifest_world "github.com/s4wave/spacewave/bldr/manifest/world"
 	forge_dashboard "github.com/s4wave/spacewave/core/forge/dashboard"
+	space_world "github.com/s4wave/spacewave/core/space/world"
 	volume_world "github.com/s4wave/spacewave/db/volume/world"
 	forge_cluster "github.com/s4wave/spacewave/forge/cluster"
 	forge_execution "github.com/s4wave/spacewave/forge/execution"
@@ -33,15 +34,12 @@ import (
 	s4wave_vm_world "github.com/s4wave/spacewave/sdk/vm/world"
 )
 
-// spaceSettingsTypeID identifies the Space settings payload.
-const spaceSettingsTypeID = "github.com/s4wave/spacewave/core/space/world.SpaceSettings"
-
 // BuiltInRegistry returns the complete built-in ObjectType classification.
 func BuiltInRegistry() (*Registry, error) {
 	// Classify every built-in payload before exposing the registry to planners.
 	registry := NewRegistry()
 	handlers := []*TypedHandler{
-		NewSchemaHandler(spaceSettingsTypeID, ClassificationRewrite, true, false, false, false, false, inspectSpaceSettings, rewriteSpaceSettings),
+		NewSchemaHandler(space_world.SpaceSettingsTypeID, ClassificationRewrite, true, false, false, false, false, inspectSpaceSettings, rewriteSpaceSettings),
 		NewSchemaHandler(s4wave_layout_world.ObjectLayoutTypeID, ClassificationRewrite, true, false, false, false, false, inspectObjectLayout, rewriteObjectLayout),
 		NewSchemaHandler(s4wave_unixfs_world.UnixFSTypeID, ClassificationRewrite, false, false, false, false, false, inspectUnixFS, rewriteUnixFS),
 		NewSchemaHandler(s4wave_git_world.GitRepoTypeID, ClassificationRewrite, false, false, false, true, false, inspectGitRepo, rewriteGitRepo),

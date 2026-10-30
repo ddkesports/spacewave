@@ -61,7 +61,7 @@ var schema = world.NewSchema(
 		// them is mounted without the WasiVM plugin.
 		{ID: s4wave_vm.WasiVmImageTypeID, New: func() any { return new(s4wave_vm.WasiVmImage) }},
 		// Older Spaces stored their settings under the Go type name.
-		{ID: "github.com/s4wave/spacewave/core/space/world.SpaceSettings", New: func() any { return new(space_world.SpaceSettings) }},
+		{ID: space_world.LegacySpaceSettingsTypeID, New: func() any { return new(space_world.SpaceSettings) }},
 	},
 	buildTypes,
 )
