@@ -17,7 +17,7 @@ func NewFetchRequestWithInfo(req *http.Request, clientID string, hasBody bool) *
 
 // NewFetchRequestInfo constructs a FetchRequestInfo from a HTTP request.
 func NewFetchRequestInfo(req *http.Request, clientID string, hasBody bool) *FetchRequestInfo {
-	headersMap := BuildHeadersMap(req.Header, false)
+	headersMap := BuildHeadersMap(req.Header)
 	return &FetchRequestInfo{
 		Method:   req.Method,
 		Url:      req.URL.String(),

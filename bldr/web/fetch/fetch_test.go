@@ -33,6 +33,13 @@ func TestFetch(t *testing.T) {
 			return
 		}
 
+		// Answer a matching revalidation with a bodiless 304.
+		if req.Header.Get("If-None-Match") == `"v1"` {
+			rw.Header().Set("Etag", `"v1"`)
+			rw.WriteHeader(http.StatusNotModified)
+			return
+		}
+
 		// Reject paths that do not select the WebAssembly fixture.
 		if strings.TrimPrefix(req.URL.Path, "/") != testWasmFilename {
 			rw.WriteHeader(404)
@@ -105,6 +112,21 @@ func TestFetch(t *testing.T) {
 	}
 	if contentType := res.Header.Get("content-type"); contentType != "application/wasm" {
 		t.Fatalf("transport get: incorrect content type: %s", contentType)
+	}
+
+	// Revalidate: the 304 carries no Content-Type an HTTP cache would merge.
+	req, err = http.NewRequest("GET", "http://plugin/"+testWasmFilename, nil)
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+	req.Header.Set("If-None-Match", `"v1"`)
+	res, err = hc.Do(req)
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+	_ = res.Body.Close()
+	if res.StatusCode != http.StatusNotModified || res.Header.Get("Content-Type") != "" {
+		t.Fatalf("transport 304: status %d, content type %q", res.StatusCode, res.Header.Get("Content-Type"))
 	}
 
 	// Post a body larger than one data packet and read its echo.

@@ -129,24 +129,22 @@ func serveFetchHTTP(rw http.ResponseWriter, req *http.Request, handler http.Hand
 }
 
 // BuildHeadersMap builds the headers proto map from the Headers object.
-func BuildHeadersMap(headers http.Header, setDefaults bool) map[string]string {
+func BuildHeadersMap(headers http.Header) map[string]string {
 	out := make(map[string]string, len(headers))
 	for k, vs := range headers {
 		out[k] = strings.Join(vs, ", ")
 	}
-	if setDefaults {
-		var hasContentType bool
-		for k, v := range out {
-			if v != "" && strings.EqualFold(k, "content-type") {
-				hasContentType = true
-				break
-			}
-		}
-		if !hasContentType {
-			out["Content-Type"] = "application/octet-stream"
+	return out
+}
+
+// hasContentType reports whether the headers map sets a Content-Type.
+func hasContentType(headers map[string]string) bool {
+	for k, v := range headers {
+		if v != "" && strings.EqualFold(k, "content-type") {
+			return true
 		}
 	}
-	return out
+	return false
 }
 
 // SetHeaders copies headers from a map to a http.Header.
@@ -164,15 +162,24 @@ func SetHeaders(headerMap map[string]string, setTo http.Header) {
 
 // BuildFetchResponse_Info builds a FetchResponse from http response info.
 func BuildFetchResponse_Info(header http.Header, statusCode int) *FetchResponse {
+	// Default the status, and the Content-Type of a response that has a body.
+	// A bodiless 204 or 304 carries none, as with net/http: an HTTP cache
+	// merges a 304's headers into its stored response.
 	if statusCode == 0 {
 		statusCode = 200
 	}
+	headers := BuildHeadersMap(header)
+	if statusAllowsBody(statusCode) && !hasContentType(headers) {
+		headers["Content-Type"] = "application/octet-stream"
+	}
+
+	// Build the response info packet.
 	return &FetchResponse{
 		Body: &FetchResponse_ResponseInfo{
 			ResponseInfo: &ResponseInfo{
 				Ok:           true,
 				Redirected:   false,
-				Headers:      BuildHeadersMap(header, true),
+				Headers:      headers,
 				Status:       uint32(statusCode), //nolint:gosec
 				StatusText:   http.StatusText(statusCode),
 				ResponseType: "default",
