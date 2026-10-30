@@ -96,8 +96,8 @@ func Open(conf *Config) (*sql.DB, error) {
 
 	// Recycle connections before a hosted server's idle timeout drops them.
 	db := sql.OpenDB(connector)
-	db.SetMaxOpenConns(8)
-	db.SetMaxIdleConns(4)
+	db.SetMaxOpenConns(16)
+	db.SetMaxIdleConns(16)
 	db.SetConnMaxIdleTime(time.Minute)
 	db.SetConnMaxLifetime(5 * time.Minute)
 	return db, nil
