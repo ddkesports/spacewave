@@ -76,6 +76,9 @@ type Transaction struct {
 	// writeBuffer is borrowed by sub-transactions that must add blocks to a
 	// transaction-level staging store without draining it themselves.
 	writeBuffer *BufferedStore
+	// replacements records the stored pages writes replace, or nil when the
+	// transaction does not record them.
+	replacements *replacementLog
 }
 
 // NewTransaction builds a new transaction with a root cursor. The transformer,
@@ -481,6 +484,7 @@ func (t *Transaction) WriteAtRoot(ctx context.Context, clearTree bool, subRoot *
 
 			// Encode the final hooked block and retain its immutable reference.
 			blkRef := bn.ref
+			var blkRefs []*BlockRef
 			if bn.blk != nil && !bn.moved {
 				blkRef = nil
 				if err := bn.ownBlock(); err != nil {
@@ -534,12 +538,12 @@ func (t *Transaction) WriteAtRoot(ctx context.Context, clearTree bool, subRoot *
 
 						// Extract block refs before enqueuing write, since
 						// bn.blk may be cleared by clearTree after this point.
-						putOpts.Refs, err = ExtractBlockRefs(bn.blk)
+						blkRefs, err = ExtractBlockRefs(bn.blk)
 						if err != nil {
 							handleErr(err)
 							return
 						}
-						putOpts.RefsKnown = true
+						putOpts.Refs, putOpts.RefsKnown = blkRefs, true
 
 						// Store content without a redundant existence probe.
 						put := func() {
@@ -560,6 +564,16 @@ func (t *Transaction) WriteAtRoot(ctx context.Context, clearTree bool, subRoot *
 							writeQueue.Enqueue(put)
 						}
 					}
+				}
+				if log := t.replacements; log != nil && !bn.isSubBlock {
+					var page *pageBase
+					if blkRef != nil {
+						page = &pageBase{ref: blkRef, refs: CloneBlockRefs(blkRefs)}
+					}
+					mtx.Lock()
+					log.recordWrite(bn.base, page)
+					mtx.Unlock()
+					bn.base = page
 				}
 				bn.ref = blkRef
 			}

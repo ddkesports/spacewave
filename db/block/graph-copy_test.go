@@ -32,7 +32,7 @@ func newGraphTestStore() *graphTestStore {
 func (s *graphTestStore) PutBlockBatch(ctx context.Context, entries []*block.PutBatchEntry) ([]bool, error) {
 	existed := make([]bool, len(entries))
 	for i, entry := range entries {
-		_, exists, err := s.PutBlock(ctx, entry.Data, &block.PutOpts{ForceBlockRef: entry.Ref, Refs: entry.Refs})
+		_, exists, err := s.PutBlock(ctx, entry.Data, &block.PutOpts{ForceBlockRef: entry.Ref, Refs: entry.Refs, RefsKnown: entry.RefsKnown})
 		if err != nil {
 			return nil, err
 		}
@@ -51,7 +51,7 @@ func (s *graphTestStore) PutBlock(ctx context.Context, data []byte, opts *block.
 	// Record the write order and the refs the write declared.
 	s.mu.Lock()
 	s.puts = append(s.puts, ref.MarshalString())
-	if opts.GetRefs() != nil {
+	if opts.GetRefs() != nil || opts.GetRefsKnown() {
 		s.refs[ref.MarshalString()] = opts.GetRefs()
 	}
 	s.mu.Unlock()

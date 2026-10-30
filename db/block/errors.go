@@ -35,6 +35,9 @@ var (
 	// ErrRefsUnknown is returned when a graph copy reaches a block whose source
 	// holds its bytes without its outgoing refs.
 	ErrRefsUnknown = errors.New("block refs unknown")
+	// ErrSkipRefs is returned by a WalkGraph visit to leave the visited block's
+	// refs unwalked. It is not an error.
+	ErrSkipRefs = errors.New("skip block refs")
 	// ErrReferenceCycle is returned when a write finds a block reachable from itself.
 	ErrReferenceCycle = errors.New("block: reference cycle")
 	// ErrNotClonable is returned if a block could not be cloned.

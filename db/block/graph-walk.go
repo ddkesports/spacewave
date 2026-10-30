@@ -12,7 +12,8 @@ import (
 //
 // Returns ErrNotFound for a missing block and ErrRefsUnknown for a block src
 // holds without its refs, each wrapped with the block ref. visit runs on the
-// calling goroutine, one block at a time.
+// calling goroutine, one block at a time; it returns ErrSkipRefs to leave the
+// visited block's refs unwalked.
 func WalkGraph(ctx context.Context, src StoreOps, roots []*BlockRef, reads int, visit func(ref *BlockRef, stored *StoredBlock) error) error {
 	// Queue each distinct non-empty root.
 	seen := make(map[string]struct{})
@@ -65,7 +66,11 @@ func WalkGraph(ctx context.Context, src StoreOps, roots []*BlockRef, reads int, 
 			return res.err
 		}
 		if visit != nil {
-			if err := visit(res.ref, res.stored); err != nil {
+			err := visit(res.ref, res.stored)
+			if err == ErrSkipRefs {
+				continue
+			}
+			if err != nil {
 				return err
 			}
 		}
