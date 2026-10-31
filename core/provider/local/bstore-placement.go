@@ -253,3 +253,12 @@ func (t *bstoreTracker) getRemote() block.StoreOps {
 	}
 	return nil
 }
+
+// SetSQLPrimary makes the account's block stores placed on an SQL backend,
+// as mounted after the call, write to that backend and read the local bucket,
+// read only, before it. It also stops the account's GC cleanup
+// and backend reclaim, since the backend's blocks reference local blocks
+// without graph edges.
+func (a *ProviderAccount) SetSQLPrimary(primary bool) {
+	a.sqlPrimary.Store(primary)
+}

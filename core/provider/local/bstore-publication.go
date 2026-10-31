@@ -9,7 +9,7 @@ import (
 // publisher returns the atomic publisher of the account's own storage, or nil
 // when that storage cannot publish atomically.
 func (b *BlockStore) publisher() block.AtomicPublisher {
-	if b.placement == nil {
+	if b.placement == nil || b.placement.sqlPrimary {
 		return nil
 	}
 	p, ok := b.placement.local.(block.AtomicPublisher)
