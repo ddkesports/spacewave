@@ -3,6 +3,7 @@ package provider_local
 import (
 	"context"
 	"math"
+	"sync/atomic"
 	"time"
 
 	"github.com/aperturerobotics/util/ccontainer"
@@ -261,4 +262,14 @@ func (t *bstoreTracker) getRemote() block.StoreOps {
 // without graph edges.
 func (a *ProviderAccount) SetSQLPrimary(primary bool) {
 	a.sqlPrimary.Store(primary)
+}
+
+// sqlMaxConns is the pool size of the SQL backend stores opened after it is
+// set, zero for the store's default.
+var sqlMaxConns atomic.Int32
+
+// SetSQLMaxConns bounds the open connections of each SQL backend store opened
+// after the call; zero or less uses the store's default.
+func SetSQLMaxConns(n int) {
+	sqlMaxConns.Store(int32(max(n, 0))) // #nosec G115 -- pool sizes fit in int32.
 }

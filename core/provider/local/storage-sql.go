@@ -58,5 +58,6 @@ func sqlConfig(location *account_settings.SqlLocation, creds *block_store_s3.Cre
 		TLS:      location.GetTls(),
 
 		TLSCertSHA256: location.GetTlsCertSha256(),
+		MaxConns:      int(sqlMaxConns.Load()),
 	}
 }

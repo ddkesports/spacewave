@@ -59,7 +59,13 @@ type Config struct {
 	// TLSCertSHA256 is the hex SHA-256 of the server's certificate. Set, TLS
 	// trusts exactly that certificate in place of a CA and the host name.
 	TLSCertSHA256 string
+	// MaxConns bounds the pool's open connections; zero uses
+	// DefaultMaxConns. Each block read holds one for a round trip.
+	MaxConns int
 }
+
+// DefaultMaxConns is the pool size when the config sets none.
+const DefaultMaxConns = 16
 
 // Open opens a connection pool to the database. It connects lazily, so an
 // unreachable database fails the first operation instead.
@@ -100,8 +106,12 @@ func Open(conf *Config) (*sql.DB, error) {
 
 	// Recycle connections before a hosted server's idle timeout drops them.
 	db := sql.OpenDB(connector)
-	db.SetMaxOpenConns(16)
-	db.SetMaxIdleConns(16)
+	maxConns := conf.MaxConns
+	if maxConns <= 0 {
+		maxConns = DefaultMaxConns
+	}
+	db.SetMaxOpenConns(maxConns)
+	db.SetMaxIdleConns(maxConns)
 	db.SetConnMaxIdleTime(time.Minute)
 	db.SetConnMaxLifetime(5 * time.Minute)
 	return db, nil
