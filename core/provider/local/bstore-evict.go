@@ -18,8 +18,8 @@ import (
 const readSetMax = 1 << 22
 
 // readKeepAge is how long a read keeps its block on the disk, at least: a block
-// read within the last day is not evicted to the backend.
-const readKeepAge = 24 * time.Hour
+// read within the last hour is not evicted to the backend.
+const readKeepAge = time.Hour
 
 // readSaveInterval is how often the reads recorded since the last save are
 // saved, which bounds the reads a restart forgets.
