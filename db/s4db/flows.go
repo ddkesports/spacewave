@@ -3,6 +3,7 @@ package s4db
 import (
 	"bytes"
 	"sync/atomic"
+	"time"
 )
 
 // Flow is the length of the values commits stored outside the index under
@@ -30,6 +31,12 @@ func (db *DB) Flows() []Flow {
 		out[i] = Flow{Written: db.flows[i].written.Load(), Freed: db.flows[i].freed.Load()}
 	}
 	return out
+}
+
+// BuildWait returns the time this handle's background commits waited for a
+// checkpoint build, since the database opened.
+func (db *DB) BuildWait() time.Duration {
+	return time.Duration(db.w.buildWait.Load())
 }
 
 // family returns the index in flows of the family key starts with.

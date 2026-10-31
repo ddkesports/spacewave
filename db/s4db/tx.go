@@ -295,16 +295,14 @@ func (t *Tx) commit(ctx context.Context, ordered bool) error {
 	t.done = true
 	db := t.db
 	changes := make([]tentry, 0, t.changes.Len())
-	var wrote int64
 	t.changes.Scan(func(c tentry) bool {
 		changes = append(changes, c)
-		wrote += int64(len(c.key) + len(c.data))
 		return true
 	})
 
 	// Write them, then run checkpoint and compaction work with the snapshot
 	// released, release the writer lock, and wait for a checkpoint the
-	// writes outpaced.
+	// writes outpaced when they are background work.
 	defer db.endWrite()
 	err := db.w.commit(ctx, t.st, changes, ordered, false)
 	db.release(t.st, t.stripe)
@@ -313,8 +311,8 @@ func (t *Tx) commit(ctx context.Context, ordered bool) error {
 	}
 	seq := db.cur.Load().seq
 	db.w.unlock(err)
-	if err == nil {
-		err = db.w.waitBuild(ctx, wrote)
+	if err == nil && block.IsBackground(ctx) {
+		err = db.w.waitBuild(ctx)
 	}
 	if err != nil || ordered {
 		return err

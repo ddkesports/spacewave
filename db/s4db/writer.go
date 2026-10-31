@@ -7,6 +7,7 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/aperturerobotics/util/csync"
 	"github.com/pkg/errors"
@@ -55,6 +56,9 @@ type writer struct {
 	building atomic.Bool
 	// builds counts running background checkpoints, so Close can wait.
 	builds sync.WaitGroup
+	// buildWait is the time background commits waited for a build, in
+	// nanoseconds.
+	buildWait atomic.Int64
 	// beforeBuild, when set by a test, runs as a background checkpoint
 	// starts building its tree.
 	beforeBuild func()
@@ -731,28 +735,17 @@ func (w *writer) endBuild() {
 	})
 }
 
-// smallCommit is the most a commit can write and still wait only at
-// smallLimit times the bounds waitBuild holds bulk commits to.
-const smallCommit = 64 << 10
-
-// smallLimit multiplies the bounds for small commits, so a commit of a few
-// keys does not wait out a slow build that bulk commits outpaced, while a
-// stream of small commits still holds bounded memory and replay.
-const smallLimit = 2
-
 // waitBuild waits while a background checkpoint runs and the published
 // overlay exceeds twice CheckpointMax, or the log after the checkpoint four
-// times, so a writer that outpaces checkpoints holds bounded memory and
-// replay. A commit that wrote fewer than smallCommit bytes waits only past
-// smallLimit times those bounds. The caller does not hold the writer lock,
-// which the build needs.
-func (w *writer) waitBuild(ctx context.Context, wrote int64) error {
+// times, so background writers that outpace checkpoints stop until the build
+// catches up. Only a commit whose context is marked with block.WithBackground
+// waits: a user commit may hold a lock other users wait on, such as a World's
+// writer lock, so it never waits for a build. The caller does not hold the
+// writer lock, which the build needs.
+func (w *writer) waitBuild(ctx context.Context) error {
 	// Return at once while the state is within bounds.
 	db := w.db
 	limit := 2 * db.opts.CheckpointMax
-	if wrote < smallCommit {
-		limit *= smallLimit
-	}
 	within := func() bool {
 		st := db.cur.Load()
 		return st.overlayBytes <= limit && st.logBytes <= 2*limit
@@ -762,6 +755,8 @@ func (w *writer) waitBuild(ctx context.Context, wrote int64) error {
 	}
 
 	// Wait for the build to end or the state to come back within bounds.
+	start := time.Now()
+	defer func() { w.buildWait.Add(int64(time.Since(start))) }()
 	return db.bcast.Wait(ctx, func(_ func(), _ func() <-chan struct{}) (bool, error) {
 		return !w.building.Load() || within(), nil
 	})
