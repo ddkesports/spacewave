@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/s4wave/spacewave/bldr/storage"
+	storage_native "github.com/s4wave/spacewave/bldr/storage/native"
 	bstore "github.com/s4wave/spacewave/core/bstore"
 	provider_local "github.com/s4wave/spacewave/core/provider/local"
 	"github.com/s4wave/spacewave/core/sobject"
@@ -49,9 +51,15 @@ func startGatedWorld(t *testing.T, dir string, soRef *sobject.SharedObjectRef) (
 // startGatedWorldConf starts a gated World as startGatedWorld does, with
 // configure, when set, adjusting the engine Config first.
 func startGatedWorldConf(t *testing.T, dir string, soRef *sobject.SharedObjectRef, configure func(*sobject_world_engine.Config)) (*localWorld, *gatedSharedObject) {
+	t.Helper()
+	return startGatedWorldOn(t, storage_native.NewS4db(false, dir), soRef, configure)
+}
+
+// startGatedWorldOn starts a gated World as startGatedWorldConf does, on st.
+func startGatedWorldOn(t *testing.T, st storage.Storage, soRef *sobject.SharedObjectRef, configure func(*sobject_world_engine.Config)) (*localWorld, *gatedSharedObject) {
 	// Mount the SharedObject and wrap it.
 	t.Helper()
-	tb, acc, soRef := openLocalAccount(t, dir, soRef)
+	tb, acc, soRef := openLocalAccountOn(t, st, soRef)
 	so, soMountRef, err := sobject.ExMountSharedObject(t.Context(), tb.Bus, soRef, false, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -90,6 +98,7 @@ func startGatedWorldConf(t *testing.T, dir string, soRef *sobject.SharedObjectRe
 // serve starts serving the World of s with its controller until stop or test
 // cleanup. A controller that served before replaces its engine.
 func (s *gatedSharedObject) serve(t *testing.T) {
+	// Run the engine until its context is canceled.
 	ctx, cancel := context.WithCancel(t.Context())
 	exited := make(chan error, 1)
 	go func() {

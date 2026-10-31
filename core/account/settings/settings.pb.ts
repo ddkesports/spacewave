@@ -141,6 +141,12 @@ export interface StorageBackend {
    * A backend sets exactly one of S3 and Sql.
    */
   sql?: SqlLocation
+  /**
+   * Ftps locates the FTPS server that holds the packfiles instead of a
+   * bucket. It logs in from a netrc file on the host, so the backend has no
+   * credential Secret. A backend sets exactly one of S3, Sql and Ftps.
+   */
+  ftps?: FtpsLocation
 }
 
 export const StorageBackend: MessageType<StorageBackend> =
@@ -152,6 +158,57 @@ export const StorageBackend: MessageType<StorageBackend> =
       [3, 's3', 11, 0, S3Location.codec],
       [4, 'credential', 11, 0, Secret.codec],
       [5, 'sql', 11, 0, SqlLocation.codec],
+      [6, 'ftps', 11, 0, FtpsLocation.codec],
+    ],
+  )
+
+/**
+ * FtpsLocation locates a directory on an FTPS server that holds packfiles,
+ * read and written as a bucket is. The server logs in from a netrc file on the
+ * host that runs the account, which names the host without its port. Packfiles
+ * are only added: the backend never deletes or compacts one.
+ *
+ * @generated from message account.settings.FtpsLocation
+ */
+export interface FtpsLocation {
+  /**
+   * Host is the server host name, also the machine of the netrc entry.
+   */
+  host?: string
+  /**
+   * Port is the server port, zero for 21.
+   */
+  port?: number
+  /**
+   * NetrcPath is the netrc file that holds the login.
+   */
+  netrcPath?: string
+  /**
+   * Root is the directory on the server that holds the packfile prefix.
+   */
+  root?: string
+  /**
+   * Prefix is the key prefix of the packfiles below Root, used as given by
+   * every block store placed on the backend, such as "world/packs/".
+   */
+  prefix?: string
+  /**
+   * MaxConns is the number of control connections the backend opens, zero
+   * for 4. The server may allow few connections per client host.
+   */
+  maxConns?: number
+}
+
+export const FtpsLocation: MessageType<FtpsLocation> =
+  /* @__PURE__ */ createMessageType<FtpsLocation>(
+    'account.settings.FtpsLocation',
+    () => [
+      [1, 'host', 9],
+      [2, 'port', 13],
+      [3, 'netrc_path', 9],
+      [4, 'root', 9],
+      [5, 'prefix', 9],
+      [6, 'max_conns', 13],
     ],
   )
 
@@ -282,8 +339,8 @@ export interface BlockStorePlacement {
    * read only, after its own backend misses a block. Nothing writes it. A
    * block only the fallback holds is stored on the local disk with an upload
    * marker, so it uploads to StorageBackendId and later reads skip the
-   * fallback. Empty has no fallback. The store's backend must be an S3
-   * backend, so an SQL backend is never both primary and fallback. A storage
+   * fallback. Empty has no fallback. The store's backend must be an S3 or
+   * FTPS backend, so an SQL backend is never both primary and fallback. A storage
    * move clears it.
    */
   fallbackStorageBackendId?: string

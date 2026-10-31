@@ -47,18 +47,36 @@ class AccountSettings(_message.Message):
     def __init__(self, display_name: _Optional[str] = ..., paired_devices: _Optional[_Iterable[_Union[PairedDevice, _Mapping]]] = ..., entity_keypairs: _Optional[_Iterable[_Union[_session_pb2.EntityKeypair, _Mapping]]] = ..., session_presentations: _Optional[_Iterable[_Union[SessionPresentation, _Mapping]]] = ..., keybinding_overrides: _Optional[_Union[_command_pb2.KeybindingOverrideSet, _Mapping]] = ..., sessions: _Optional[_Iterable[_Union[AccountSession, _Mapping]]] = ..., catalog: _Optional[_Iterable[_Union[AccountCatalogEntry, _Mapping]]] = ..., transition: _Optional[_Union[_provider_pb2.AccountTransition, _Mapping]] = ..., accepted_migrations: _Optional[_Iterable[_Union[_provider_pb2.AccountTransition, _Mapping]]] = ..., storage_backends: _Optional[_Iterable[_Union[StorageBackend, _Mapping]]] = ..., default_storage_backend_id: _Optional[str] = ..., block_store_placements: _Optional[_Iterable[_Union[BlockStorePlacement, _Mapping]]] = ..., storage_releases: _Optional[_Iterable[_Union[BlockStorePlacement, _Mapping]]] = ..., developer_space_id: _Optional[str] = ..., plugin_ids: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class StorageBackend(_message.Message):
-    __slots__ = ("id", "display_name", "s3", "credential", "sql")
+    __slots__ = ("id", "display_name", "s3", "credential", "sql", "ftps")
     ID_FIELD_NUMBER: _ClassVar[int]
     DISPLAY_NAME_FIELD_NUMBER: _ClassVar[int]
     S3_FIELD_NUMBER: _ClassVar[int]
     CREDENTIAL_FIELD_NUMBER: _ClassVar[int]
     SQL_FIELD_NUMBER: _ClassVar[int]
+    FTPS_FIELD_NUMBER: _ClassVar[int]
     id: str
     display_name: str
     s3: S3Location
     credential: _secret_pb2.Secret
     sql: SqlLocation
-    def __init__(self, id: _Optional[str] = ..., display_name: _Optional[str] = ..., s3: _Optional[_Union[S3Location, _Mapping]] = ..., credential: _Optional[_Union[_secret_pb2.Secret, _Mapping]] = ..., sql: _Optional[_Union[SqlLocation, _Mapping]] = ...) -> None: ...
+    ftps: FtpsLocation
+    def __init__(self, id: _Optional[str] = ..., display_name: _Optional[str] = ..., s3: _Optional[_Union[S3Location, _Mapping]] = ..., credential: _Optional[_Union[_secret_pb2.Secret, _Mapping]] = ..., sql: _Optional[_Union[SqlLocation, _Mapping]] = ..., ftps: _Optional[_Union[FtpsLocation, _Mapping]] = ...) -> None: ...
+
+class FtpsLocation(_message.Message):
+    __slots__ = ("host", "port", "netrc_path", "root", "prefix", "max_conns")
+    HOST_FIELD_NUMBER: _ClassVar[int]
+    PORT_FIELD_NUMBER: _ClassVar[int]
+    NETRC_PATH_FIELD_NUMBER: _ClassVar[int]
+    ROOT_FIELD_NUMBER: _ClassVar[int]
+    PREFIX_FIELD_NUMBER: _ClassVar[int]
+    MAX_CONNS_FIELD_NUMBER: _ClassVar[int]
+    host: str
+    port: int
+    netrc_path: str
+    root: str
+    prefix: str
+    max_conns: int
+    def __init__(self, host: _Optional[str] = ..., port: _Optional[int] = ..., netrc_path: _Optional[str] = ..., root: _Optional[str] = ..., prefix: _Optional[str] = ..., max_conns: _Optional[int] = ...) -> None: ...
 
 class SqlLocation(_message.Message):
     __slots__ = ("host", "port", "database", "table_prefix", "tls", "tls_cert_sha256")

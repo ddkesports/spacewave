@@ -239,12 +239,17 @@ func (t *bstoreTracker) openBackendStore(
 	ctx context.Context,
 	backend *account_settings.StorageBackend,
 ) (backendStore, error) {
+	// An FTPS server logs in from its netrc file and has no credential Secret.
+	le := t.a.le.WithField("bstore-id", t.id)
+	if location := backend.GetFtps(); location != nil {
+		return buildFTPSBlockStore(le, location, nil)
+	}
+
 	// Open the backend's bucket with its credential Secret.
 	creds, err := t.a.ReadStorageCredentials(ctx, backend)
 	if err != nil {
 		return nil, err
 	}
-	le := t.a.le.WithField("bstore-id", t.id)
 	if location := backend.GetSql(); location != nil {
 		return buildSQLBlockStore(ctx, le, location, t.id, creds)
 	}

@@ -159,8 +159,8 @@ func (s *AccountSettings) setBlockStorePlacement(placement *BlockStorePlacement)
 }
 
 // checkReadFallback requires that a placement's read fallback is an SQL
-// backend beside an S3 backend that holds the store, so an SQL backend is
-// never both the store's primary and its fallback.
+// backend beside an S3 or FTPS backend that holds the store, so an SQL backend
+// is never both the store's primary and its fallback.
 func (s *AccountSettings) checkReadFallback(placement *BlockStorePlacement) error {
 	// Accept a placement without a fallback.
 	fallbackID := placement.GetFallbackStorageBackendId()
@@ -168,9 +168,10 @@ func (s *AccountSettings) checkReadFallback(placement *BlockStorePlacement) erro
 		return nil
 	}
 
-	// Require an S3 backend to hold the store.
-	if s.FindStorageBackend(placement.GetStorageBackendId()).GetS3() == nil {
-		return errors.New("a read fallback needs a block store placed on an S3 backend")
+	// Require a bucket or FTPS backend to hold the store.
+	primary := s.FindStorageBackend(placement.GetStorageBackendId())
+	if primary.GetS3() == nil && primary.GetFtps() == nil {
+		return errors.New("a read fallback needs a block store placed on an S3 or FTPS backend")
 	}
 
 	// Require the fallback to exist and to be an SQL backend.
@@ -239,10 +240,20 @@ func (b *StorageBackend) Validate() error {
 		return errors.New("storage backend display_name is required")
 	}
 
-	// Validate the one location, S3 or SQL, and the credential reference.
+	// Validate the one location, S3, SQL or FTPS, and the credential reference.
+	// An FTPS backend logs in from a netrc file and has no credential Secret.
+	locations := 0
+	for _, set := range []bool{b.GetS3() != nil, b.GetSql() != nil, b.GetFtps() != nil} {
+		if set {
+			locations++
+		}
+	}
+	if locations > 1 {
+		return errors.New("storage backend sets more than one of s3, sql and ftps")
+	}
 	switch {
-	case b.GetS3() != nil && b.GetSql() != nil:
-		return errors.New("storage backend sets both s3 and sql")
+	case b.GetFtps() != nil:
+		return errors.Wrap(b.GetFtps().Validate(), "ftps")
 	case b.GetSql() != nil:
 		if err := b.GetSql().Validate(); err != nil {
 			return errors.Wrap(err, "sql")
@@ -277,6 +288,24 @@ func (l *SqlLocation) Validate() error {
 	}
 	if l.GetDatabase() == "" {
 		return errors.New("database is required")
+	}
+	if l.GetPort() > 65535 {
+		return errors.Errorf("port %d is out of range", l.GetPort())
+	}
+	return nil
+}
+
+// Validate checks that the FTPS location names a host, a login file and a
+// root directory.
+func (l *FtpsLocation) Validate() error {
+	if l.GetHost() == "" {
+		return errors.New("host is required")
+	}
+	if l.GetNetrcPath() == "" {
+		return errors.New("netrc_path is required")
+	}
+	if l.GetRoot() == "" {
+		return errors.New("root is required")
 	}
 	if l.GetPort() > 65535 {
 		return errors.Errorf("port %d is out of range", l.GetPort())

@@ -145,7 +145,7 @@ func testUpgradeCayleyRefGraph(t *testing.T, store db_kvtx.Store) {
 	ctx := context.Background()
 	keys := store_kvkey.NewDefaultKVKey()
 	writeCayleyStore(t, store, keys)
-	if err := upgradeFormat(ctx, store, keys); err != nil {
+	if _, err := upgradeFormat(ctx, store, keys, false); err != nil {
 		t.Fatal(err)
 	}
 	checkConvertedRefGraph(t, store)
@@ -159,7 +159,7 @@ func TestUpgradeLegacyRefGraph(t *testing.T) {
 	store := store_kvtx_inmem.NewStore()
 	keys := store_kvkey.NewDefaultKVKey()
 	writeLegacyStore(t, store, keys)
-	if err := upgradeFormat(ctx, store, keys); err != nil {
+	if _, err := upgradeFormat(ctx, store, keys, false); err != nil {
 		t.Fatal(err)
 	}
 	checkLegacyRefGraph(t, store)
@@ -328,7 +328,7 @@ func TestUpgradeChildLists(t *testing.T) {
 	writeFormat3Graph(t, store, keys, edges)
 
 	// Upgrade it.
-	if err := upgradeFormat(ctx, store, keys); err != nil {
+	if _, err := upgradeFormat(ctx, store, keys, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -598,6 +598,21 @@ func writeLegacyStore(t *testing.T, store db_kvtx.Store, keys *store_kvkey.KVKey
 	}
 }
 
+// testRootKey returns the store key of the registered root node, which is not
+// a block; an empty node gives the prefix of every such key.
+func testRootKey(node string) []byte {
+	// The kind byte follows the graph's prefix.
+	key := append(slices.Clone(refGraphPrefix), 'r')
+	if node == "" {
+		return key
+	}
+
+	// A text node is a zero byte, a uvarint length and the IRI.
+	key = append(key, 0)
+	key = binary.AppendUvarint(key, uint64(len(node)))
+	return append(key, node...)
+}
+
 // legacyGraphKey encodes a version 2 record key.
 func legacyGraphKey(kind byte, nodes ...string) []byte {
 	key := append(bytes.Clone(legacyRefGraphPrefix), kind)
@@ -659,20 +674,24 @@ func checkLegacyRefGraph(t *testing.T, store db_kvtx.Store) {
 	}
 
 	// The root survives.
-	roots, err := block_gc.NewRefGraph(kvtx_prefixer.NewPrefixer(store, refGraphPrefix)).GetRootNodes(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Equal(roots, []string{block_gc.NodeGCRoot}) {
-		t.Fatalf("roots %v", roots)
-	}
-
-	// No version 2 records remain.
 	rtx, err := store.NewTransaction(ctx, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rtx.Discard()
+	var roots [][]byte
+	err = rtx.ScanPrefixKeys(ctx, testRootKey(""), func(key []byte) error {
+		roots = append(roots, bytes.Clone(key))
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := testRootKey(block_gc.NodeGCRoot); len(roots) != 1 || !bytes.Equal(roots[0], want) {
+		t.Fatalf("root records %q, want %q", roots, want)
+	}
+
+	// No version 2 records remain.
 	err = rtx.ScanPrefixKeys(ctx, legacyRefGraphPrefix, func(key []byte) error {
 		t.Errorf("version 2 record %q remains", key)
 		return nil
@@ -735,7 +754,11 @@ func testCopyReachable(t *testing.T, src, dst db_kvtx.Store) {
 		refs[name] = ref
 	}
 
-	// Write the key outside the graph and the current format version.
+	// Register a root, as a version 2 graph carried, and write the key
+	// outside the graph and the current format version.
+	if err := tx.Set(ctx, testRootKey(block_gc.BucketIRI("pinned")), nil); err != nil {
+		t.Fatal(err)
+	}
 	if err := tx.Set(ctx, []byte("other"), []byte("value")); err != nil {
 		t.Fatal(err)
 	}
@@ -749,9 +772,6 @@ func testCopyReachable(t *testing.T, src, dst db_kvtx.Store) {
 	// Write the graph.
 	iri := func(name string) string { return block_gc.BlockIRI(refs[name]) }
 	graph := OpenRefGraph(src)
-	if err := graph.AddRoot(ctx, block_gc.BucketIRI("pinned")); err != nil {
-		t.Fatal(err)
-	}
 	err = graph.ApplyRefBatch(ctx, []block_gc.RefEdge{
 		{Subject: block_gc.NodeGCRoot, Object: block_gc.BucketIRI("live")},
 		{Subject: block_gc.BucketIRI("live"), Object: iri("a")},
@@ -789,6 +809,12 @@ func testCopyReachable(t *testing.T, src, dst db_kvtx.Store) {
 	last.Bytes, last.DroppedBytes = 0, 0
 	if last != want {
 		t.Fatalf("progress %+v, want %+v", last, want)
+	}
+
+	// The copy begins the destination's sharing walk, so its counts start
+	// stale and the first block pass builds them.
+	if s, err := OpenRefGraph(dst).GetSharing(ctx); err != nil || !s.Phase.Walking() {
+		t.Fatalf("destination sharing phase %c err %v, want walking", s.Phase, err)
 	}
 
 	// The destination holds the reachable blocks and edges and the other key.
@@ -833,5 +859,112 @@ func testCopyReachable(t *testing.T, src, dst db_kvtx.Store) {
 	writeLegacyStore(t, old, keys)
 	if err := CopyReachable(ctx, old, store_kvtx_inmem.NewStore(), keys, opts, nil); err == nil {
 		t.Fatal("reachable copy of a version 2 store succeeded")
+	}
+}
+
+// TestCopyStoreDropping copies a current store, leaving out the blocks the
+// drop check reports, and expects the other blocks and keys verbatim.
+func TestCopyStoreDropping(t *testing.T) {
+	t.Run("inmem", func(t *testing.T) {
+		testCopyStoreDropping(t, store_kvtx_inmem.NewStore(), store_kvtx_inmem.NewStore())
+	})
+	t.Run("s4db", func(t *testing.T) {
+		dir := t.TempDir()
+		var dbs [2]*s4db.DB
+		for i, name := range []string{"src.s4db", "dst.s4db"} {
+			db, err := s4db.Open(filepath.Join(dir, name), s4db.Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = db.Close() })
+			dbs[i] = db
+		}
+		testCopyStoreDropping(t, dbs[0], dbs[1])
+	})
+}
+
+// testCopyStoreDropping runs TestCopyStoreDropping on one pair of stores.
+func testCopyStoreDropping(t *testing.T, src, dst db_kvtx.Store) {
+	// Write blocks a to e, of which b and d are dropped, around keys outside
+	// the blocks, at the current format.
+	ctx := context.Background()
+	keys := store_kvkey.NewDefaultKVKey()
+	blockKeys := make(map[string][]byte)
+	tx, err := src.NewTransaction(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"a", "b", "c", "d", "e"} {
+		h, err := hash.Sum(hash.HashType_HashType_SHA256, []byte(name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		rm, err := block.NewBlockRef(h).MarshalKey()
+		if err != nil {
+			t.Fatal(err)
+		}
+		blockKeys[name] = keys.GetBlockKey(rm)
+		if err := tx.Set(ctx, blockKeys[name], []byte("value "+name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, key := range []string{"\x00first", "other", "\xffzz"} {
+		if err := tx.Set(ctx, []byte(key), []byte("value")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Set(ctx, keys.GetFormatVersionKey(), store_kvkey.MarshalFormatVersion(store_kvkey.FormatVersion)); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	dropped := map[string]bool{"b": true, "d": true}
+	dropHashes := make(map[string]bool)
+	for name := range dropped {
+		h, _ := hash.Sum(hash.HashType_HashType_SHA256, []byte(name))
+		dropHashes[h.MarshalString()] = true
+	}
+
+	// Copy it, dropping b and d.
+	var checked int
+	drop := func(_ context.Context, refs []*block.BlockRef) ([]bool, error) {
+		checked += len(refs)
+		out := make([]bool, len(refs))
+		for i, ref := range refs {
+			out[i] = dropHashes[ref.GetHash().MarshalString()]
+		}
+		return out, nil
+	}
+	var last CopyProgress
+	if err := CopyStoreDropping(ctx, src, dst, keys, drop, func(p CopyProgress) { last = p }); err != nil {
+		t.Fatal(err)
+	}
+	if checked != 5 || last.Keys != 6 || last.DroppedBlocks != 2 {
+		t.Fatalf("checked %d blocks, progress %+v; want 5 checked, 6 keys and 2 dropped blocks", checked, last)
+	}
+
+	// The destination holds the kept blocks and other keys, and the version.
+	rtx, err := dst.NewTransaction(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rtx.Discard()
+	for name, key := range blockKeys {
+		value, found, err := rtx.Get(ctx, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if found == dropped[name] || (found && string(value) != "value "+name) {
+			t.Fatalf("block %s: found %v value %q, dropped %v", name, found, value, dropped[name])
+		}
+	}
+	for _, key := range []string{"\x00first", "other", "\xffzz"} {
+		if value, found, err := rtx.Get(ctx, []byte(key)); err != nil || !found || string(value) != "value" {
+			t.Fatalf("key %q: found %v value %q err %v", key, found, value, err)
+		}
+	}
+	if version, err := readFormatVersion(ctx, dst, keys); err != nil || version != store_kvkey.FormatVersion {
+		t.Fatalf("format version %d err %v", version, err)
 	}
 }

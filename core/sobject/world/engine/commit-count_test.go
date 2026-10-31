@@ -11,6 +11,7 @@ import (
 
 	"github.com/aperturerobotics/controllerbus/bus"
 	"github.com/aperturerobotics/controllerbus/controller/resolver"
+	"github.com/s4wave/spacewave/bldr/storage"
 	storage_native "github.com/s4wave/spacewave/bldr/storage/native"
 	"github.com/s4wave/spacewave/core/metrics"
 	provider "github.com/s4wave/spacewave/core/provider"
@@ -81,10 +82,16 @@ func startLocalWorld(t *testing.T, dir string, soRef *sobject.SharedObjectRef) *
 // opens the SharedObject soRef in its account, creating it when soRef is nil.
 // Test cleanup stops them.
 func openLocalAccount(t *testing.T, dir string, soRef *sobject.SharedObjectRef) (*testbed.Testbed, provider.ProviderAccount, *sobject.SharedObjectRef) {
-	// Start a testbed on s4db storage.
+	t.Helper()
+	return openLocalAccountOn(t, storage_native.NewS4db(false, dir), soRef)
+}
+
+// openLocalAccountOn opens the account as openLocalAccount does, on st.
+func openLocalAccountOn(t *testing.T, st storage.Storage, soRef *sobject.SharedObjectRef) (*testbed.Testbed, provider.ProviderAccount, *sobject.SharedObjectRef) {
+	// Start a testbed on the storage.
 	t.Helper()
 	ctx := t.Context()
-	tb, err := testbed.Default(ctx, testbed.WithStorages(storage_native.NewS4db(false, dir)))
+	tb, err := testbed.Default(ctx, testbed.WithStorages(st))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -180,10 +180,18 @@ type fallbackTest struct {
 	tracked *trackedSet
 	// reads and copies are the store's read chains.
 	reads, copies block.StoreOps
+	// open opens the pack store; nil opens it on the fake bucket.
+	open func() backendStore
 }
 
 // newFallbackTest builds a placed store whose reads fall back to the stand-in.
 func newFallbackTest(t *testing.T) *fallbackTest {
+	return newFallbackTestOn(t, nil)
+}
+
+// newFallbackTestOn builds a placed store whose pack store is open(), or the
+// fake bucket's when open is nil.
+func newFallbackTestOn(t *testing.T, open func() backendStore) *fallbackTest {
 	// Open the write-back store over a Volume, which marks in the transaction
 	// that stores each block.
 	t.Helper()
@@ -200,7 +208,7 @@ func newFallbackTest(t *testing.T) *fallbackTest {
 	}
 
 	// Open the pack store on a fake S3 bucket.
-	f := &fallbackTest{t: t, ctx: ctx, local: local, wb: wb, bucket: &fakeS3{objects: make(map[string][]byte)}}
+	f := &fallbackTest{t: t, ctx: ctx, local: local, wb: wb, open: open, bucket: &fakeS3{objects: make(map[string][]byte)}}
 	f.srv = httptest.NewServer(f.bucket)
 	t.Cleanup(f.srv.Close)
 	f.packs = f.openPacks()
@@ -225,6 +233,9 @@ func newFallbackTest(t *testing.T) *fallbackTest {
 // openPacks opens a new pack store on the fake bucket, as a restart would.
 func (f *fallbackTest) openPacks() backendStore {
 	f.t.Helper()
+	if f.open != nil {
+		return f.open()
+	}
 	store, err := buildS3BlockStore(logrus.NewEntry(logrus.New()), &account_settings.S3Location{
 		Endpoint:   strings.TrimPrefix(f.srv.URL, "http://"),
 		Region:     "us-east-1",

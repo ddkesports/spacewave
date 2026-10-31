@@ -68,6 +68,7 @@ func (v *Volume) openPhysical(ctx context.Context) (*physicalTx, error) {
 		StoreOps: blocks,
 		marks:    &txMarks{store: p.store, kvKey: v.kvKey},
 	}
+	p.rg.SetHolderSource(txHolders{blocks: p.blocks})
 	return p, nil
 }
 

@@ -14,10 +14,16 @@ type osFile struct {
 	id fileID
 }
 
-// Open opens or creates the database at path.
+// Open opens or creates the database at path. With Options.ReadOnly it opens
+// an existing file only. The file is still opened for writing: the byte locks
+// and the reader slot need it.
 func Open(path string, opts Options) (*DB, error) {
 	// Open the file once per process.
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600) // #nosec G703 -- the caller chooses the path.
+	flags := os.O_RDWR | os.O_CREATE
+	if opts.ReadOnly {
+		flags = os.O_RDWR
+	}
+	f, err := os.OpenFile(path, flags, 0o600) // #nosec G703 -- the caller chooses the path.
 	if err != nil {
 		return nil, err
 	}
