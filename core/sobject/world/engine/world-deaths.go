@@ -136,22 +136,20 @@ func (n *pendingNet) poll(seq uint64, from, to *block.BlockRef) bool {
 }
 
 // net returns what died in the interval. A page a successful put reported the
-// store held is found; a put that failed or did not report counts its pages
-// created, which leaks. Call it once ready.
+// store held is found; a page no successful put stored is never listed dead,
+// which leaks when another path stored it. Call it once ready.
 func (n *pendingNet) net() *block.Replacements {
-	found := make(map[string]struct{})
+	puts := make(map[string]bool)
 	for _, put := range n.puts {
 		if put.receipt.Err() != nil {
 			continue
 		}
 		existed := put.receipt.Existed()
 		for i, key := range put.keys {
-			if i < len(existed) && existed[i] {
-				found[key] = struct{}{}
-			}
+			puts[key] = puts[key] || (i < len(existed) && existed[i])
 		}
 	}
-	return n.steps.Join().Net(found)
+	return n.steps.Join().Net(puts)
 }
 
 // worldDeaths gathers the World transitions the engine's block engines commit,
@@ -185,7 +183,8 @@ type worldDeaths struct {
 	putKeys int
 }
 
-// newWorldDeaths starts gathering at the World root from.
+// newWorldDeaths starts gathering at from, a World the store holds, or with
+// the first interval forfeited when from is nil.
 func newWorldDeaths(from *block.BlockRef) *worldDeaths {
 	return &worldDeaths{from: from.Clone()}
 }

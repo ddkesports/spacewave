@@ -30,6 +30,12 @@ type Replacements struct {
 	// as when the root moves onto a page below it; applying the record takes
 	// that count back.
 	Held []*BlockRef
+	// Existed lists the live pages whose edge from the new tree was counted
+	// already: a put found the page stored, or only found or untouched pages
+	// name it. When a listed parent of one frees, the page loses that
+	// parent's count. The old root is among them when the new tree reaches
+	// it through an existing page, and then loses the lineage's count.
+	Existed []*BlockRef
 }
 
 // Expand visits each page in Removed and each page under one, stopping at the

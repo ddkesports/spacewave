@@ -103,12 +103,14 @@ func (v *Volume) GetFlows() *volume.VolumeFlows {
 		})
 	}
 
-	// Report what the storage counts, the deadlist checks and revived puts.
+	// Report what the storage counts, the deadlist applies and revived puts.
 	if v.storageFlows != nil {
 		v.storageFlows(flows)
 	}
 	flows.DeadlistsChecked = v.deadlistsChecked.Load()
 	flows.DeadlistLivePages = v.deadlistLivePages.Load()
+	flows.DeadlistLeakedPages = v.deadlistLeakedPages.Load()
+	flows.DeadlistCountUnderflows = v.deadlistCountUnderflows.Load()
 	flows.RevivedPuts = v.revivedPuts.Load()
 	return flows
 }

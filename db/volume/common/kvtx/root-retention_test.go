@@ -633,9 +633,10 @@ func TestRootRetentionSingleMarkLeavesBacklog(t *testing.T) {
 }
 
 // TestDueDeadlistCheckedAgainstMark checks that naming a deadlist record
-// counts its held pages once, that a block pass counts the pages a due record
-// lists that the mark reached and no shared count holds, releases the
-// record's name, and that a later pass sweeps the record.
+// counts its held pages once, that a block pass applies a due record in
+// shadow, taking a count from a listed counted page and counting a page it
+// would free that the mark reached, releases the record's name, and that a
+// later pass sweeps the record.
 func TestDueDeadlistCheckedAgainstMark(t *testing.T) {
 	// Hold a live page and a shared page under names.
 	v, _ := newPublicationTestVolume(t)
@@ -716,8 +717,11 @@ func TestDueDeadlistCheckedAgainstMark(t *testing.T) {
 	}
 	collect()
 	flows := v.GetFlows()
-	if flows.DeadlistsChecked != 1 || flows.DeadlistLivePages != 1 {
-		t.Fatalf("checked=%d live pages=%d, want 1 and 1", flows.DeadlistsChecked, flows.DeadlistLivePages)
+	if flows.DeadlistsChecked != 1 || flows.DeadlistLivePages != 1 || flows.DeadlistCountUnderflows != 0 {
+		t.Fatalf("checked=%d live pages=%d underflows=%d, want 1, 1 and 0", flows.DeadlistsChecked, flows.DeadlistLivePages, flows.DeadlistCountUnderflows)
+	}
+	if n := holds(shared); n != 0 {
+		t.Fatalf("shared page holds=%d after the record applied, want 0", n)
 	}
 
 	// Collect again: the record is swept, nothing is checked twice, and
@@ -768,7 +772,7 @@ func TestDueDeadlistCheckedAgainstMark(t *testing.T) {
 		name string
 		ref  *block.BlockRef
 		want uint64
-	}{{"live", live, 2}, {"shared", shared, 2}, {"fresh", fresh, 0}, {"revived", revived, 0}} {
+	}{{"live", live, 2}, {"shared", shared, 1}, {"fresh", fresh, 0}, {"revived", revived, 0}} {
 		if n := holds(c.ref); n != c.want {
 			t.Fatalf("%s page holds=%d after the revived put, want %d", c.name, n, c.want)
 		}

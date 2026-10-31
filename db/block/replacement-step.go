@@ -79,29 +79,37 @@ func (s ReplacementSteps) Join() *ReplacementStep {
 	return out
 }
 
-// Net derives what the step did to the stored pages. found holds, by
-// MarshalString, the pages whose puts found the store already held them and
-// counted their holders there; nil means every put created its page. An
-// original page is never found: its put was counted.
+// Net derives what the step did to the stored pages. puts holds, by
+// MarshalString, each page a put stored, true when the put found the store
+// already held it and counted its holders there; nil means the step's puts
+// stored every page it created afresh. An original page is never found: its
+// put was counted.
 //
 // The live pages are those To reaches through the pages the step wrote:
 // created, found or replaced. A page outside them is a stored subtree the step
 // did not touch, live as a whole. The candidates are the old root, every
 // replaced page and every page one named. A candidate not live is dead: a
 // replaced or created page has its children accounted, any other heads a dead
-// subtree.
+// subtree. A dead page the step created is listed only when a put stored it: a
+// page created and dropped in memory never reached the store, and a later write
+// may store the same page afresh, which the listing would free.
 //
 // A live page that was not put, that no replaced page named, and that is not
 // the old root, is held when the new root or a created page names it: it
 // gained a holder unless its old parent died untouched, which only applying
 // the record can see. A found page's holders were counted at its put, and its
 // children gained none, since the stored copy already named them.
-func (s *ReplacementStep) Net(found map[string]struct{}) *Replacements {
+//
+// A live page existed when its edge from the new tree was counted already: a
+// put found it, or no created or replaced page and not the new root names it
+// and the step did not create it. Applying the record takes one count from it
+// when its listed parent frees, and from the old root for the lineage.
+func (s *ReplacementStep) Net(puts map[string]bool) *Replacements {
 	// Split the found pages from the created ones.
 	created := s.created
 	var foundPages map[string]pageBase
 	for key, page := range s.created {
-		_, isFound := found[key]
+		isFound := puts[key]
 		_, isOriginal := s.original[key]
 		if !isFound || isOriginal {
 			continue
@@ -152,26 +160,33 @@ func (s *ReplacementStep) Net(found map[string]struct{}) *Replacements {
 		}
 	}
 
-	// Gather the pages a replaced page named; under the one parent rule, an
-	// expansion cannot reach them.
+	// Gather the pages a replaced page named, and those a dead original page
+	// named. The applier reads an original page's child list from the store,
+	// so an expansion cannot reach its children under the one parent rule. A
+	// page the interval created may never have been stored, and a replaced
+	// page the new tree reaches is not listed, so neither child list is read.
 	named := make(map[string]*BlockRef)
-	for _, page := range s.replaced {
+	readNamed := make(map[string]struct{})
+	out := &Replacements{}
+	for key, page := range s.replaced {
+		_, isLive := live[key]
+		_, isOriginal := s.original[key]
+		if !isLive && (isOriginal || s.stored(puts, key)) {
+			out.Replaced = append(out.Replaced, page.ref)
+		}
 		for _, ref := range page.refs {
 			named[ref.MarshalString()] = ref
+			if !isLive && isOriginal {
+				readNamed[ref.MarshalString()] = struct{}{}
+			}
 		}
 	}
 
 	// Sort the dead candidates by whether their children are accounted.
-	out := &Replacements{}
-	for key, page := range s.replaced {
-		if _, ok := live[key]; !ok {
-			out.Replaced = append(out.Replaced, page.ref)
-		}
-	}
 	for key, page := range s.created {
 		_, isLive := live[key]
 		_, isReplaced := s.replaced[key]
-		if !isLive && !isReplaced {
+		if !isLive && !isReplaced && s.stored(puts, key) {
 			out.Replaced = append(out.Replaced, page.ref)
 		}
 	}
@@ -195,12 +210,12 @@ func (s *ReplacementStep) Net(found map[string]struct{}) *Replacements {
 		}
 	}
 
-	// Keep the live pages that no replaced page named: attached here from a
-	// position outside the touched pages, or written by this step. A written
-	// page may equal a stored page inside a removed subtree.
+	// Keep the live pages that no dead original page named: attached here
+	// from a position outside the touched pages, or written by this step. A
+	// written page may equal a stored page inside a removed subtree.
 	from := s.From.MarshalString()
 	for key, ref := range live {
-		if _, isNamed := named[key]; isNamed {
+		if _, isNamed := readNamed[key]; isNamed {
 			continue
 		}
 		out.Kept = append(out.Kept, ref)
@@ -211,5 +226,25 @@ func (s *ReplacementStep) Net(found map[string]struct{}) *Replacements {
 			out.Held = append(out.Held, ref)
 		}
 	}
+
+	// List the live pages whose edge from the new tree existed.
+	for key, ref := range live {
+		_, isFound := foundPages[key]
+		_, isDirect := direct[key]
+		_, isCreated := created[key]
+		if isFound || (!isDirect && !isCreated) {
+			out.Existed = append(out.Existed, ref)
+		}
+	}
 	return out
+}
+
+// stored reports whether the page under key, which the step wrote, may be
+// stored: an original page, or one a put stored. nil puts stored every page.
+func (s *ReplacementStep) stored(puts map[string]bool, key string) bool {
+	if _, isOriginal := s.original[key]; isOriginal || puts == nil {
+		return true
+	}
+	_, ok := puts[key]
+	return ok
 }

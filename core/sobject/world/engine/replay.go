@@ -387,6 +387,17 @@ func (r *replayer) liveRoots(heads ...*block.BlockRef) []*block.BlockRef {
 	return append(live, heads...)
 }
 
+// storedRoot returns root when the store holds its World, or nil. Every World
+// is stored without the page view; with it, only the Worlds the replay base
+// names are, and a head only kept in memory, such as one replay rebuilt after
+// a restart, is not.
+func (r *replayer) storedRoot(root *block.BlockRef) *block.BlockRef {
+	if r.pages == nil || slices.ContainsFunc(r.baseRoots, root.EqualsRef) {
+		return root
+	}
+	return nil
+}
+
 // positionsAbove returns the positions after the last one whose World is
 // base. A checkpoint at a replayed position covers the positions up to it, and
 // the order of the rest is unchanged, so their outcomes stand.
@@ -848,8 +859,13 @@ func (r *replayer) replay(
 	set *sobject.SOOperationSet,
 	fork *replayFork,
 ) (state *InnerState, outcomes []replayOutcome, err error) {
-	// Advance one World through the pass and fence its blocks at the end.
-	w := newReplayWorld(r.c, r.store())
+	// Advance one World through the pass and fence its blocks at the end. The
+	// page view keeps the pass's World pages until a base names them.
+	store := r.store()
+	if r.pages != nil {
+		store = r.pages.keeping()
+	}
+	w := newReplayWorld(r.c, store)
 	w.opts = r.transitions()
 	defer func() {
 		if cerr := w.close(ctx); cerr != nil {

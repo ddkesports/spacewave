@@ -140,10 +140,13 @@ type Volume struct {
 	healthDueAt atomic.Uint64
 	// puts counts the new blocks of each write path, for the flows.
 	puts [numPutPaths]putCount
-	// deadlistsChecked and deadlistLivePages count the due deadlist records
-	// the collector checked and the listed pages its mark reached, for the
-	// flows.
-	deadlistsChecked, deadlistLivePages atomic.Uint64
+	// deadlistsChecked, deadlistLivePages, deadlistLeakedPages and
+	// deadlistCountUnderflows count, for the flows, the due deadlist records
+	// the collector applied in shadow, the pages they would free that its
+	// mark reached, the pages they kept that it did not reach, and the count
+	// changes that would go below zero.
+	deadlistsChecked, deadlistLivePages          atomic.Uint64
+	deadlistLeakedPages, deadlistCountUnderflows atomic.Uint64
 	// revivedPuts counts the marked entries puts found absent and stored
 	// afresh, for the flows.
 	revivedPuts atomic.Uint64

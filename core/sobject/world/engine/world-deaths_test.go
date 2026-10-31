@@ -48,10 +48,11 @@ func TestWorldDeathsComposesAcceptedChain(t *testing.T) {
 		return ref, log.Take(ref)
 	}
 
-	// dead returns what died across net.
+	// dead returns what died across net. The commits store their pages
+	// directly rather than through tracked puts, so every page counts as
+	// stored afresh.
 	dead := func(net *pendingNet) []*block.BlockRef {
-		net.seal(nil)
-		return net.net().Replaced
+		return net.steps.Join().Net(nil).Replaced
 	}
 
 	// A local fork from a to x, but replay accepted a to b to c: a and b die,

@@ -1629,7 +1629,7 @@
       ]
     },
     "github.com/s4wave/spacewave/db/block": {
-      "hash": "c68dbf9d9e6da68049f191b1e1ba274b5e3a11f17695d17388ae2a0f5bb4f192",
+      "hash": "a14b826fabe6d19f086eadd4ed7ac0ec4c934d008a4006a1f8cd88a120b98f9c",
       "generatedFiles": [
         "db/block/block.pb.go",
         "db/block/block.pb.ts"
