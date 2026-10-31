@@ -26,4 +26,6 @@ var (
 	ErrTxTooLarge = errors.New("transaction exceeds the maximum commit size")
 	// ErrClosed is returned when the database is closed.
 	ErrClosed = errors.New("database is closed")
+	// ErrReadOnly is returned when a read-only handle is asked to write.
+	ErrReadOnly = errors.New("database is open read-only")
 )

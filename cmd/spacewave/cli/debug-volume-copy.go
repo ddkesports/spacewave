@@ -23,7 +23,7 @@ import (
 )
 
 // sqlPasswordEnv names the variable holding the SQL block store's password.
-const sqlPasswordEnv = "SPACEWAVE_SQL_PASSWORD"
+const sqlPasswordEnv = "SPACEWAVE_SQL_PASSWORD" //nolint:gosec // an environment variable name, not a credential.
 
 // uploadMarkerInfix precedes the hash in the key of a writeback store's
 // upload marker, under the volume's object stores.
@@ -132,12 +132,9 @@ func newDebugVolumeCopyCommand() *cli.Command {
 // holds when drop is set, writing progress lines to w. It removes dst when
 // the copy fails.
 func copyVolumeFile(ctx context.Context, src, dst string, reachable *volume_kvtx.CopyReachableOptions, drop *sqlDrop, w io.Writer) (err error) {
-	// Open the source, refusing a missing file, which the open would create,
-	// and a file a daemon has open.
-	if _, err := os.Stat(src); err != nil {
-		return err
-	}
-	sdb, err := s4db.Open(src, s4db.Options{})
+	// Open the source read-only, which never creates or writes it, and refuse
+	// a file a daemon has open.
+	sdb, err := s4db.Open(src, s4db.Options{ReadOnly: true})
 	if err != nil {
 		return err
 	}
