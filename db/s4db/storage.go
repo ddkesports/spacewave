@@ -21,6 +21,11 @@ type storage interface {
 	// flushBarrier orders earlier writes before later ones, reporting
 	// whether it also made them durable.
 	flushBarrier() (bool, error)
+	// writeBack starts writing n bytes at off to the drive and waits for the
+	// earlier range at doneOff, of doneN bytes, to reach it, without making
+	// either durable. A checkpoint calls it after each batch of pages, so it
+	// keeps little queued ahead of the flushes commits wait on.
+	writeBack(off, n, doneOff, doneN int64) error
 	// punch deallocates n bytes at off, keeping the file length.
 	punch(off, n int64) error
 	// lock takes a write lock on the byte at off, waiting for other holders

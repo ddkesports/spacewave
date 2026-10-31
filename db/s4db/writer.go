@@ -939,9 +939,24 @@ var errDropped = errors.New("checkpoint space reloaded")
 
 // newTree returns the tree of st, writing its pages through the database
 // file and cache. The caller sets the writer's reserve function.
+//
+// Commits flush the whole file, so pages the checkpoint left queued would hold
+// up their flushes. Each batch waits out a running flush, then starts to the
+// drive at once while the batch before it finishes, so at most two batches
+// queue ahead of a commit's flush.
 func (w *writer) newTree(st *state) *tree {
+	var doneOff, doneN int64
 	out := &pageWriter{cache: w.db.p.cache, write: func(buf []byte, page uint64) error {
-		_, err := w.db.s.WriteAt(buf, pageOff(page))
+		// Write the batch behind any running flush.
+		w.db.flush.yield()
+		off, n := pageOff(page), int64(len(buf))
+		if _, err := w.db.s.WriteAt(buf, off); err != nil {
+			return err
+		}
+
+		// Start it to the drive and wait for the last one.
+		err := w.db.s.writeBack(off, n, doneOff, doneN)
+		doneOff, doneN = off, n
 		return err
 	}}
 	return &tree{st: st, b: &builder{p: w.db.p, out: out}}

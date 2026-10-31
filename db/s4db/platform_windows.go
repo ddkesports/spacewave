@@ -90,6 +90,12 @@ func (f *osFile) flushBarrier() (bool, error) {
 	return true, f.flushDurable()
 }
 
+// writeBack does nothing: the platform has no call that writes a range back
+// without a flush.
+func (*osFile) writeBack(_, _, _, _ int64) error {
+	return nil
+}
+
 // punch deallocates n bytes at off, keeping the file length. The file is
 // marked sparse first; marking it again is a no-op.
 func (f *osFile) punch(off, n int64) error {
