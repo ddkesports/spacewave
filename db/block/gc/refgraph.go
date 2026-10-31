@@ -41,7 +41,8 @@ const (
 	kindNode byte = 'n'
 	// kindPass is the one record of a running block pass.
 	kindPass byte = 'p'
-	// kindRoot keys the registered roots.
+	// kindRoot keys the registered roots a version 2 graph carried. Nothing
+	// registers new ones; the mark seeds from those that remain.
 	kindRoot byte = 'r'
 	// kindSeen keys the seen record of a block the sharing walk sighted
 	// once, as WalkSharing describes.
@@ -718,39 +719,6 @@ func (g *RefGraph) RemoveObjectRoot(ctx context.Context, objectKey string, ref *
 		return nil
 	}
 	return g.RemoveRef(ctx, ObjectIRI(objectKey), target)
-}
-
-// AddRoot registers node as a root.
-func (g *RefGraph) AddRoot(ctx context.Context, node string) error {
-	return g.transaction(ctx, true, func(ctx context.Context, tx kvtx.Tx) error {
-		key := graphKey(kindRoot, node)
-		found, err := tx.Exists(ctx, key)
-		if err != nil || found {
-			return err
-		}
-		return tx.Set(ctx, key, nil)
-	})
-}
-
-// RemoveRoot removes root membership without changing the node's edges.
-func (g *RefGraph) RemoveRoot(ctx context.Context, node string) error {
-	return g.deleteRecord(ctx, graphKey(kindRoot, node))
-}
-
-// deleteRecord treats a missing record as a no-op.
-func (g *RefGraph) deleteRecord(ctx context.Context, key []byte) error {
-	return g.transaction(ctx, true, func(ctx context.Context, tx kvtx.Tx) error {
-		found, err := tx.Exists(ctx, key)
-		if err != nil || !found {
-			return err
-		}
-		return tx.Delete(ctx, key)
-	})
-}
-
-// GetRootNodes returns the registered roots.
-func (g *RefGraph) GetRootNodes(ctx context.Context) ([]string, error) {
-	return g.list(ctx, graphKey(kindRoot))
 }
 
 // Close leaves the store's lifetime with its owner.

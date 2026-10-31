@@ -81,12 +81,19 @@ func (p SharingPhase) Walking() bool {
 	return false
 }
 
+// Running reports whether the walk has slices left to run: it is building
+// the counts, or forgetting its seen records after completing them.
+func (p SharingPhase) Running() bool {
+	return p.Walking() || p == SharingForgetting
+}
+
 // SharingState is the state of a graph's sharing walk.
 type SharingState struct {
 	// Phase is the walk's phase.
 	Phase SharingPhase
-	// Doubt reports that the walk sighted a stored block whose references
-	// are unknown, so some counts may be short.
+	// Doubt reports that the walk met a holder it cannot count, a stored
+	// block whose references are unknown or a registered root naming a
+	// block, so some counts may be short.
 	Doubt bool
 	// cursor is the key after the last record the phase walked.
 	cursor []byte
@@ -164,13 +171,14 @@ func (g *RefGraph) GetSharing(ctx context.Context) (SharingState, error) {
 
 // BeginSharing starts a new sharing walk, or completes the counts at once when
 // the graph tracks no block, so every count starts at its block's first write.
-// A walk already running keeps its place.
+// A walk already running, or forgetting after complete counts, keeps its
+// place.
 func (g *RefGraph) BeginSharing(ctx context.Context) (SharingState, error) {
 	var s SharingState
 	err := g.transaction(ctx, true, func(ctx context.Context, tx kvtx.Tx) error {
 		// Keep a running walk.
 		var err error
-		if s, err = readSharingTx(ctx, tx); err != nil || s.Phase.Walking() {
+		if s, err = readSharingTx(ctx, tx); err != nil || s.Phase.Running() {
 			return err
 		}
 
@@ -199,7 +207,7 @@ func (g *RefGraph) StopSharing(ctx context.Context) error {
 }
 
 // TracksBlocks reports whether the graph tracks a block: whether it holds a
-// child list or an owner edge of a block.
+// child list, or an owner edge or a registered root of a block.
 func (g *RefGraph) TracksBlocks(ctx context.Context) (bool, error) {
 	var tracked bool
 	err := g.transaction(ctx, false, func(ctx context.Context, tx kvtx.Tx) error {
@@ -210,11 +218,11 @@ func (g *RefGraph) TracksBlocks(ctx context.Context) (bool, error) {
 	return tracked, err
 }
 
-// tracksBlocksTx reports whether tx holds a child list, or an owner edge of a
-// block. An incoming record of a block begins with its hash type, which sorts
-// after a text node's zero byte.
+// tracksBlocksTx reports whether tx holds a child list, or an owner edge or a
+// registered root of a block. A block node begins with its hash type, which
+// sorts after a text node's zero byte.
 func tracksBlocksTx(ctx context.Context, tx kvtx.Tx) (bool, error) {
-	for _, prefix := range [][]byte{{kindChildren}, {kindIncoming, textNode + 1}} {
+	for _, prefix := range [][]byte{{kindChildren}, {kindIncoming, textNode + 1}, {kindRoot, textNode + 1}} {
 		if tracked, err := hasRecordTx(ctx, tx, prefix); err != nil || tracked {
 			return tracked, err
 		}
@@ -246,7 +254,7 @@ func (g *RefGraph) WalkSharing(ctx context.Context, yield func() bool) (SharingS
 		if s, err = readSharingTx(ctx, tx); err != nil {
 			return err
 		}
-		if !s.Phase.Walking() && s.Phase != SharingForgetting {
+		if !s.Phase.Running() {
 			return nil
 		}
 
@@ -268,8 +276,15 @@ func (g *RefGraph) WalkSharing(ctx context.Context, yield func() bool) (SharingS
 			s.cursor = append(records[len(records)-1].key, 0)
 		}
 
-		// Move to the next phase after the last record.
+		// Move to the next phase after the last record. A registered root
+		// naming a block holds it, but the walk sights only child lists and
+		// owner edges, so such a root puts the counts in doubt.
 		if done {
+			if s.Phase == SharingOwners && !s.Doubt {
+				if s.Doubt, err = hasRecordTx(ctx, tx, []byte{kindRoot, textNode + 1}); err != nil {
+					return err
+				}
+			}
 			s.Phase, s.cursor = nextSharingPhase(s.Phase)
 		}
 		return writeSharingTx(ctx, tx, s)

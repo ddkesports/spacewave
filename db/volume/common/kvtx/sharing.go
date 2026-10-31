@@ -68,13 +68,13 @@ func (v *Volume) walkSharing(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if s.Phase.Walking() || s.Phase == block_gc.SharingForgetting {
+		if s.Phase.Running() {
 			continue
 		}
 
 		// Report a walk in doubt, whose counts may be short.
 		if s.Doubt && v.le != nil {
-			v.le.Warn("shared counts are in doubt: the sharing walk met a stored block of unknown references")
+			v.le.Warn("shared counts are in doubt: the sharing walk met a holder it cannot count")
 		}
 		return nil
 	}

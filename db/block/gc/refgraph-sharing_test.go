@@ -220,7 +220,7 @@ func testSharingWalkProperty(t *testing.T, seed uint64, removals bool) {
 		}
 
 		// Interleave one-record slices with writes until the walk ends.
-		for steps := 0; s.Phase.Walking() || s.Phase == SharingForgetting; steps++ {
+		for steps := 0; s.Phase.Running(); steps++ {
 			if steps > 100000 {
 				t.Fatalf("round %d: walk did not end, phase %c", round, s.Phase)
 			}
@@ -295,6 +295,7 @@ func TestSharingWalkGates(t *testing.T) {
 	if err := rg.ApplyRefBatch(ctx, adds, nil); err != nil {
 		t.Fatal(err)
 	}
+	addTestRoot(t, rg, NodeGCRoot)
 
 	// While walking, AddHolds adds nothing and ChangeHolds refuses.
 	if _, err := rg.BeginSharing(ctx); err != nil {
@@ -318,13 +319,14 @@ func TestSharingWalkGates(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !s.Phase.Walking() && s.Phase != SharingForgetting {
+			if !s.Phase.Running() {
 				return s
 			}
 		}
 	}
 
-	// A hole and a tracked leaf leave the counts certain.
+	// A hole, a tracked leaf and a root that is not a block leave the counts
+	// certain.
 	if s := walk(); s.Phase != SharingComplete || s.Doubt {
 		t.Fatalf("walk ended in phase %c doubt %v", s.Phase, s.Doubt)
 	}
@@ -353,5 +355,25 @@ func TestSharingWalkGates(t *testing.T) {
 	}
 	if s, err := rg.GetSharing(ctx); err != nil || !s.Doubt {
 		t.Fatalf("doubt not kept: %v %v", s.Doubt, err)
+	}
+
+	// A registered root naming a block tracks it, and the walk, which cannot
+	// count it, ends in doubt. Beginning again while it forgets keeps its
+	// place.
+	rg = newTestRefGraph(t)
+	addTestRoot(t, rg, leaf)
+	if s, err := rg.BeginSharing(ctx); err != nil || s.Phase != SharingClearingHolds {
+		t.Fatalf("rooted graph phase %c err %v, want a walk", s.Phase, err)
+	}
+	for s.Phase != SharingForgetting {
+		if s, err = rg.WalkSharing(ctx, func() bool { return true }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if s, err := rg.BeginSharing(ctx); err != nil || s.Phase != SharingForgetting {
+		t.Fatalf("begin while forgetting gave phase %c err %v", s.Phase, err)
+	}
+	if s := walk(); s.Phase != SharingComplete || !s.Doubt {
+		t.Fatalf("rooted walk ended in phase %c doubt %v, want doubt", s.Phase, s.Doubt)
 	}
 }
