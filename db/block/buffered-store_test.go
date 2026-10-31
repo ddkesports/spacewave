@@ -484,7 +484,7 @@ func TestBufferedStoreReportsDrainErrorAtFlush(t *testing.T) {
 	// Configure the backing store to reject draining writes.
 	ctx := context.Background()
 	inner := newCountStore(hash.HashType_HashType_BLAKE3)
-	inner.failPut = context.DeadlineExceeded
+	inner.failPut = errors.New("connection lost")
 	store := NewBufferedStore(ctx, inner)
 
 	// Queue a block before the failing drain.
@@ -507,11 +507,31 @@ func TestBufferedStoreReportsDrainErrorAtFlush(t *testing.T) {
 	if found {
 		t.Fatal("expected failed drain to avoid persistence")
 	}
+	if n := store.DrainWriteFailures(); n != 1 {
+		t.Fatalf("counted %d failed writes, want 1", n)
+	}
 
-	// Verify the buffer rejects writes after its drain failure.
-	_, _, err = store.PutBlock(ctx, []byte("again"), nil)
-	if err == nil {
-		t.Fatal("expected buffered store to reject new writes after drain failure")
+	// The buffer keeps accepting writes under its bound after the failure.
+	again, _, err := store.PutBlock(ctx, []byte("again"), nil)
+	if err != nil {
+		t.Fatalf("buffered put after a failed drain: %v", err)
+	}
+
+	// Once the backing store recovers, a sync writes both blocks.
+	inner.mtx.Lock()
+	inner.failPut = nil
+	inner.mtx.Unlock()
+	if _, err := store.Sync(ctx); err != nil {
+		t.Fatalf("sync after recovery: %v", err)
+	}
+	for _, r := range []*BlockRef{ref, again} {
+		found, err := inner.GetBlockExists(ctx, r)
+		if err != nil {
+			t.Fatal(err.Error())
+		}
+		if !found {
+			t.Fatal("a block queued across the failure was not written")
+		}
 	}
 }
 

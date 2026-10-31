@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"slices"
+	"time"
 
 	"github.com/aperturerobotics/util/broadcast"
 	"github.com/aperturerobotics/util/csync"
@@ -65,8 +66,15 @@ type BufferedStore struct {
 	// inFlight counts borrowed batches, which remain readable and capacity-accounted.
 	inFlight int
 
-	// drainErr captures the last drain error to surface on subsequent calls.
+	// drainErr poisons the buffer after a written root's reader pin fails to
+	// hold. A failed batch write does not set it; the batch stays queued and a
+	// later drain retries it.
 	drainErr error
+	// writeFailures counts the batch writes that failed in a row, which sets
+	// the drain's back-off. A written batch resets it.
+	writeFailures int
+	// writeFailuresTotal counts every failed batch write.
+	writeFailuresTotal uint64
 
 	// pins holds the reader pins of pending roots by ref key until the drain
 	// writes each root.
@@ -716,17 +724,31 @@ func (s *BufferedStore) drainNextBatch(ctx context.Context) (bool, error) {
 	err := s.writeBatch(writeCtx, batch.entries)
 	writeTask.End()
 
-	// Complete the batch and publish any persistent drain failure.
+	// Complete the batch, which requeues it when the write failed.
 	var pins []*bufferedPin
+	var backoff time.Duration
 	s.bcast.HoldLock(func(broadcastFn func(), _ func() <-chan struct{}) {
 		s.completeBatchLocked(batch, err)
 		if err == nil {
+			s.writeFailures = 0
 			pins = s.takeWrittenPinsLocked(batch)
 		} else if ctx.Err() == nil {
-			s.drainErr = err
+			s.writeFailures++
+			s.writeFailuresTotal++
+			backoff = drainBackoff(s.writeFailures)
 		}
 		broadcastFn()
 	})
+
+	// Back off before returning a failed write, holding drainMu so the next
+	// drain retries the batch no sooner.
+	if backoff != 0 {
+		trace.Logf(ctx, "hydra/block/buffered-store/drain/write-failed", "backoff=%s err=%v", backoff, err)
+		select {
+		case <-ctx.Done():
+		case <-time.After(backoff):
+		}
+	}
 
 	// Move the reader pins of written roots to the inner store. A pin that
 	// fails to hold poisons the buffer, since its holder relies on it.
@@ -745,6 +767,22 @@ func (s *BufferedStore) drainNextBatch(ctx context.Context) (bool, error) {
 		return true, err
 	}
 	return true, nil
+}
+
+// drainBackoff returns the wait after n failed batch writes in a row,
+// doubling from 50ms to at most 5s.
+func drainBackoff(n int) time.Duration {
+	return min(50*time.Millisecond<<min(n-1, 7), 5*time.Second)
+}
+
+// DrainWriteFailures returns the number of batch writes to the inner store
+// that failed since the store was built.
+func (s *BufferedStore) DrainWriteFailures() uint64 {
+	var n uint64
+	s.bcast.HoldLock(func(_ func(), _ func() <-chan struct{}) {
+		n = s.writeFailuresTotal
+	})
+	return n
 }
 
 // takeDrainBatchLocked pops the next batch from the queue, bounded by
