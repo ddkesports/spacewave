@@ -3,6 +3,7 @@
 package block_store_s3
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -19,6 +20,7 @@ import (
 //	e/{pack id}   the PackfileEntry of the pack, as the entries/ object holds it
 //	p/{pack id}   the pack's number and whether its keys are all in h rows
 //	h{digest tail} the number of a pack that holds the block, 4 bytes
+//	t/{pack id}   the raw kvfile index tail of the pack, as its reader read it
 //
 // Pack numbers grow by one for each pack the index learns and are never reused,
 // so an h row of a removed pack names a number no pack holds and reads as a
@@ -35,10 +37,14 @@ import (
 //   - An h row names the number of the last pack that wrote it, so a block
 //     written twice is found in one pack, and the lookups fall back to the
 //     filters when that pack has left the manifest.
+//   - A t/ row holds the tail bytes of a pack id, which never change, so a
+//     reader loads it instead of reading the tail again; removing the pack
+//     removes its row.
 const (
 	indexEntryPrefix = "e/"
 	indexPackPrefix  = "p/"
 	indexHashPrefix  = "h"
+	indexTailPrefix  = "t/"
 	// indexKeyBytes is the bytes of a block key an h row key keeps.
 	indexKeyBytes = 16
 
@@ -309,6 +315,39 @@ func (x *packIndex) remove(ctx context.Context, ids []string) error {
 		if err := tx.Delete(ctx, []byte(indexPackPrefix+id)); err != nil {
 			return err
 		}
+		if err := tx.Delete(ctx, []byte(indexTailPrefix+id)); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+// Get returns the stored index tail of a pack, as the packfile store's index
+// cache.
+func (x *packIndex) Get(ctx context.Context, packID string) ([]byte, bool, error) {
+	// Read the row, copying it out of the transaction.
+	tx, err := x.store.NewTransaction(ctx, false)
+	if err != nil {
+		return nil, false, err
+	}
+	defer tx.Discard()
+	data, found, err := tx.Get(ctx, []byte(indexTailPrefix+packID))
+	if err != nil || !found {
+		return nil, false, err
+	}
+	return bytes.Clone(data), true, nil
+}
+
+// Set stores the index tail of a pack, as the packfile store's index cache.
+func (x *packIndex) Set(ctx context.Context, packID string, data []byte) error {
+	// Write the row in its own transaction.
+	tx, err := x.store.NewTransaction(ctx, true)
+	if err != nil {
+		return err
+	}
+	defer tx.Discard()
+	if err := tx.Set(ctx, []byte(indexTailPrefix+packID), bytes.Clone(data)); err != nil {
+		return err
 	}
 	return tx.Commit(ctx)
 }

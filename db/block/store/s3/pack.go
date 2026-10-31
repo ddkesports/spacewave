@@ -217,12 +217,18 @@ func NewPackStore(le *logrus.Entry, client ObjectStore, bucket, prefix string, o
 	}
 
 	// Read the known packfiles and start compaction.
-	s.packs = packfile_store.NewPackfileStore(s.openPack, nil)
+	// The local index, when there is one, also keeps each pack's index tail,
+	// so a restart does not read the tails again.
+	var tails packfile_store.IndexCache
+	if opts.Index != nil {
+		s.index = newPackIndex(opts.Index)
+		tails = s.index
+	}
+	s.packs = packfile_store.NewPackfileStore(s.openPack, tails)
 	s.compactor.SetRoutine(s.runCompaction)
 	s.compactor.SetContext(context.Background(), false)
 	s.refresher.SetRoutine(s.runRefresh)
-	if opts.Index != nil {
-		s.index = newPackIndex(opts.Index)
+	if s.index != nil {
 		s.packs.SetLocator(s.index)
 		s.indexer = routine.NewRoutineContainerWithLogger(
 			le.WithField("routine", "pack-index"),
