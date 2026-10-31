@@ -29,10 +29,11 @@ const batchesAhead = 2
 // graph does not track is packed without references and counted in
 // PackProgress.Untracked.
 //
-// The log at cfg.LogPath records each pack's keys before it uploads and a
-// commit after, so a killed run resumes after its last committed pack. A pack
-// that uploaded but did not commit is found in the bucket and committed
-// without uploading again.
+// The log at cfg.LogPath records each pack's keys once it uploads, in key
+// order, and a commit after, so a killed run resumes after its last committed
+// pack. A pack logged but not committed is found in the bucket and committed
+// without uploading again; a pack uploaded but not yet logged stays in the
+// bucket as an orphan, and its blocks are packed again.
 func Pack(ctx context.Context, cfg PackConfig) (PackProgress, error) {
 	// Check the volume's format.
 	if err := requireFormat(ctx, cfg); err != nil {

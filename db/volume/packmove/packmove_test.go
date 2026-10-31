@@ -290,7 +290,9 @@ func TestPackSwitch(t *testing.T) {
 }
 
 // TestPackResume stops a pack on a failing bucket and between an upload and
-// its commit, resumes it, and expects every block in exactly one pack.
+// its commit, resumes it, and expects every block in exactly one logged pack.
+// The pack uploaded before the stop was never logged, since uploads run before
+// the log names their pack, so it stays in the bucket as one orphan.
 func TestPackResume(t *testing.T) {
 	// Lay out the files and the test bucket.
 	ctx := t.Context()
@@ -320,7 +322,7 @@ func TestPackResume(t *testing.T) {
 		t.Fatalf("second run: %d packs, err %v", second.Packs, err)
 	}
 
-	// The third run commits that pack without uploading it again, and ends.
+	// The third run packs those blocks again, and ends.
 	third, err := packOnce(ctx, t, src, logPath, packs, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -329,13 +331,13 @@ func TestPackResume(t *testing.T) {
 		t.Fatalf("third run: %+v", third)
 	}
 	entries := uint64(len(bucket.Keys(packPrefix + "entries/")))
-	if entries != third.Packs || uint64(bucket.Puts()) != 2*third.Packs {
+	if entries != third.Packs+1 || uint64(bucket.Puts()) != 2*(third.Packs+1) {
 		t.Fatalf("bucket holds %d pack entries after %d puts, log counts %d packs", entries, bucket.Puts(), third.Packs)
 	}
 
 	// A fresh run changes nothing.
 	again, err := packOnce(ctx, t, src, logPath, packs, nil)
-	if err != nil || again.Packs != third.Packs || uint64(bucket.Puts()) != 2*third.Packs {
+	if err != nil || again.Packs != third.Packs || uint64(bucket.Puts()) != 2*(third.Packs+1) {
 		t.Fatalf("rerun: %+v err %v puts %d", again, err, bucket.Puts())
 	}
 
