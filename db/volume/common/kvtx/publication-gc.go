@@ -448,7 +448,7 @@ func (v *Volume) sweepBlockPass(ctx context.Context, actual *transactionRefGraph
 	// as background work, which keeps the index leaves it reads out of the
 	// page cache.
 	start := time.Now()
-	mark, err := markBlocks(block.WithBackground(ctx))
+	mark, err := markBlocks(block.WithBackground(ctx), block_gc.KeepOwnerEdges(rootOwnerKind))
 	stats.MarkDuration += time.Since(start)
 	if err != nil {
 		return nil, false, err
@@ -456,6 +456,14 @@ func (v *Volume) sweepBlockPass(ctx context.Context, actual *transactionRefGraph
 	stats.RecordMark(mark)
 	if !mark.Awaitable() {
 		return mark, false, nil
+	}
+
+	// Check the due deadlist records against a mark that read every list.
+	// A failed check leaves the records for the next pass.
+	if mark.Unknown == 0 {
+		if err := v.checkDueDeadlists(ctx, mark); err != nil && v.le != nil {
+			v.le.WithError(err).Warn("unable to check due deadlist records")
+		}
 	}
 
 	// Log the namers of the holes the mark settled before anything can

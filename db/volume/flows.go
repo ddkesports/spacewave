@@ -43,6 +43,12 @@ type VolumeFlows struct {
 	// Values are the values of each key family, empty when the storage does
 	// not count them.
 	Values []ValueFlow
+	// DeadlistsChecked is the number of due deadlist records the collector
+	// checked against its mark.
+	DeadlistsChecked uint64
+	// DeadlistLivePages is the number of pages those records listed as dead
+	// that the mark reached.
+	DeadlistLivePages uint64
 }
 
 // FlowReporter is implemented by a volume that counts the data it writes.

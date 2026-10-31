@@ -137,6 +137,10 @@ type Volume struct {
 	healthDueAt atomic.Uint64
 	// puts counts the new blocks of each write path, for the flows.
 	puts [numPutPaths]putCount
+	// deadlistsChecked and deadlistLivePages count the due deadlist records
+	// the collector checked and the listed pages its mark reached, for the
+	// flows.
+	deadlistsChecked, deadlistLivePages atomic.Uint64
 	// le logs the first caller of each write path putting a block without
 	// its references, may be nil.
 	le *logrus.Entry

@@ -47,7 +47,12 @@ type BlockMark struct {
 	// pass to pass while the World's data does not is an owner never
 	// released.
 	Owners map[string]OwnerCount
+	// OwnerEdges are the forward records of the owners of the kind
+	// KeepOwnerEdges named, in key order.
+	OwnerEdges []RefEdge
 
+	// keepKind is the owner kind whose records OwnerEdges keeps, or empty.
+	keepKind string
 	// awaiting lists the blocks Unknown counts, each with its namer, up to
 	// settleLimit of them. A write can commit the edge that adopts a block
 	// before the staging edge that creates its list, so the list may yet
@@ -329,11 +334,11 @@ func (m *BlockMark) takeAwaiting() []namedNode {
 // it does not reach are the sweep's candidates. Opening a pass with
 // BeginBlockPass before the mark lets a sweep rescue the blocks writes adopt
 // after the snapshot.
-func (g *RefGraph) MarkBlocks(ctx context.Context) (*BlockMark, error) {
+func (g *RefGraph) MarkBlocks(ctx context.Context, opts ...MarkOption) (*BlockMark, error) {
 	var mark *BlockMark
 	err := g.transaction(ctx, false, func(ctx context.Context, tx kvtx.Tx) error {
 		// Mark the seeds, stacking the blocks to walk.
-		mark = &BlockMark{Live: NewNodeSet()}
+		mark = newBlockMark(opts)
 		if err := trackCreatedTx(ctx, tx, mark); err != nil {
 			return err
 		}
@@ -399,7 +404,7 @@ func seedMarkTx(ctx context.Context, tx kvtx.Tx, mark *BlockMark, seed func(node
 		}
 
 		// Count and seed them.
-		mark.countOwner(subject, last)
+		mark.countOwner(subject, object, last)
 		last = subject
 		seed(subject, "")
 		seed(object, subject)

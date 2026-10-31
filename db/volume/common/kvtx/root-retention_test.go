@@ -631,3 +631,59 @@ func TestRootRetentionSingleMarkLeavesBacklog(t *testing.T) {
 		t.Fatalf("pending proofs = %d, want %d", n, len(roots))
 	}
 }
+
+// TestDueDeadlistCheckedAgainstMark checks that a block pass counts the pages
+// a due deadlist record lists that the mark reached, releases the record's
+// name, and that a later pass sweeps the record.
+func TestDueDeadlistCheckedAgainstMark(t *testing.T) {
+	// Hold a live page under a name.
+	v, _ := newPublicationTestVolume(t)
+	ctx := t.Context()
+	data := []byte("live page")
+	live, err := block.BuildBlockRef(data, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gone, err := block.BuildBlockRef([]byte("dead page"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := []*block.PutBatchEntry{{Ref: live, Data: data, RefsKnown: true}}
+
+	// Name a due record that lists the live page and a dead one.
+	dead := &block.Replacements{Replaced: []*block.BlockRef{live}, Removed: []*block.BlockRef{gone}}
+	record, recordRef, err := block.EncodeDeadlist(1, nil, nil, dead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := []block.NamedRoot{{Name: "head", Ref: live}, {Name: block.DeadlistDueRootName(1), Ref: recordRef}}
+	if err := v.SetBucketRoots(ctx, "bucket", append(entries, record...), roots); err != nil {
+		t.Fatal(err)
+	}
+
+	// Collect and check the record was counted and its name released.
+	collect := func() {
+		t.Helper()
+		if _, err := block_gc.NewCollector(v.GetRefGraph(), v, nil).Collect(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	collect()
+	flows := v.GetFlows()
+	if flows.DeadlistsChecked != 1 || flows.DeadlistLivePages != 1 {
+		t.Fatalf("checked=%d live pages=%d, want 1 and 1", flows.DeadlistsChecked, flows.DeadlistLivePages)
+	}
+
+	// Collect again: the record is swept, nothing is checked twice, and
+	// the live page stays.
+	collect()
+	if flows := v.GetFlows(); flows.DeadlistsChecked != 1 {
+		t.Fatalf("checked=%d after a second pass, want 1", flows.DeadlistsChecked)
+	}
+	if found, err := v.GetBlockExists(ctx, recordRef); err != nil || found {
+		t.Fatalf("record found=%v err=%v, want swept", found, err)
+	}
+	if found, err := v.GetBlockExists(ctx, live); err != nil || !found {
+		t.Fatalf("live page found=%v err=%v, want kept", found, err)
+	}
+}

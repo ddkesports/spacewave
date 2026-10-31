@@ -102,10 +102,13 @@ func (v *Volume) GetFlows() *volume.VolumeFlows {
 		})
 	}
 
-	// Report the storage's values when it counts them.
+	// Report the storage's values when it counts them, and the deadlist
+	// checks.
 	if v.valueFlows != nil {
 		flows.Values = v.valueFlows()
 	}
+	flows.DeadlistsChecked = v.deadlistsChecked.Load()
+	flows.DeadlistLivePages = v.deadlistLivePages.Load()
 	return flows
 }
 

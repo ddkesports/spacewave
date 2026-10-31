@@ -15,9 +15,29 @@ type OwnerCount struct {
 	Edges int
 }
 
-// countOwner counts a forward record from owner. Forward records arrive in key
-// order, grouped by subject, so an owner is new when it differs from the last.
-func (m *BlockMark) countOwner(owner, last string) {
+// MarkOption configures a mark.
+type MarkOption func(*BlockMark)
+
+// KeepOwnerEdges keeps the forward records of the owners of kind, the name
+// before an owner's colon, in BlockMark.OwnerEdges. The mark reads them while
+// seeding, so keeping them costs no read.
+func KeepOwnerEdges(kind string) MarkOption {
+	return func(m *BlockMark) { m.keepKind = kind }
+}
+
+// newBlockMark returns an empty mark configured by opts.
+func newBlockMark(opts []MarkOption) *BlockMark {
+	m := &BlockMark{Live: NewNodeSet()}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// countOwner counts the forward record from owner to object, and keeps it when
+// the mark keeps owner's kind. Forward records arrive in key order, grouped by
+// subject, so an owner is new when it differs from the last.
+func (m *BlockMark) countOwner(owner, object, last string) {
 	// Count the record under the owner's kind, the name before its colon.
 	if m.Owners == nil {
 		m.Owners = make(map[string]OwnerCount)
@@ -29,6 +49,11 @@ func (m *BlockMark) countOwner(owner, last string) {
 		c.Nodes++
 	}
 	m.Owners[kind] = c
+
+	// Keep the record of a kept kind.
+	if m.keepKind != "" && kind == m.keepKind {
+		m.OwnerEdges = append(m.OwnerEdges, RefEdge{Subject: owner, Object: object})
+	}
 }
 
 // FormatOwners spells owner counts as kind=nodes/edges, sorted by kind.

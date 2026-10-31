@@ -27,6 +27,30 @@ func RootOwnerIRI(bucketID, name string) string {
 	return RootOwnerPrefix + base64.RawURLEncoding.EncodeToString([]byte(bucketID)) + "/" + base64.RawURLEncoding.EncodeToString([]byte(name))
 }
 
+// parseRootOwnerIRI returns the bucket and name of a RootOwnerIRI.
+func parseRootOwnerIRI(owner string) (bucketID, name string, ok bool) {
+	// Split the encoded bucket from the encoded name.
+	rest, ok := strings.CutPrefix(owner, RootOwnerPrefix)
+	if !ok {
+		return "", "", false
+	}
+	encBucket, encName, ok := strings.Cut(rest, "/")
+	if !ok {
+		return "", "", false
+	}
+
+	// Decode both.
+	b, err := base64.RawURLEncoding.DecodeString(encBucket)
+	if err != nil {
+		return "", "", false
+	}
+	n, err := base64.RawURLEncoding.DecodeString(encName)
+	if err != nil {
+		return "", "", false
+	}
+	return string(b), string(n), true
+}
+
 // completeWorldNode is a graph-only proof target. Sweeping a root removes its
 // proof edge together with its other immutable dependencies.
 const completeWorldNode = "world:complete"

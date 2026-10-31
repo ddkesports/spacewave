@@ -42,8 +42,8 @@ type markLimit struct {
 // store does not hold as a hole, however many there are, as settleUnknown
 // describes; the caller logs their namers with LogSettled before the pass
 // promotes.
-func (g *RefGraph) MarkBlocksScan(ctx context.Context, stored BlocksStored) (*BlockMark, error) {
-	return g.markScan(ctx, markLimit{budget: MarkReadBudget, tail: markTailLimit}, stored, nil)
+func (g *RefGraph) MarkBlocksScan(ctx context.Context, stored BlocksStored, opts ...MarkOption) (*BlockMark, error) {
+	return g.markScan(ctx, markLimit{budget: MarkReadBudget, tail: markTailLimit}, stored, nil, opts...)
 }
 
 // markScan marks like MarkBlocks, but reads the child lists in key order:
@@ -64,9 +64,9 @@ func (g *RefGraph) MarkBlocksScan(ctx context.Context, stored BlocksStored) (*Bl
 // read the edge's source logs the block, and the sweep rescues it. Seeding
 // takes both ends of every edge from a node that is not a block, so a seed
 // read early misses only edges added later, which the log covers.
-func (g *RefGraph) markScan(ctx context.Context, limit markLimit, stored BlocksStored, between func() error) (*BlockMark, error) {
+func (g *RefGraph) markScan(ctx context.Context, limit markLimit, stored BlocksStored, between func() error, opts ...MarkOption) (*BlockMark, error) {
 	// Start the blocks writes create during the pass at the young log's end.
-	mark := &BlockMark{Live: NewNodeSet()}
+	mark := newBlockMark(opts)
 	err := g.transaction(ctx, false, func(ctx context.Context, tx kvtx.Tx) error {
 		return trackCreatedTx(ctx, tx, mark)
 	})
@@ -110,7 +110,7 @@ func (g *RefGraph) markScan(ctx context.Context, limit markLimit, stored BlocksS
 		}
 
 		// Count and seed them.
-		mark.countOwner(subject, last)
+		mark.countOwner(subject, object, last)
 		last = subject
 		seed(subject)
 		seed(object)

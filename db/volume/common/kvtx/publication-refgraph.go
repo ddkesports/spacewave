@@ -118,8 +118,8 @@ func (g *transactionRefGraph) TrackedBlocks(ctx context.Context, refs []*block.B
 }
 
 // MarkBlocks marks the graph's blocks in one read snapshot.
-func (g *transactionRefGraph) MarkBlocks(ctx context.Context) (mark *block_gc.BlockMark, err error) {
-	err = g.read(ctx, func(rg *block_gc.RefGraph) error { mark, err = rg.MarkBlocks(ctx); return err })
+func (g *transactionRefGraph) MarkBlocks(ctx context.Context, opts ...block_gc.MarkOption) (mark *block_gc.BlockMark, err error) {
+	err = g.read(ctx, func(rg *block_gc.RefGraph) error { mark, err = rg.MarkBlocks(ctx, opts...); return err })
 	return
 }
 
@@ -134,8 +134,8 @@ func (g *transactionRefGraph) TraceOwners(ctx context.Context, blocks []string, 
 // the Volume does not hold. Each transaction joins the Volume's direct
 // operations on its own, so neither a snapshot nor Close waits on the whole
 // mark.
-func (g *transactionRefGraph) MarkBlocksScan(ctx context.Context) (*block_gc.BlockMark, error) {
-	return openRefGraph(&directReadStore{volume: g.volume}).MarkBlocksScan(ctx, g.volume.blocksStored)
+func (g *transactionRefGraph) MarkBlocksScan(ctx context.Context, opts ...block_gc.MarkOption) (*block_gc.BlockMark, error) {
+	return openRefGraph(&directReadStore{volume: g.volume}).MarkBlocksScan(ctx, g.volume.blocksStored, opts...)
 }
 
 // storedProbeBatch bounds the blocks one read transaction of blocksStored

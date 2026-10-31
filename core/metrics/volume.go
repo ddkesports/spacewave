@@ -90,6 +90,16 @@ var (
 		"Length of the values the volume's storage stored outside its index, by key family, since it opened.",
 		[]string{volumeLabel, "family"}, nil,
 	)
+	volumeDeadlistsCheckedDesc = prometheus.NewDesc(
+		"spacewave_volume_deadlists_checked_total",
+		"Due deadlist records the volume's collector checked against its mark, since it opened.",
+		[]string{volumeLabel}, nil,
+	)
+	volumeDeadlistLivePagesDesc = prometheus.NewDesc(
+		"spacewave_volume_deadlist_live_pages_total",
+		"Pages a checked deadlist record listed as dead that the collector's mark reached, since the volume opened; any is a deadlist error.",
+		[]string{volumeLabel}, nil,
+	)
 	volumeValueFreedBytesDesc = prometheus.NewDesc(
 		"spacewave_volume_value_freed_bytes_total",
 		"Length of the stored values outside its index that the volume's storage replaced or deleted, by key family, since it opened.",
@@ -108,6 +118,7 @@ func (volumeCollector) Describe(ch chan<- *prometheus.Desc) {
 		volumePublicationPendingDesc, volumePublicationPendingBytesDesc, volumeWriteReserveDesc,
 		volumeReserveBytesDesc, volumePutBlocksDesc, volumePutBytesDesc, volumePutExistingDesc,
 		volumePutRefusedDesc, volumeValueWrittenBytesDesc, volumeValueFreedBytesDesc,
+		volumeDeadlistsCheckedDesc, volumeDeadlistLivePagesDesc,
 	} {
 		ch <- d
 	}
@@ -142,6 +153,10 @@ func collectFlows(ch chan<- prometheus.Metric, f *volume.VolumeFlows) {
 		ch <- prometheus.MustNewConstMetric(volumeValueWrittenBytesDesc, prometheus.CounterValue, float64(v.Written), id, v.Family)
 		ch <- prometheus.MustNewConstMetric(volumeValueFreedBytesDesc, prometheus.CounterValue, float64(v.Freed), id, v.Family)
 	}
+
+	// Report the deadlist checks.
+	ch <- prometheus.MustNewConstMetric(volumeDeadlistsCheckedDesc, prometheus.CounterValue, float64(f.DeadlistsChecked), id)
+	ch <- prometheus.MustNewConstMetric(volumeDeadlistLivePagesDesc, prometheus.CounterValue, float64(f.DeadlistLivePages), id)
 }
 
 // collectVolume sends the metrics of one volume's health.
