@@ -26,7 +26,9 @@
 \* - unixfs Copy and the World change log's link: left out. Both give a page
 \*   two parents inside one tree, which ReplacementStep.Net refuses to list;
 \*   across two trees they are the SetRootRef case.
-\* Readers and the watermark are left out: a record applies only once due.
+\* - Owner edges outside a put's flush, such as a reader pin of a World root:
+\*   modeled as Pin, which adds a count, and Unpin, which queues a release.
+\* The watermark is left out: a record applies only once due.
 \*
 \* In the code, Apply is RefGraph.ResolveDeaths with ChangeHolds
 \* (refgraph-deaths.go), run one record at a time by the Volume's collector.
@@ -51,6 +53,22 @@
 \* fresh page L, so only that leaf races. RaceApply lets records apply while a
 \* commit waits for its put, to show the leaks that allows never free a live
 \* page.
+\*
+\* With Pins, a lineage may pin its current root as a reader does. The pin is an
+\* owner edge, so it counts at once, and dropping it queues a release record.
+\* Resolve takes one release as the dedicated resolver does: it takes one count
+\* from the page and stops if the page lives, and otherwise frees it and pushes
+\* one release to each child. It runs at any time after the release's commit,
+\* but not while a deadlist record is part way through: the Volume's collector
+\* runs one at a time, and a record's push-down counts for its unlisted
+\* children land only as it applies their parents.
+\*
+\* The lineage's hold on its old root stays in extra until the record applies:
+\* in the code the record's name under deadlist/ holds its From, and the move
+\* that releases the old name nets against it because both land in one physical
+\* transaction. HoldAtMove FALSE splits them: the move queues a release of the
+\* old root and Name adds the record's count later, which frees a page a new
+\* tree still names when the release resolves first.
 \*
 \* With Fails, a commit is Take then Put over the ordinary roots, and its
 \* publication may fail instead: the engine reinstalls the World from before
@@ -82,12 +100,14 @@
 \*   the interval did not find it stored. "revived" keys by last put and adds
 \*   to the record's loss each put that counted a page an earlier commit of
 \*   the interval killed.
+\* - HoldAtMove: a move and the naming of the record that holds its old root
+\*   land in one transaction.
 
 EXTENDS Integers, FiniteSets, Sequences
 
 CONSTANTS Lineages, MaxCommits, Serial, PushDown, Refined,
           CheckLineage, ClearLineage, Race, PutRule, RaceApply, Compose,
-          Fails
+          Fails, Pins, HoldAtMove
 
 None == "none"
 
@@ -119,11 +139,15 @@ VARIABLES
   queue,    \* each lineage's records, oldest first
   pending,  \* each lineage's taken root awaiting its put, or None
   ivl,      \* each lineage's commit records since its last Name, oldest first
+  pin,      \* each lineage's pinned root, or None
+  rel,      \* each page's release records not yet resolved
   commits
-vars == <<root, stored, extra, born, queue, pending, ivl, commits>>
+vars == <<root, stored, extra, born, queue, pending, ivl, pin, rel, commits>>
 
-Named == UNION {Reach(root[l]) : l \in Lineages}
+Pinned == {pin[l] : l \in {m \in Lineages : pin[m] # None}}
+Named == UNION {Reach(p) : p \in {root[l] : l \in Lineages} \cup Pinned}
 Holders(p) == Cardinality({l \in Lineages : root[l] = p})
+                + Cardinality({l \in Lineages : pin[l] = p})
                 + Cardinality({q \in Named : p \in Kids(q)})
 
 First == CHOOSE l \in Lineages : TRUE
@@ -135,6 +159,7 @@ Roots(l) ==
 
 Init ==
   /\ root = [l \in Lineages |-> IF l = First /\ ~Race THEN "X" ELSE "N"]
+  /\ pin = [l \in Lineages |-> None]
   /\ stored = Named
   /\ extra = [p \in Pages |-> IF p \in Named THEN Holders(p) - 1 ELSE 0]
   /\ born = [p \in Pages |-> IF p \in Reach(root[First]) /\ ~Race
@@ -142,6 +167,7 @@ Init ==
   /\ queue = [l \in Lineages |-> <<>>]
   /\ pending = [l \in Lineages |-> None]
   /\ ivl = [l \in Lineages |-> <<>>]
+  /\ rel = [p \in Pages |-> 0]
   /\ commits = 0
 
 \* Land moves lineage l to root r in one store transaction: it writes the
@@ -178,6 +204,7 @@ Land(l, r) ==
                  counted |-> atPut,
                  done |-> {}, alive |-> {}])]
      /\ root' = [root EXCEPT ![l] = r]
+     /\ rel' = IF HoldAtMove THEN rel ELSE [rel EXCEPT ![old] = @ + 1]
      /\ commits' = commits + 1
 
 \* Commit nets and puts in one step, so nothing races it.
@@ -186,7 +213,7 @@ Commit(l, r) ==
   /\ commits < MaxCommits
   /\ r # root[l]
   /\ Land(l, r)
-  /\ UNCHANGED <<queue, pending>>
+  /\ UNCHANGED <<queue, pending, pin>>
 
 \* Take nets lineage l's commit to r; its put comes later.
 Take(l, r) ==
@@ -195,14 +222,14 @@ Take(l, r) ==
   /\ pending[l] = None
   /\ r # root[l]
   /\ pending' = [pending EXCEPT ![l] = r]
-  /\ UNCHANGED <<root, stored, extra, born, queue, ivl, commits>>
+  /\ UNCHANGED <<root, stored, extra, born, queue, ivl, pin, rel, commits>>
 
 \* Put finishes lineage l's taken commit.
 Put(l) ==
   /\ pending[l] # None
   /\ Land(l, pending[l])
   /\ pending' = [pending EXCEPT ![l] = None]
-  /\ UNCHANGED queue
+  /\ UNCHANGED <<queue, pin>>
 
 Empty(rec) == rec.dead = {} /\ rec.loss = {}
 
@@ -246,9 +273,14 @@ Name(l) ==
          recs == IF Compose = "sequence"
                  THEN SelectSeq(s, LAMBDA rec : ~Empty(rec))
                  ELSE IF Empty(Composed(s)) THEN <<>> ELSE <<Composed(s)>>
-     IN queue' = [queue EXCEPT ![l] = @ \o recs]
+     IN /\ queue' = [queue EXCEPT ![l] = @ \o recs]
+        \* Each record named adds its hold on its old root, unless the move
+        \* already left that hold in place.
+        /\ extra' = IF HoldAtMove THEN extra
+                    ELSE [p \in Pages |-> extra[p]
+                            + Cardinality({i \in 1..Len(recs) : recs[i].old = p})]
   /\ ivl' = [ivl EXCEPT ![l] = <<>>]
-  /\ UNCHANGED <<root, stored, extra, born, pending, commits>>
+  /\ UNCHANGED <<root, stored, born, pending, pin, rel, commits>>
 
 InFlight(m) == queue[m] # <<>> /\ Head(queue[m]).done # {}
 
@@ -291,7 +323,7 @@ Apply(l, p) ==
            /\ queue' = IF rec2.done = rec.dead /\ rec.loss = {}
                        THEN [queue EXCEPT ![l] = Tail(@)]
                        ELSE [queue EXCEPT ![l] = <<rec2>> \o Tail(@)]
-           /\ UNCHANGED <<root, pending, ivl, commits>>
+           /\ UNCHANGED <<root, pending, ivl, pin, rel, commits>>
 
 \* ApplyLoss ends a record whose lineage lost its edge to the old root: the
 \* root's new parent already existed, so its holder count falls by one.
@@ -305,7 +337,7 @@ ApplyLoss(l) ==
      /\ extra' = [q \in Pages |->
                     extra[q] - Cardinality({x \in rec.loss : x[1] = q})]
      /\ queue' = [queue EXCEPT ![l] = Tail(@)]
-     /\ UNCHANGED <<root, stored, born, pending, ivl, commits>>
+     /\ UNCHANGED <<root, stored, born, pending, ivl, pin, rel, commits>>
 
 ApplyAny ==
   \/ \E l \in Lineages, p \in Pages : Apply(l, p)
@@ -320,7 +352,45 @@ Fail(l) ==
   /\ pending[l] # None
   /\ pending' = [pending EXCEPT ![l] = None]
   /\ commits' = commits + 1
-  /\ UNCHANGED <<root, stored, extra, born, queue, ivl>>
+  /\ UNCHANGED <<root, stored, extra, born, queue, ivl, pin, rel>>
+
+\* Pin names lineage l's current root as a reader does. The owner edge counts
+\* at once. A pin spends a commit of the budget, which keeps behaviors finite.
+Pin(l) ==
+  /\ Pins
+  /\ commits < MaxCommits
+  /\ pin[l] = None
+  /\ pending[l] = None
+  /\ pin' = [pin EXCEPT ![l] = root[l]]
+  /\ extra' = [extra EXCEPT ![root[l]] = @ + 1]
+  /\ born' = IF ClearLineage THEN [born EXCEPT ![root[l]] = None] ELSE born
+  /\ commits' = commits + 1
+  /\ UNCHANGED <<root, stored, queue, pending, ivl, rel>>
+
+\* Unpin drops lineage l's pin and queues its release.
+Unpin(l) ==
+  /\ pin[l] # None
+  /\ pin' = [pin EXCEPT ![l] = None]
+  /\ rel' = [rel EXCEPT ![pin[l]] = @ + 1]
+  /\ UNCHANGED <<root, stored, extra, born, queue, pending, ivl, commits>>
+
+\* Resolve takes one release of page p: a counted page loses one count and
+\* lives; an uncounted one frees and releases each child.
+Resolve(p) ==
+  /\ rel[p] > 0
+  /\ \A m \in Lineages : ~InFlight(m)
+  /\ ~RaceApply => \A m \in Lineages : pending[m] = None
+  /\ IF extra[p] > 0
+     THEN /\ extra' = [extra EXCEPT ![p] = @ - 1]
+          /\ rel' = [rel EXCEPT ![p] = @ - 1]
+          /\ UNCHANGED stored
+     ELSE /\ stored' = stored \ {p}
+          /\ rel' = [q \in Pages |-> rel[q] - (IF q = p THEN 1 ELSE 0)
+                                    + (IF q \in Kids(p) THEN 1 ELSE 0)]
+          /\ UNCHANGED extra
+  /\ UNCHANGED <<root, born, queue, pending, ivl, pin, commits>>
+
+ResolveAny == \E p \in Pages : Resolve(p)
 
 PutAny == \E l \in Lineages : Put(l)
 
@@ -332,13 +402,16 @@ Next ==
   \/ \E l \in Lineages : Fail(l)
   \/ NameAny
   \/ ApplyAny
+  \/ \E l \in Lineages : Pin(l) \/ Unpin(l)
+  \/ ResolveAny
   \/ UNCHANGED vars
 
 Spec == Init /\ [][Next]_vars /\ WF_vars(ApplyAny) /\ WF_vars(PutAny)
-          /\ WF_vars(NameAny)
+          /\ WF_vars(NameAny) /\ WF_vars(ResolveAny)
 
-Quiet == \A l \in Lineages :
-           queue[l] = <<>> /\ pending[l] = None /\ ivl[l] = <<>>
+Quiet == /\ \A l \in Lineages :
+              queue[l] = <<>> /\ pending[l] = None /\ ivl[l] = <<>>
+         /\ \A p \in Pages : rel[p] = 0
 
 \* No live root names a freed page.
 NoFreedRead == Named \subseteq stored
@@ -348,6 +421,9 @@ NoFreedRead == Named \subseteq stored
 \* would leave its children's counts short.
 KeptStored == \A l \in Lineages : pending[l] # None =>
                 (Reach(root[l]) \cap Reach(pending[l])) \subseteq stored
+
+\* A release names a stored page, so no page frees twice.
+ReleasesStored == \A p \in Pages : rel[p] > 0 => p \in stored
 
 \* No count record goes below zero.
 CountsNonNegative == \A p \in Pages : extra[p] >= 0
