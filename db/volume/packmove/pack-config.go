@@ -26,6 +26,11 @@ type PackConfig struct {
 	SQL SQLRows
 	// Packer receives the packs.
 	Packer BlockPacker
+	// KeyStart and KeyEnd bound the keys a run packs: block keys relative to
+	// the block prefix for Pack, row keys for PackSQL. A run packs the keys
+	// after KeyStart and before KeyEnd; nil leaves that side open. Runs over
+	// disjoint ranges, each with its own log, pack in parallel.
+	KeyStart, KeyEnd []byte
 	// LogPath is the pack log, created when missing. A log from an earlier
 	// run resumes that run.
 	LogPath string

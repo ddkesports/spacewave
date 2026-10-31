@@ -43,6 +43,8 @@ type batchReader struct {
 	// after is the last key examined, relative to prefix, or nil before the
 	// first batch.
 	after []byte
+	// end is the first key, relative to prefix, past the range, or nil.
+	end []byte
 	// packBytes is the block data one batch holds.
 	packBytes int
 	// outside is the blocks to leave alone.
@@ -117,6 +119,9 @@ func (r *batchReader) collect(ctx context.Context, tx kvtx.Tx) (*packBatch, erro
 	var packed, examined int
 	for it.Valid() && batch.bytes < uint64(r.packBytes) && packed < int(writer.DefaultMaxBlocksPerPack) && examined < maxExamined { //nolint:gosec // the policy is positive.
 		key := bytes.Clone(it.Key()[len(r.prefix):])
+		if r.end != nil && bytes.Compare(key, r.end) >= 0 {
+			break
+		}
 		batch.through = key
 		examined++
 		if r.outside.Has(key) {

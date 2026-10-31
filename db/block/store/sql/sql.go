@@ -339,16 +339,20 @@ func (s *Store) GetBlockExistsBatch(ctx context.Context, refs []*block.BlockRef)
 	return exists, nil
 }
 
-// ListHashes returns up to limit row keys of the store after the key after,
-// in key order; nil after lists from the first. A row key is the marshaled
-// hash of the block.
-func (s *Store) ListHashes(ctx context.Context, after []byte, limit int) ([][]byte, error) {
+// ListHashes returns up to limit row keys of the store after the key after
+// and before end, in key order; nil after lists from the first and nil end to
+// the last. A row key is the marshaled hash of the block.
+func (s *Store) ListHashes(ctx context.Context, after, end []byte, limit int) ([][]byte, error) {
 	// Read the next keys from the primary key; an empty key sorts first, where
 	// a NULL would match nothing.
 	if after == nil {
 		after = []byte{}
 	}
-	rows, err := s.db.QueryContext(ctx, "SELECT hash FROM "+s.table+" WHERE store_id = ? AND hash > ? ORDER BY hash LIMIT ?", s.storeID, after, limit) // #nosec G202 -- NewStore quotes the table.
+	query, args := "SELECT hash FROM "+s.table+" WHERE store_id = ? AND hash > ?", []any{s.storeID, after} // #nosec G202 -- NewStore quotes the table.
+	if end != nil {
+		query, args = query+" AND hash < ?", append(args, end)
+	}
+	rows, err := s.db.QueryContext(ctx, query+" ORDER BY hash LIMIT ?", append(args, limit)...)
 	if err != nil {
 		return nil, errors.Wrap(err, "list blocks")
 	}

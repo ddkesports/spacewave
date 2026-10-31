@@ -21,9 +21,9 @@ const sqlFetchBlocks = 256
 // SQLRows reads one block store's rows of a SQL block store, such as
 // block_store_sql.Store.
 type SQLRows interface {
-	// ListHashes returns up to limit row keys after the key after, in key
-	// order. A row key is the marshaled hash of the block.
-	ListHashes(ctx context.Context, after []byte, limit int) ([][]byte, error)
+	// ListHashes returns up to limit row keys after the key after and before
+	// end, nil for no end, in key order. A row key is the marshaled hash of the block.
+	ListHashes(ctx context.Context, after, end []byte, limit int) ([][]byte, error)
 	// GetStoredBlockBatch returns each block with its refs, nil for a block
 	// the store does not hold.
 	GetStoredBlockBatch(ctx context.Context, refs []*block.BlockRef, withData bool) ([]*block.StoredBlock, error)
@@ -40,6 +40,8 @@ type sqlBatchReader struct {
 	prefix []byte
 	// after is the last row key examined, or nil before the first batch.
 	after []byte
+	// end is the first row key past the range, or nil.
+	end []byte
 	// packBytes is the block data one batch holds.
 	packBytes int
 }
@@ -52,7 +54,7 @@ func (r *sqlBatchReader) next(ctx context.Context) (*packBatch, error) {
 	batch := &packBatch{frame: frame{kind: framePending}}
 	for examined := 0; examined < maxExamined && batch.bytes < uint64(r.packBytes) && len(batch.puts) < int(writer.DefaultMaxBlocksPerPack); { //nolint:gosec // the policy is positive.
 		// List the next rows.
-		keys, err := r.rows.ListHashes(ctx, r.after, sqlListBlocks)
+		keys, err := r.rows.ListHashes(ctx, r.after, r.end, sqlListBlocks)
 		if err != nil {
 			return nil, err
 		}

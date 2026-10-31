@@ -57,7 +57,7 @@ func Pack(ctx context.Context, cfg PackConfig) (PackProgress, error) {
 	run.update(func(p *PackProgress) { p.Outside, p.OutsideBytes = outside.Len(), outside.Bytes() })
 
 	// Read the blocks after the log's last key.
-	reader := &batchReader{src: cfg.Source, prefix: cfg.Keys.GetBlockFullPrefix(), after: run.state.lastKey, packBytes: cfg.PackBytes, outside: outside}
+	reader := &batchReader{src: cfg.Source, prefix: cfg.Keys.GetBlockFullPrefix(), after: run.after(), end: cfg.KeyEnd, packBytes: cfg.PackBytes, outside: outside}
 	if reader.packBytes <= 0 {
 		reader.packBytes = DefaultPackBytes
 	}
@@ -99,7 +99,7 @@ func PackSQL(ctx context.Context, cfg PackConfig) (PackProgress, error) {
 	defer func() { _ = run.log.close() }()
 
 	// Read the rows after the log's last key.
-	reader := &sqlBatchReader{rows: cfg.SQL, src: cfg.Source, prefix: cfg.Keys.GetBlockFullPrefix(), after: run.state.lastKey, packBytes: cfg.PackBytes}
+	reader := &sqlBatchReader{rows: cfg.SQL, src: cfg.Source, prefix: cfg.Keys.GetBlockFullPrefix(), after: run.after(), end: cfg.KeyEnd, packBytes: cfg.PackBytes}
 	if reader.packBytes <= 0 {
 		reader.packBytes = DefaultPackBytes
 	}
@@ -192,6 +192,15 @@ type packRun struct {
 	mtx sync.Mutex
 	// progress is the totals so far.
 	progress PackProgress
+}
+
+// after returns the key the run reads after: the log's last key, or the
+// range's start before the first batch.
+func (r *packRun) after() []byte {
+	if r.state.lastKey != nil {
+		return r.state.lastKey
+	}
+	return r.cfg.KeyStart
 }
 
 // snapshot returns the totals so far.
