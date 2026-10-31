@@ -1691,7 +1691,7 @@
       ]
     },
     "github.com/s4wave/spacewave/db/block/mock": {
-      "hash": "bad57a79760d0b54d399ebc14ce8b75fb025105498dfed4ec810c55d728022e9",
+      "hash": "d81613ffc5cb4c3c82ecf0adab54a1f1377c81e9de6fb032d4c289196eb10810",
       "generatedFiles": [
         "db/block/mock/mock.pb.go",
         "db/block/mock/mock.pb.ts"
