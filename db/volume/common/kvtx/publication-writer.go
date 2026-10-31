@@ -398,7 +398,7 @@ func (w *publicationWriter) run() {
 				w.stats.Pending--
 				w.stats.PendingBytes -= r.bytes
 				w.stats.PendingEntries -= len(r.publication.Entries)
-				r.receipt.Resolve(results[i])
+				r.receipt.ResolveExisted(results[i], r.existed)
 			}
 			w.queue = slices.Delete(w.queue, 0, len(group))
 			w.next -= len(group)

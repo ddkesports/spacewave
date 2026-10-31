@@ -370,6 +370,7 @@ func (t *soEngineWriteTx) publish(ctx context.Context, publisher sobject.StatePu
 	}
 	t.clock.end(stagePublicationAdmission)
 	countPublication(payload, slices.Concat(pages, named), save)
+	t.eng.replay.addWorldPut(receipt, pub.Entries, pages)
 
 	// The publication holds the candidate under the accepted World root and
 	// carries the replay save once its receipt succeeds.

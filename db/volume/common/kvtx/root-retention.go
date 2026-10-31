@@ -363,72 +363,103 @@ func addDeadlistHolds(ctx context.Context, blocks block.StoreOps, rg *block_gc.R
 	return rg.AddHolds(ctx, held)
 }
 
-// addExistedHolds adds one shared count to each entry of a put batch that the
-// store already held, unless its writer counted it. A writer marks counted
-// each page its commit found stored before netting its replacements, whose
-// held list counts the new holder, so an uncounted entry the put finds
-// existed was stored by another writer since then, and both hold it.
+// addExistedHolds adds the shared counts a put batch gives the pages it found
+// stored. Each found page gains one holder per new page of the batch that
+// names it, and one when no unmarked page of the batch names it: its parent
+// is a root or a page stored outside the batch. A found page whose parent the
+// batch also found gains nothing, since the stored parent already named it.
 //
-// A counted entry the put finds absent was freed after the probe, so the put
-// stores it afresh and its edges to its children are new: no held list counts
-// them, because its writer saw it stored. Each stored child gains one count,
-// unless the batch wrote the child afresh or another writer raced it, which
-// the rules above count already.
+// A writer marks Counted each entry it can prove the store held before its
+// interval began, such as a page of the old tree written back. Such an entry
+// gains no count, and it never stands in for the parent of a found entry: a
+// found child of a marked entry counts on its own, which can only over-count.
 //
-// Three cases over-count, which leaks and never frees: a parent and its child
-// that both race in one window give the child a count, since the identical
-// parents are one block; a racing writer's holder may die before the put; and
-// a layer between the writer and the Volume may drop the counted mark. A
-// payload or span block gains a count too, which no record takes, and the
-// sweep deletes it with the block.
+// A marked entry the put finds absent was freed after the writer's proof, so
+// the put stores it afresh and its edges to its children are new: no record
+// counts them, because its writer saw it stored. It counts as a new page of
+// the batch, and each other stored child gains one count too, unless the
+// batch wrote the child afresh, probing the children outside the batch.
+//
+// Every over-count leaks and never frees: a parent and child split across two
+// batches each count, and a payload or span block gains a count no record
+// takes, which the sweep deletes with the block.
 func addExistedHolds(ctx context.Context, blocks block.StoreOps, rg *block_gc.RefGraph, entries []*block.PutBatchEntry, existed []bool) error {
-	// Count raced entries, and sort the rest: entries the rules above count,
-	// counted entries the put found stored, and those it found freed.
-	var holds []string
-	counted := make(map[string]bool, len(entries))
+	// Note which entries the batch found and which it stored afresh, setting
+	// aside marked entries. A page listed twice finds its own first copy, so
+	// its first entry decides.
+	found := make(map[string]bool, len(entries))
 	kept := make(map[string]bool)
-	revived := make(map[string]*block.PutBatchEntry)
+	var listed, revived []*block.PutBatchEntry
 	for i, e := range entries {
 		if e.Tombstone {
 			continue
 		}
 		key := block_gc.BlockIRI(e.Ref)
+		if _, ok := found[key]; ok || kept[key] {
+			continue
+		}
 		switch {
-		case existed[i] && !e.Counted:
-			holds = append(holds, key)
-			counted[key] = true
-		case existed[i]:
+		case e.Counted && existed[i]:
 			kept[key] = true
+		case e.Counted:
+			found[key] = false
+			listed = append(listed, e)
+			revived = append(revived, e)
 		default:
-			counted[key] = true
-			if e.Counted {
-				revived[key] = e
-			}
+			found[key] = existed[i]
+			listed = append(listed, e)
 		}
 	}
 
-	// Count each stored child of a revived entry, probing those outside the
-	// batch.
-	var probe []*block.BlockRef
-	for _, e := range revived {
+	// Count each found entry once per new parent, or once with no parent in
+	// the batch.
+	parents := make(map[string]int, len(listed))
+	var holds []string
+	for _, e := range listed {
+		named := make(map[string]struct{}, len(e.Refs))
 		for _, child := range e.Refs {
 			key := block_gc.BlockIRI(child)
-			if counted[key] {
+			if _, dup := named[key]; dup || !found[key] {
 				continue
 			}
-			if kept[key] {
+			named[key] = struct{}{}
+			parents[key]++
+			if !found[block_gc.BlockIRI(e.Ref)] {
 				holds = append(holds, key)
+			}
+		}
+	}
+	for key, isFound := range found {
+		if isFound && parents[key] == 0 {
+			holds = append(holds, key)
+		}
+	}
+
+	// Count the other stored children of each revived entry: marked entries
+	// at once, and children outside the batch after a probe.
+	var probe []*block.BlockRef
+	for _, e := range revived {
+		named := make(map[string]struct{}, len(e.Refs))
+		for _, child := range e.Refs {
+			key := block_gc.BlockIRI(child)
+			if _, dup := named[key]; dup {
 				continue
 			}
-			probe = append(probe, child)
+			named[key] = struct{}{}
+			switch _, listed := found[key]; {
+			case kept[key]:
+				holds = append(holds, key)
+			case !listed:
+				probe = append(probe, child)
+			}
 		}
 	}
 	if len(probe) != 0 {
-		found, err := blocks.GetBlockExistsBatch(ctx, probe)
+		stored, err := blocks.GetBlockExistsBatch(ctx, probe)
 		if err != nil {
 			return err
 		}
-		for i, ok := range found {
+		for i, ok := range stored {
 			if ok {
 				holds = append(holds, block_gc.BlockIRI(probe[i]))
 			}

@@ -551,16 +551,22 @@ func (t *Transaction) WriteAtRoot(ctx context.Context, clearTree bool, subRoot *
 							writeCtx, writeTask := trace.NewTask(ctx, "hydra/block/transaction/write-at-root/put-block")
 							putBlocks.Add(1)
 							RecordWrite(ctx, len(dat))
-							_, _, err := buffered.putBlock(writeCtx, dat, putOpts, false, false)
+							_, _, err := buffered.putBlock(writeCtx, dat, putOpts, false)
 							writeTask.End()
 							if err != nil {
 								handleErr(err)
 								return
 							}
 						}
-						if writeQueue == nil {
+						// A page encoded back to the stored page it was
+						// loaded from is already stored: putting it again
+						// would look like a new holder to a store that
+						// counts shared pages.
+						switch {
+						case bn.base != nil && bn.base.ref.EqualsRef(blkRef):
+						case writeQueue == nil:
 							put()
-						} else {
+						default:
 							writeQueue.Enqueue(put)
 						}
 					}

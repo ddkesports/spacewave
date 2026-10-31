@@ -866,6 +866,7 @@ func (e *soEngine) applyHold(ctx context.Context, hold *rootHold) error {
 		return err
 	}
 	countPublication(nil, pages, save)
+	e.replay.addWorldPut(receipt, hold.entries, pages)
 	e.admit(receipt, e.retained, seqno)
 	go receipt.Release()
 	return nil

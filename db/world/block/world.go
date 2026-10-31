@@ -54,8 +54,6 @@ type WorldState struct {
 	releaseOwned bool
 	// transitions receives each commit's transition, or is nil.
 	transitions TransitionSink
-	// recorded is set once a commit handed its transition to transitions.
-	recorded bool
 
 	objTree   kvtx.BlockTx
 	graphTree kvtx.BlockTx
@@ -627,35 +625,10 @@ func (t *WorldState) Commit(ctx context.Context) error {
 
 	// Hand the commit's transition to the sink.
 	if log := t.btx.GetReplacementLog(); log != nil && t.transitions != nil {
-		t.recordTransition(ctx, log)
+		to := t.GetRootRef()
+		t.transitions(log.From(), to, log.Take(to))
 	}
 	return nil
-}
-
-// recordTransition hands the sink the commit's transition, after marking the
-// written pages the store already held, whose holders the record counts.
-//
-// The write buffer holds the pages of every commit this state made, and its
-// probe cannot tell an earlier commit's pending page from this one's, so a
-// second commit forfeits its record. A state without its own buffer cannot
-// mark its writes, so its record counts no found page: the store counts each
-// found put, which over-counts a page a replaced parent named, and leaks.
-func (t *WorldState) recordTransition(ctx context.Context, log *block.ReplacementLog) {
-	// Give up the record of any commit after the first.
-	if t.recorded {
-		log.Forfeit()
-	}
-	t.recorded = true
-
-	// Take the interval, marking the found pages when the state has a buffer.
-	from, to := log.From(), t.GetRootRef()
-	var out *block.Replacements
-	if t.ownedStore != nil {
-		out = log.TakeStored(ctx, to, t.ownedStore.MarkStored)
-	} else {
-		out = log.Take(to)
-	}
-	t.transitions(from, to, out)
 }
 
 // buildObjectTree builds the object tree handle.

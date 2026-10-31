@@ -68,7 +68,7 @@ func TestReplacementsMatchDiff(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		rep := r.log.Take(to)
+		rep := r.log.Take(to).Net(nil)
 		if err := block_mock.CheckReplacements(ctx, store, from, to, rep); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -81,7 +81,7 @@ func TestReplacementsMatchDiff(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		rep = r.log.Take(to)
+		rep = r.log.Take(to).Net(nil)
 		if len(rep.Replaced)+len(rep.Removed)+len(rep.Held) != 0 {
 			t.Fatalf("%s: clean interval recorded %d replaced, %d removed", name, len(rep.Replaced), len(rep.Removed))
 		}
@@ -147,4 +147,38 @@ func TestReplacementsMatchDiff(t *testing.T) {
 	}
 	leaf.SetBlock(block_mock.NewExample("second"), true)
 	check("twice", r, from)
+
+	// Join four intervals that edit the leaf to x, y, x again and a last
+	// value. The first tree's pages are original, so a put of one is counted;
+	// the x leaf was created before it was replaced, so it is not.
+	from = chain("join")
+	r = open(from)
+	midBlk, _ := r.mid.GetBlock()
+	leaf = r.mid.FollowRef(1, midBlk.(*block_mock.SubBlock).GetExamplePtr())
+	if _, err := block_mock.UnmarshalExample(ctx, leaf); err != nil {
+		t.Fatal(err)
+	}
+	first := leaf.GetRef().Clone()
+
+	// Write and take each interval.
+	var steps block.ReplacementSteps
+	var x *block.BlockRef
+	for _, msg := range []string{"x", "y", "x", "join"} {
+		leaf.SetBlock(block_mock.NewExample(msg), true)
+		to, _, err := r.tx.Write(ctx, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if x == nil {
+			x = leaf.GetRef().Clone()
+		}
+		steps = append(steps, r.log.Take(to))
+	}
+	if !steps.Original(first) || !steps.Original(from) || steps.Original(x) {
+		t.Fatalf("join: original first %v, root %v, x %v", steps.Original(first), steps.Original(from), steps.Original(x))
+	}
+	joined := steps.Join()
+	if err := block_mock.CheckReplacements(ctx, store, from, joined.To, joined.Net(nil)); err != nil {
+		t.Fatalf("join: %v", err)
+	}
 }
