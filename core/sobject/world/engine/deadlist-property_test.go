@@ -17,13 +17,15 @@ import (
 	space_world_ops "github.com/s4wave/spacewave/core/space/world/ops"
 	"github.com/s4wave/spacewave/db/block"
 	"github.com/s4wave/spacewave/db/volume"
+	kvtx_volume "github.com/s4wave/spacewave/db/volume/common/kvtx"
 	"github.com/s4wave/spacewave/db/world"
 	world_mock "github.com/s4wave/spacewave/db/world/mock"
 )
 
 // TestDeadlistsRandomWrites drives one World through random writes, renames,
 // payload roots, bursts of writes with the change log on, abandoned writes,
-// failed publications with a fork behind them, and engine restarts, and
+// failed publications with a fork behind them, engine restarts, and restarts
+// of the Volume's sharing walk, as an upgrade to format 6 begins one, and
 // checks after each step that no deadlist record lists a page the World it
 // runs to reaches. A collector pass every 20 steps applies the due records in
 // shadow: none may free a page its mark reaches or take a shared count below
@@ -121,6 +123,7 @@ func (r *deadlistRun) step() {
 		{"fork", 5, r.fork},
 		{"restart", 3, r.restart},
 		{"changelog", 2, r.changelogBurst},
+		{"rewalk", 2, r.rewalk},
 	}
 	total := 0
 	for _, s := range steps {
@@ -259,6 +262,20 @@ func (r *deadlistRun) restart() {
 		r.t.Fatal(err)
 	}
 	r.w.eng = eng
+}
+
+// rewalk marks the Volume's shared counts stale and begins a new sharing walk,
+// as opening a format 5 Volume with shared blocks does: the writes after it
+// run against the walk, and the next collector pass ends it before applying
+// any record.
+func (r *deadlistRun) rewalk() {
+	rg := kvtx_volume.OpenRefGraph(r.w.vol.(kvtx_volume.KvtxVolume).GetKvtxStore())
+	if err := rg.StopSharing(r.t.Context()); err != nil {
+		r.t.Fatal(err)
+	}
+	if _, err := rg.BeginSharing(r.t.Context()); err != nil {
+		r.t.Fatal(err)
+	}
 }
 
 // changelogBurst turns the change log on, bumps a random object's revision
