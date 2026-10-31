@@ -68,6 +68,9 @@ type placementState struct {
 	// sqlPrimary reports that the store writes to its SQL backend, which
 	// then holds blocks the reference graph may not track.
 	sqlPrimary bool
+	// sqlPublish publishes the writes of a store whose SQL backend is
+	// primary, or holds nil when local cannot publish its heads.
+	sqlPublish *sqlPublisher
 }
 
 // live reports which blocks a bucket reclaim must keep: the blocks the
@@ -512,19 +515,36 @@ func (t *bstoreTracker) executeBlockStoreTracker(rctx context.Context) error {
 		nil,
 	)
 
-	// A primary SQL backend takes the writes.
+	// A primary SQL backend takes the writes. Its publisher drains published
+	// blocks to it outside the writer's lock, and serves them until they land.
+	var reads, copies block.StoreOps = readOps, copyOps
 	if sqlStore != nil {
-		localStore, readOps = sqlPrimaryStores(blockStoreLocalID, localBucket, sqlStore, func() block.StoreOps {
+		localStore, reads = sqlPrimaryStores(blockStoreLocalID, localBucket, sqlStore, func() block.StoreOps {
 			return t.a.getP2PStore(bucketID)
 		})
-		copyOps = readOps
+		if local, ok := localBucket.(block.AtomicPublisher); ok && local.SupportsAtomicPublication() {
+			pub := newSQLPublisher(le.WithField("routine", "sql-publish"), sqlStore, local)
+			placement.sqlPublish = pub
+			reads = newSQLPublishReads(pub, reads)
+			pubCtx, pubCancel := context.WithCancel(ctx)
+			pubDone := make(chan struct{})
+			go func() {
+				pub.run(pubCtx)
+				close(pubDone)
+			}()
+			defer func() {
+				pubCancel()
+				<-pubDone
+			}()
+		}
+		copies = reads
 	}
 
 	// Build the handle over the local store and its read paths.
 	bstoreHandle := &BlockStore{
 		store:         localStore,
-		readStore:     block_store.NewStore(blockStoreLocalID, readOps),
-		copyStore:     copyOps,
+		readStore:     block_store.NewStore(blockStoreLocalID, reads),
+		copyStore:     copies,
 		decodedBlocks: decodedBlocks,
 		placement:     placement,
 	}
