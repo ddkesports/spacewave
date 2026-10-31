@@ -95,14 +95,16 @@ class S3Location(_message.Message):
     def __init__(self, endpoint: _Optional[str] = ..., region: _Optional[str] = ..., bucket: _Optional[str] = ..., object_prefix: _Optional[str] = ..., disable_ssl: _Optional[bool] = ..., pricing: _Optional[_Union[_s3_pb2.Pricing, _Mapping]] = ..., keep_packs: _Optional[bool] = ...) -> None: ...
 
 class BlockStorePlacement(_message.Message):
-    __slots__ = ("block_store_id", "storage_backend_id", "cache")
+    __slots__ = ("block_store_id", "storage_backend_id", "cache", "fallback_storage_backend_id")
     BLOCK_STORE_ID_FIELD_NUMBER: _ClassVar[int]
     STORAGE_BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
     CACHE_FIELD_NUMBER: _ClassVar[int]
+    FALLBACK_STORAGE_BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
     block_store_id: str
     storage_backend_id: str
     cache: BlockStoreCache
-    def __init__(self, block_store_id: _Optional[str] = ..., storage_backend_id: _Optional[str] = ..., cache: _Optional[_Union[BlockStoreCache, _Mapping]] = ...) -> None: ...
+    fallback_storage_backend_id: str
+    def __init__(self, block_store_id: _Optional[str] = ..., storage_backend_id: _Optional[str] = ..., cache: _Optional[_Union[BlockStoreCache, _Mapping]] = ..., fallback_storage_backend_id: _Optional[str] = ...) -> None: ...
 
 class BlockStoreCache(_message.Message):
     __slots__ = ("settle_seconds", "max_pending_bytes", "resident_high_bytes", "resident_low_bytes", "skip_backfill", "max_upload_reads", "upload_read_slow_millis")

@@ -121,6 +121,14 @@ message BlockStorePlacement {
   // Cache sets how the local disk holds the placed store. Empty uploads each
   // write at once and keeps every block local.
   BlockStoreCache cache = 3;
+  // FallbackStorageBackendId identifies an SQL StorageBackend the store reads,
+  // read only, after its own backend misses a block. Nothing writes it. A
+  // block only the fallback holds is stored on the local disk with an upload
+  // marker, so it uploads to StorageBackendId and later reads skip the
+  // fallback. Empty has no fallback. The store's backend must be an S3
+  // backend, so an SQL backend is never both primary and fallback. A storage
+  // move clears it.
+  string fallback_storage_backend_id = 4;
 }
 
 // BlockStoreCache sets how the local disk holds a placed block store.

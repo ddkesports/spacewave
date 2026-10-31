@@ -392,6 +392,14 @@ type BlockStorePlacement struct {
 	// Cache sets how the local disk holds the placed store. Empty uploads each
 	// write at once and keeps every block local.
 	Cache *BlockStoreCache `protobuf:"bytes,3,opt,name=cache,proto3" json:"cache,omitempty"`
+	// FallbackStorageBackendId identifies an SQL StorageBackend the store reads,
+	// read only, after its own backend misses a block. Nothing writes it. A
+	// block only the fallback holds is stored on the local disk with an upload
+	// marker, so it uploads to StorageBackendId and later reads skip the
+	// fallback. Empty has no fallback. The store's backend must be an S3
+	// backend, so an SQL backend is never both primary and fallback. A storage
+	// move clears it.
+	FallbackStorageBackendId string `protobuf:"bytes,4,opt,name=fallback_storage_backend_id,json=fallbackStorageBackendId,proto3" json:"fallbackStorageBackendId,omitempty"`
 }
 
 func (x *BlockStorePlacement) Reset() {
@@ -419,6 +427,13 @@ func (x *BlockStorePlacement) GetCache() *BlockStoreCache {
 		return x.Cache
 	}
 	return nil
+}
+
+func (x *BlockStorePlacement) GetFallbackStorageBackendId() string {
+	if x != nil {
+		return x.FallbackStorageBackendId
+	}
+	return ""
 }
 
 // BlockStoreCache sets how the local disk holds a placed block store.
@@ -1319,6 +1334,7 @@ func (m *BlockStorePlacement) CloneVT() *BlockStorePlacement {
 	r := new(BlockStorePlacement)
 	r.BlockStoreId = m.BlockStoreId
 	r.StorageBackendId = m.StorageBackendId
+	r.FallbackStorageBackendId = m.FallbackStorageBackendId
 	r.Cache = protobuf_go_lite.CloneVTValue(m.Cache)
 	if len(m.unknownFields) > 0 {
 		r.unknownFields = slices.Clone(m.unknownFields)
@@ -2031,6 +2047,9 @@ func (this *BlockStorePlacement) EqualVT(that *BlockStorePlacement) bool {
 		return false
 	}
 	if !protobuf_go_lite.IsEqualVT(this.Cache, that.Cache) {
+		return false
+	}
+	if this.FallbackStorageBackendId != that.FallbackStorageBackendId {
 		return false
 	}
 	return string(this.unknownFields) == string(that.unknownFields)
@@ -3390,6 +3409,11 @@ func (x *BlockStorePlacement) MarshalProtoJSON(s *json.MarshalState) {
 		s.WriteObjectField("cache")
 		x.Cache.MarshalProtoJSON(s.WithField("cache"))
 	}
+	if x.FallbackStorageBackendId != "" || s.HasField("fallbackStorageBackendId") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("fallbackStorageBackendId")
+		s.WriteString(x.FallbackStorageBackendId)
+	}
 	s.WriteObjectEnd()
 }
 
@@ -3420,6 +3444,9 @@ func (x *BlockStorePlacement) UnmarshalProtoJSON(s *json.UnmarshalState) {
 			}
 			x.Cache = &BlockStoreCache{}
 			x.Cache.UnmarshalProtoJSON(s.WithField("cache", true))
+		case "fallback_storage_backend_id", "fallbackStorageBackendId":
+			s.AddField("fallback_storage_backend_id")
+			x.FallbackStorageBackendId = s.ReadString()
 		}
 	})
 }
@@ -4896,6 +4923,11 @@ func (m *BlockStorePlacement) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	if m.unknownFields != nil {
 		i = protobuf_go_lite.EncodeRawBytes(dAtA, i, m.unknownFields)
 	}
+	if len(m.FallbackStorageBackendId) > 0 {
+		i = protobuf_go_lite.EncodeString(dAtA, i, m.FallbackStorageBackendId)
+		i--
+		dAtA[i] = 0x22
+	}
 	if m.Cache != nil {
 		size, err := m.Cache.MarshalToSizedBufferVT(dAtA[:i])
 		if err != nil {
@@ -6218,6 +6250,7 @@ func (m *BlockStorePlacement) SizeVT() (n int) {
 		l = m.Cache.SizeVT()
 		n += protobuf_go_lite.SizeMessage(1, l)
 	}
+	n += protobuf_go_lite.SizeStringNonEmpty(1, m.FallbackStorageBackendId)
 	n += len(m.unknownFields)
 	return n
 }
@@ -6979,6 +7012,10 @@ func (x *BlockStorePlacement) MarshalProtoText() string {
 	if x.Cache != nil {
 		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "cache")
 		protobuf_go_lite.TextWriteTextMarshaler(&sb, x.Cache)
+	}
+	if x.FallbackStorageBackendId != "" {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "fallback_storage_backend_id")
+		protobuf_go_lite.TextWriteString(&sb, x.FallbackStorageBackendId)
 	}
 	return protobuf_go_lite.TextFinishMessage(&sb)
 }
@@ -8024,6 +8061,16 @@ func (m *BlockStorePlacement) UnmarshalVT(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
+		case 4:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field FallbackStorageBackendId", wireType)
+			}
+			var v string
+			v, iNdEx, err = protobuf_go_lite.DecodeString(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			m.FallbackStorageBackendId = v
 		default:
 			iNdEx = preIndex
 			skippy, err := protobuf_go_lite.Skip(dAtA[iNdEx:])

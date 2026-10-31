@@ -277,6 +277,16 @@ export interface BlockStorePlacement {
    * write at once and keeps every block local.
    */
   cache?: BlockStoreCache
+  /**
+   * FallbackStorageBackendId identifies an SQL StorageBackend the store reads,
+   * read only, after its own backend misses a block. Nothing writes it. A
+   * block only the fallback holds is stored on the local disk with an upload
+   * marker, so it uploads to StorageBackendId and later reads skip the
+   * fallback. Empty has no fallback. The store's backend must be an S3
+   * backend, so an SQL backend is never both primary and fallback. A storage
+   * move clears it.
+   */
+  fallbackStorageBackendId?: string
 }
 
 export const BlockStorePlacement: MessageType<BlockStorePlacement> =
@@ -286,6 +296,7 @@ export const BlockStorePlacement: MessageType<BlockStorePlacement> =
       [1, 'block_store_id', 9],
       [2, 'storage_backend_id', 9],
       [3, 'cache', 11, 0, BlockStoreCache.codec],
+      [4, 'fallback_storage_backend_id', 9],
     ],
   )
 

@@ -36,3 +36,13 @@ func buildSQLBlockStore(
 ) (backendStore, error) {
 	return nil, errNoSQLClient
 }
+
+// buildSQLFallbackStore reports that TinyGo builds carry no SQL client.
+func buildSQLFallbackStore(
+	*logrus.Entry,
+	*account_settings.SqlLocation,
+	string,
+	*block_store_s3.Credentials,
+) (backendStore, error) {
+	return nil, errNoSQLClient
+}
