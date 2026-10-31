@@ -85,7 +85,7 @@ func switchOnce(ctx context.Context, t *testing.T, src, dst, logPath string) pac
 		Source:          sdb,
 		Dest:            ddb,
 		Keys:            keys,
-		LogPath:         logPath,
+		LogPaths:        []string{logPath},
 		WorldStoreID:    worldStoreID,
 		WritebackPrefix: keys.GetObjectStorePrefixByID(writebackStoreID()),
 	})

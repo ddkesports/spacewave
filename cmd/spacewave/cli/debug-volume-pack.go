@@ -246,12 +246,10 @@ func runShards(
 	}
 
 	// Start each shard.
+	logs := packmove.ShardLogPaths(cfg.LogPath, n)
 	for i := range n {
 		shard := cfg
-		shard.KeyStart, shard.KeyEnd = bounds[i], bounds[i+1]
-		if i != 0 {
-			shard.LogPath = fmt.Sprintf("%s.%02d", cfg.LogPath, i)
-		}
+		shard.KeyStart, shard.KeyEnd, shard.LogPath = bounds[i], bounds[i+1], logs[i]
 		shard.Progress = func(p packmove.PackProgress) { report(i, p, "") }
 		g.Go(func() error {
 			p, err := pack(ctx, shard)

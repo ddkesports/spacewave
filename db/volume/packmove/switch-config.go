@@ -14,8 +14,8 @@ type SwitchConfig struct {
 	Dest kvtx.Store
 	// Keys names the key layout of both stores.
 	Keys *store_kvkey.KVKey
-	// LogPath is the pack log Pack wrote.
-	LogPath string
+	// LogPaths are the pack logs Pack wrote, one per key range, in key order.
+	LogPaths []string
 	// WorldStoreID is the bucket ID of the World's block store, as Pack was
 	// given it.
 	WorldStoreID string

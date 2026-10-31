@@ -1,6 +1,8 @@
 package packmove
 
 import (
+	"fmt"
+
 	"github.com/s4wave/spacewave/db/kvtx"
 	"github.com/s4wave/spacewave/db/packfile/writer"
 	store_kvkey "github.com/s4wave/spacewave/db/store/kvkey"
@@ -47,4 +49,14 @@ type PackConfig struct {
 	// Progress receives the totals after each committed pack and
 	// each measured chunk; nil reports nothing. Calls do not overlap.
 	Progress func(PackProgress)
+}
+
+// ShardLogPaths returns the logs of a run split into n key-range shards: the
+// first shard logs to path and shard i to path with .NN appended.
+func ShardLogPaths(path string, n int) []string {
+	paths := []string{path}
+	for i := 1; i < n; i++ {
+		paths = append(paths, fmt.Sprintf("%s.%02d", path, i))
+	}
+	return paths
 }

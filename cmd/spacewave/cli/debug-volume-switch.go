@@ -26,6 +26,8 @@ type switchArgs struct {
 	writebackStore string
 	// logPath is the pack log.
 	logPath string
+	// shards is the number of key ranges volume-pack ran.
+	shards int
 }
 
 // newDebugVolumeSwitchCommand builds the command that moves a stopped volume
@@ -47,6 +49,7 @@ func newDebugVolumeSwitchCommand() *cli.Command {
 			&cli.StringFlag{Name: "world-store", Usage: "the bucket ID of the World's block store, as volume-pack was given it", Destination: &args.worldStore, Required: true},
 			&cli.StringFlag{Name: "writeback-store", Usage: "the object store ID of the World store's write-back records; defaults to <world-store>/writeback", Destination: &args.writebackStore},
 			&cli.StringFlag{Name: "log", Usage: "the pack log volume-pack wrote", Destination: &args.logPath, Required: true},
+			&cli.IntFlag{Name: "shards", Usage: "the --shards volume-pack ran with; reads the log and its .NN shard logs", Value: 1, Destination: &args.shards},
 		},
 		Action: func(c *cli.Context) error {
 			if c.NArg() != 2 {
@@ -101,7 +104,7 @@ func switchVolumeFile(ctx context.Context, src, dst string, args *switchArgs, w 
 		Source:          sdb,
 		Dest:            ddb,
 		Keys:            keys,
-		LogPath:         args.logPath,
+		LogPaths:        packmove.ShardLogPaths(args.logPath, max(args.shards, 1)),
 		WorldStoreID:    args.worldStore,
 		WritebackPrefix: keys.GetObjectStorePrefixByID(args.writebackStore),
 		Progress: func(p volume_kvtx.CopyProgress) {

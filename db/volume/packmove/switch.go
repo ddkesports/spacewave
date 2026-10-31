@@ -32,8 +32,8 @@ func Switch(ctx context.Context, cfg SwitchConfig) (SwitchResult, error) {
 		return SwitchResult{}, errors.Wrap(err, "find the blocks outside the World")
 	}
 
-	// Read the log's entries in key order alongside the block range.
-	cursor, err := openPackedCursor(cfg.LogPath)
+	// Read the logs' entries in key order alongside the block range.
+	cursor, err := openPackedCursor(cfg.LogPaths)
 	if err != nil {
 		return SwitchResult{}, errors.Wrap(err, "open pack log")
 	}
