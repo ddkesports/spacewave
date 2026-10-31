@@ -35,19 +35,10 @@ type Config struct {
 	VolumeConfig *controller.Config `protobuf:"bytes,6,opt,name=volume_config,json=volumeConfig,proto3" json:"volumeConfig,omitempty"`
 	// StoreConfig is the store configuration for kvtx.
 	StoreConfig *kvtx.Config `protobuf:"bytes,7,opt,name=store_config,json=storeConfig,proto3" json:"storeConfig,omitempty"`
-	// CacheBytes bounds the memory of decoded index pages. Zero selects the
-	// s4db default. A cache that holds the index spares a checkpoint and a
-	// lookup their page reads.
+	// CacheBytes is the s4db memory budget: a quarter bounds the memtable and
+	// the rest caches run blocks, index partitions and filters. Zero selects
+	// the s4db default.
 	CacheBytes int64 `protobuf:"varint,8,opt,name=cache_bytes,json=cacheBytes,proto3" json:"cacheBytes,omitempty"`
-	// CheckpointMaxBytes is the overlay size that always starts a checkpoint.
-	// Zero selects the s4db default. A larger overlay folds more commits into
-	// each rewrite of the index pages they touch, at the cost of overlay memory
-	// and log replay at open.
-	CheckpointMaxBytes int64 `protobuf:"varint,9,opt,name=checkpoint_max_bytes,json=checkpointMaxBytes,proto3" json:"checkpointMaxBytes,omitempty"`
-	// SingleProcess skips watching the file for other processes' commits and
-	// holds its writer lock from open to close, so checkpoints write without
-	// waiting for writers. Set it only when no other process opens the file.
-	SingleProcess bool `protobuf:"varint,10,opt,name=single_process,json=singleProcess,proto3" json:"singleProcess,omitempty"`
 	// ReserveBytes is the free disk below which the volume refuses new writes
 	// while reads, collection and deletes continue. Zero selects the disk one
 	// collection needs before it frees any; a negative value keeps no reserve.
@@ -123,20 +114,6 @@ func (x *Config) GetCacheBytes() int64 {
 	return 0
 }
 
-func (x *Config) GetCheckpointMaxBytes() int64 {
-	if x != nil {
-		return x.CheckpointMaxBytes
-	}
-	return 0
-}
-
-func (x *Config) GetSingleProcess() bool {
-	if x != nil {
-		return x.SingleProcess
-	}
-	return false
-}
-
 func (x *Config) GetReserveBytes() int64 {
 	if x != nil {
 		return x.ReserveBytes
@@ -161,8 +138,6 @@ func (m *Config) CloneVT() *Config {
 	r.NoWriteKey = m.NoWriteKey
 	r.Verbose = m.Verbose
 	r.CacheBytes = m.CacheBytes
-	r.CheckpointMaxBytes = m.CheckpointMaxBytes
-	r.SingleProcess = m.SingleProcess
 	r.ReserveBytes = m.ReserveBytes
 	r.CommitWaitBytes = m.CommitWaitBytes
 	r.KvKeyOpts = protobuf_go_lite.CloneVTValue(m.KvKeyOpts)
@@ -206,12 +181,6 @@ func (this *Config) EqualVT(that *Config) bool {
 		return false
 	}
 	if this.CacheBytes != that.CacheBytes {
-		return false
-	}
-	if this.CheckpointMaxBytes != that.CheckpointMaxBytes {
-		return false
-	}
-	if this.SingleProcess != that.SingleProcess {
 		return false
 	}
 	if this.ReserveBytes != that.ReserveBytes {
@@ -279,16 +248,6 @@ func (x *Config) MarshalProtoJSON(s *json.MarshalState) {
 		s.WriteObjectField("cacheBytes")
 		s.WriteInt64(x.CacheBytes)
 	}
-	if x.CheckpointMaxBytes != 0 || s.HasField("checkpointMaxBytes") {
-		s.WriteMoreIf(&wroteField)
-		s.WriteObjectField("checkpointMaxBytes")
-		s.WriteInt64(x.CheckpointMaxBytes)
-	}
-	if x.SingleProcess || s.HasField("singleProcess") {
-		s.WriteMoreIf(&wroteField)
-		s.WriteObjectField("singleProcess")
-		s.WriteBool(x.SingleProcess)
-	}
 	if x.ReserveBytes != 0 || s.HasField("reserveBytes") {
 		s.WriteMoreIf(&wroteField)
 		s.WriteObjectField("reserveBytes")
@@ -352,12 +311,6 @@ func (x *Config) UnmarshalProtoJSON(s *json.UnmarshalState) {
 		case "cache_bytes", "cacheBytes":
 			s.AddField("cache_bytes")
 			x.CacheBytes = s.ReadInt64()
-		case "checkpoint_max_bytes", "checkpointMaxBytes":
-			s.AddField("checkpoint_max_bytes")
-			x.CheckpointMaxBytes = s.ReadInt64()
-		case "single_process", "singleProcess":
-			s.AddField("single_process")
-			x.SingleProcess = s.ReadBool()
 		case "reserve_bytes", "reserveBytes":
 			s.AddField("reserve_bytes")
 			x.ReserveBytes = s.ReadInt64()
@@ -411,16 +364,6 @@ func (m *Config) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(m.ReserveBytes))
 		i--
 		dAtA[i] = 0x58
-	}
-	if m.SingleProcess {
-		i = protobuf_go_lite.EncodeBool(dAtA, i, m.SingleProcess)
-		i--
-		dAtA[i] = 0x50
-	}
-	if m.CheckpointMaxBytes != 0 {
-		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(m.CheckpointMaxBytes))
-		i--
-		dAtA[i] = 0x48
 	}
 	if m.CacheBytes != 0 {
 		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(m.CacheBytes))
@@ -503,8 +446,6 @@ func (m *Config) SizeVT() (n int) {
 		n += protobuf_go_lite.SizeMessage(1, l)
 	}
 	n += protobuf_go_lite.SizeVarintNonZero(1, m.CacheBytes)
-	n += protobuf_go_lite.SizeVarintNonZero(1, m.CheckpointMaxBytes)
-	n += protobuf_go_lite.SizeBoolNonZero(1, m.SingleProcess)
 	n += protobuf_go_lite.SizeVarintNonZero(1, m.ReserveBytes)
 	n += protobuf_go_lite.SizeVarintNonZero(1, m.CommitWaitBytes)
 	n += len(m.unknownFields)
@@ -545,14 +486,6 @@ func (x *Config) MarshalProtoText() string {
 	if x.CacheBytes != 0 {
 		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "cache_bytes")
 		protobuf_go_lite.TextWriteInt(&sb, x.CacheBytes)
-	}
-	if x.CheckpointMaxBytes != 0 {
-		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "checkpoint_max_bytes")
-		protobuf_go_lite.TextWriteInt(&sb, x.CheckpointMaxBytes)
-	}
-	if x.SingleProcess != false {
-		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "single_process")
-		protobuf_go_lite.TextWriteBool(&sb, x.SingleProcess)
 	}
 	if x.ReserveBytes != 0 {
 		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "reserve_bytes")
@@ -683,25 +616,6 @@ func (m *Config) UnmarshalVT(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-		case 9:
-			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field CheckpointMaxBytes", wireType)
-			}
-			m.CheckpointMaxBytes = 0
-			m.CheckpointMaxBytes, iNdEx, err = protobuf_go_lite.DecodeVarintInt64(dAtA, iNdEx)
-			if err != nil {
-				return err
-			}
-		case 10:
-			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field SingleProcess", wireType)
-			}
-			var v bool
-			v, iNdEx, err = protobuf_go_lite.DecodeVarintBool(dAtA, iNdEx)
-			if err != nil {
-				return err
-			}
-			m.SingleProcess = bool(v)
 		case 11:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field ReserveBytes", wireType)

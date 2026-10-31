@@ -45,39 +45,17 @@ export interface Config {
    */
   storeConfig?: Config$3
   /**
-   * CacheBytes bounds the memory of decoded index pages. Zero selects the
-   * s4db default. A cache that holds the index spares a checkpoint and a
-   * lookup their page reads.
+   * CacheBytes is the s4db memory budget: a quarter bounds the memtable and
+   * the rest caches run blocks, index partitions and filters. Zero selects
+   * the s4db default.
    */
   cacheBytes?: bigint
-  /**
-   * CheckpointMaxBytes is the overlay size that always starts a checkpoint.
-   * Zero selects the s4db default. A larger overlay folds more commits into
-   * each rewrite of the index pages they touch, at the cost of overlay memory
-   * and log replay at open.
-   */
-  checkpointMaxBytes?: bigint
-  /**
-   * SingleProcess skips watching the file for other processes' commits and
-   * holds its writer lock from open to close, so checkpoints write without
-   * waiting for writers. Set it only when no other process opens the file.
-   */
-  singleProcess?: boolean
   /**
    * ReserveBytes is the free disk below which the volume refuses new writes
    * while reads, collection and deletes continue. Zero selects the disk one
    * collection needs before it frees any; a negative value keeps no reserve.
    */
   reserveBytes?: bigint
-  /**
-   * CommitWaitBytes is the overlay size past which a commit waits for the
-   * running checkpoint, which also holds commits once the log after the
-   * checkpoint passes twice it. Zero selects twice CheckpointMaxBytes. A
-   * larger bound keeps commits flowing through a slow checkpoint, such as the
-   * first after a start on a cold index, at the cost of overlay memory and
-   * log replay at open.
-   */
-  commitWaitBytes?: bigint
 }
 
 export const Config: MessageType<Config> =
@@ -90,8 +68,5 @@ export const Config: MessageType<Config> =
     [6, 'volume_config', 11, 0, Config$2.codec],
     [7, 'store_config', 11, 0, Config$3.codec],
     [8, 'cache_bytes', 3],
-    [9, 'checkpoint_max_bytes', 3],
-    [10, 'single_process', 8],
     [11, 'reserve_bytes', 3],
-    [12, 'commit_wait_bytes', 3],
   ])
