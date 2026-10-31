@@ -135,7 +135,7 @@ func TestBuildBlkEngineBorrowsTransformAwareBlockStoreDecodedCache(t *testing.T)
 
 	// Build the first engine and let it store the decoded root.
 	firstCtx, firstCounter := block.WithReadCounter(ctx)
-	first, err := c.buildBlkEngine(firstCtx, tb.Logger, so, headRef.CloneVT(), transformConf)
+	first, err := c.buildBlkEngine(firstCtx, tb.Logger, so.GetBlockStore(), headRef.CloneVT(), transformConf)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
@@ -143,7 +143,7 @@ func TestBuildBlkEngineBorrowsTransformAwareBlockStoreDecodedCache(t *testing.T)
 
 	// Build the second engine over the same head.
 	secondCtx, secondCounter := block.WithReadCounter(ctx)
-	second, err := c.buildBlkEngine(secondCtx, tb.Logger, so, headRef.CloneVT(), transformConf)
+	second, err := c.buildBlkEngine(secondCtx, tb.Logger, so.GetBlockStore(), headRef.CloneVT(), transformConf)
 	if err != nil {
 		t.Fatal(err.Error())
 	}

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
+	"github.com/s4wave/spacewave/core/bstore"
 	"github.com/s4wave/spacewave/core/sobject"
 	"github.com/s4wave/spacewave/db/block"
 	"github.com/s4wave/spacewave/db/kvtx"
@@ -109,6 +110,9 @@ type replayer struct {
 	c *Controller
 	// so holds the World blocks.
 	so sobject.SharedObject
+	// pages is the engine's view of so's block store with the World pages
+	// not yet stored, or nil when every page is stored as it is computed.
+	pages *worldPages
 	// lookupOp resolves World operations to read their payload roots.
 	lookupOp world.LookupOp
 	// base is the World of the checkpoint, before the first operation.
@@ -159,6 +163,15 @@ type replayer struct {
 // newReplayer constructs a replayer for the World of so.
 func newReplayer(c *Controller, so sobject.SharedObject) *replayer {
 	return &replayer{c: c, so: so, lookupOp: c.buildLookupWorldOp(c.le)}
+}
+
+// store returns the block store World readers use: the page view, or so's
+// block store without one.
+func (r *replayer) store() bstore.BlockStore {
+	if r.pages != nil {
+		return r.pages
+	}
+	return r.so.GetBlockStore()
 }
 
 // sync replays snap and returns the World after the last operation it can
@@ -631,7 +644,7 @@ func (r *replayer) replay(
 	fork *replayFork,
 ) (state *InnerState, outcomes []replayOutcome, err error) {
 	// Advance one World through the pass and fence its blocks at the end.
-	w := newReplayWorld(r.c, r.so)
+	w := newReplayWorld(r.c, r.so, r.store())
 	defer func() {
 		if cerr := w.close(ctx); cerr != nil {
 			state, outcomes, err = nil, nil, cerr
@@ -770,7 +783,7 @@ func (r *replayer) worldLost(ctx context.Context, state *InnerState) bool {
 	if head.GetEmpty() {
 		return false
 	}
-	ws, err := r.c.buildBlkEngine(ctx, r.c.le, r.so, head, head.GetTransformConf())
+	ws, err := r.c.buildBlkEngine(ctx, r.c.le, r.store(), head, head.GetTransformConf())
 	if err != nil {
 		return errors.Is(err, block.ErrNotFound)
 	}

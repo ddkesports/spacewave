@@ -225,6 +225,7 @@ func (c *Controller) executeWorld(
 	// necessary.
 	le := c.le
 	replay := newReplayer(c, so)
+	replay.pages = c.newWorldPages(so)
 	if err := replay.load(ctx); err != nil {
 		return err
 	}
@@ -241,7 +242,7 @@ func (c *Controller) executeWorld(
 	}
 
 	// Bind the head to the block store.
-	blkEngine, err := c.buildBlkEngine(ctx, le, so, headRef, transformConf)
+	blkEngine, err := c.buildBlkEngine(ctx, le, replay.store(), headRef, transformConf)
 	if err != nil {
 		return err
 	}

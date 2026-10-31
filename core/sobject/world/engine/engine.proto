@@ -36,6 +36,12 @@ message Config {
   // Field 8 was the validator backoff. Fields 9 and 10 timed the World-local
   // GC sweep. Field 11 enabled storage reclaim.
   reserved 8, 9, 10, 11;
+
+  // StoreEveryWorld reads the World through the SharedObject's block store
+  // alone, with no view of pages computed but not yet stored, so each commit
+  // stores the pages of the World it computed. It is the rollback switch for
+  // the page view.
+  bool store_every_world = 12;
 }
 
 // InnerState is the World state a SharedObject checkpoint carries and replay

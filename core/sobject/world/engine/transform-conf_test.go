@@ -27,7 +27,7 @@ func TestSetTransformConfMovesWorldToS2(t *testing.T) {
 	ctx := context.Background()
 	pid := newProcessTestPeerID(t)
 	c, so, headState := newProcessTestWorld(t, ctx)
-	w := newReplayWorld(c, so)
+	w := newReplayWorld(c, so, so.GetBlockStore())
 	headState = processTransformTestOp(t, c, w, pid, 1, headState, transformTestCreateOp(t, headState, "before"))
 
 	// Switch to s2.
@@ -56,7 +56,7 @@ func TestSetTransformConfMovesWorldToS2(t *testing.T) {
 	}
 
 	// A fresh engine on the head reads both objects.
-	blk, err := buildBlockEngine(ctx, c.le, c.bus, c.sfs, so, headState.GetHeadRef(), headState.GetHeadRef().GetTransformConf(), nil, false)
+	blk, err := buildBlockEngine(ctx, c.le, c.bus, c.sfs, so.GetBlockStore(), headState.GetHeadRef(), headState.GetHeadRef().GetTransformConf(), nil, false)
 	if err != nil {
 		t.Fatal(err.Error())
 	}

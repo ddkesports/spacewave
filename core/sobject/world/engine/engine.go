@@ -11,6 +11,7 @@ import (
 	"github.com/aperturerobotics/util/ccontainer"
 	"github.com/aperturerobotics/util/routine"
 	"github.com/pkg/errors"
+	"github.com/s4wave/spacewave/core/bstore"
 	"github.com/s4wave/spacewave/core/sobject"
 	"github.com/s4wave/spacewave/db/block"
 	block_transform "github.com/s4wave/spacewave/db/block/transform"
@@ -65,21 +66,22 @@ func (w *blkEngine) Release() {
 func (c *Controller) buildBlkEngine(
 	ctx context.Context,
 	le *logrus.Entry,
-	so sobject.SharedObject,
+	store bstore.BlockStore,
 	headRef *bucket.ObjectRef,
 	transformConf *block_transform.Config,
 	opts ...world_block.EngineOption,
 ) (*blkEngine, error) {
-	return buildBlockEngine(ctx, le, c.bus, c.sfs, so, headRef, transformConf, c.buildLookupWorldOp(le), c.conf.GetVerbose(), opts...)
+	return buildBlockEngine(ctx, le, c.bus, c.sfs, store, headRef, transformConf, c.buildLookupWorldOp(le), c.conf.GetVerbose(), opts...)
 }
 
-// buildBlockEngine binds a World root to its SharedObject block store.
+// buildBlockEngine binds a World root to store, the SharedObject's block store
+// or the engine's view of it.
 func buildBlockEngine(
 	ctx context.Context,
 	le *logrus.Entry,
 	b bus.Bus,
 	sfs *block_transform.StepFactorySet,
-	so sobject.SharedObject,
+	store bstore.BlockStore,
 	headRef *bucket.ObjectRef,
 	transformConf *block_transform.Config,
 	lookupWorldOp world.LookupOp,
@@ -111,8 +113,8 @@ func buildBlockEngine(
 		}
 	}
 
-	// Use the object's block store and its decoded block cache.
-	blockStore := so.GetBlockStore()
+	// Use the store and its decoded block cache.
+	blockStore := store
 	decodedBlocks := blockStore.GetDecodedBlockCache()
 	if decodedBlocks == nil {
 		decodedBlocks = block.NewDecodedBlockCache()

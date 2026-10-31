@@ -186,7 +186,7 @@ func TestSetRetainedRootRequiresAcceptedHead(t *testing.T) {
 	c, so, head := newProcessTestWorld(t, ctx)
 	so.localStore = store_kvtx_inmem.NewStore()
 	so.snapshot = &testSharedObjectSnapshot{}
-	blk, err := buildBlockEngine(ctx, c.le, c.bus, c.sfs, so, head.GetHeadRef(), head.GetHeadRef().GetTransformConf(), nil, false)
+	blk, err := buildBlockEngine(ctx, c.le, c.bus, c.sfs, so.GetBlockStore(), head.GetHeadRef(), head.GetHeadRef().GetTransformConf(), nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}

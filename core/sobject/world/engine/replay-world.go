@@ -3,6 +3,7 @@ package sobject_world_engine
 import (
 	"context"
 
+	"github.com/s4wave/spacewave/core/bstore"
 	"github.com/s4wave/spacewave/core/sobject"
 	"github.com/s4wave/spacewave/db/bucket"
 	trace "github.com/s4wave/spacewave/db/traceutil"
@@ -20,17 +21,19 @@ import (
 type replayWorld struct {
 	// c builds the engine.
 	c *Controller
-	// so holds the World blocks.
+	// so initializes the World.
 	so sobject.SharedObject
+	// store holds the World blocks: so's block store or the engine's view.
+	store bstore.BlockStore
 	// ws serves head, or is nil before the first bind.
 	ws *blkEngine
 	// head is the World ws serves.
 	head *bucket.ObjectRef
 }
 
-// newReplayWorld constructs a replay World over the blocks of so.
-func newReplayWorld(c *Controller, so sobject.SharedObject) *replayWorld {
-	return &replayWorld{c: c, so: so}
+// newReplayWorld constructs a replay World of so over the blocks of store.
+func newReplayWorld(c *Controller, so sobject.SharedObject, store bstore.BlockStore) *replayWorld {
+	return &replayWorld{c: c, so: so, store: store}
 }
 
 // bind returns the engine serving head. It rebuilds the engine when the pass
@@ -45,7 +48,7 @@ func (w *replayWorld) bind(ctx context.Context, head *bucket.ObjectRef) (*blkEng
 	if err := w.close(ctx); err != nil {
 		return nil, err
 	}
-	ws, err := w.c.buildBlkEngine(ctx, w.c.le, w.so, head, head.GetTransformConf(), world_block.WithDeferredDurability())
+	ws, err := w.c.buildBlkEngine(ctx, w.c.le, w.store, head, head.GetTransformConf(), world_block.WithDeferredDurability())
 	if err != nil {
 		return nil, err
 	}

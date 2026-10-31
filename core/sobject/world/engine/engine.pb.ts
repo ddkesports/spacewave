@@ -51,6 +51,13 @@ export interface Config {
    * Verbose logs all operation results as debug messages.
    */
   verbose?: boolean
+  /**
+   * StoreEveryWorld reads the World through the SharedObject's block store
+   * alone, with no view of pages computed but not yet stored, so each commit
+   * stores the pages of the World it computed. It is the rollback switch for
+   * the page view.
+   */
+  storeEveryWorld?: boolean
 }
 
 export const Config: MessageType<Config> =
@@ -64,6 +71,7 @@ export const Config: MessageType<Config> =
       [5, 'disable_apply_world_op', 8],
       [6, 'disable_apply_object_op', 8],
       [7, 'verbose', 8],
+      [12, 'store_every_world', 8],
     ],
   )
 

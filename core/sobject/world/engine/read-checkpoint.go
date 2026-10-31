@@ -41,7 +41,7 @@ func OpenReadCheckpoint(
 	}
 
 	// Open a read-only block engine on the replayed World.
-	engine, err := buildBlockEngine(ctx, le, b, sfs, so, head, head.GetTransformConf(), nil, false)
+	engine, err := buildBlockEngine(ctx, le, b, sfs, so.GetBlockStore(), head, head.GetTransformConf(), nil, false)
 	if err != nil {
 		return nil, nil, err
 	}

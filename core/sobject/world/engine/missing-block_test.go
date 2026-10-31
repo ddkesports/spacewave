@@ -185,7 +185,7 @@ func testEngineStopsReplayAtBlockGap(t *testing.T, store *hidingBlockStore, want
 	}
 
 	// Build the engine over the same store.
-	blk, err := buildBlockEngine(ctx, space.c.le, space.c.bus, space.c.sfs, so, space.genesis.GetHeadRef(), transformConf, space.c.buildLookupWorldOp(space.c.le), false)
+	blk, err := buildBlockEngine(ctx, space.c.le, space.c.bus, space.c.sfs, so.GetBlockStore(), space.genesis.GetHeadRef(), transformConf, space.c.buildLookupWorldOp(space.c.le), false)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
