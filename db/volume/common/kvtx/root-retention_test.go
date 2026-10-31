@@ -633,7 +633,8 @@ func TestRootRetentionSingleMarkLeavesBacklog(t *testing.T) {
 }
 
 // TestDueDeadlistCheckedAgainstMark checks that naming a deadlist record
-// counts its held pages once, that a block pass counts the pages a due record
+// counts its held pages and the found pages its batch newly names once, that
+// a block pass counts the pages a due record
 // lists that the mark reached and no shared count holds, releases the
 // record's name, and that a later pass sweeps the record.
 func TestDueDeadlistCheckedAgainstMark(t *testing.T) {
@@ -652,6 +653,7 @@ func TestDueDeadlistCheckedAgainstMark(t *testing.T) {
 		return ref
 	}
 	live, shared := page("live page"), page("shared page")
+	stored, unlisted := page("stored page"), page("unlisted page")
 	gone, err := block.BuildBlockRef([]byte("dead page"), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -697,6 +699,43 @@ func TestDueDeadlistCheckedAgainstMark(t *testing.T) {
 	})
 	if err != nil || holds != 1 {
 		t.Fatalf("shared page holds=%d err=%v, want 1", holds, err)
+	}
+
+	// Encode a new parent of two stored pages and a record that lists one of
+	// them as held.
+	parentData := []byte("parent of the stored pages")
+	parent, err := block.BuildBlockRef(parentData, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record2, record2Ref, err := block.EncodeDeadlist(2, nil, nil, &block.Replacements{Held: []*block.BlockRef{stored}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Store both pages again with the parent and the record: each found page
+	// gains one count, not two.
+	batch := append([]*block.PutBatchEntry{
+		{Ref: stored, Data: []byte("stored page"), RefsKnown: true},
+		{Ref: unlisted, Data: []byte("unlisted page"), RefsKnown: true},
+		{Ref: parent, Data: parentData, Refs: []*block.BlockRef{stored, unlisted}, RefsKnown: true},
+	}, record2...)
+	named := []block.NamedRoot{
+		{Name: "parent", Ref: parent},
+		{Name: block.DeadlistRootName(2), Ref: record2Ref},
+	}
+	if err := v.SetBucketRoots(ctx, "bucket", batch, named); err != nil {
+		t.Fatal(err)
+	}
+	for _, ref := range []*block.BlockRef{stored, unlisted} {
+		err = (&transactionRefGraph{volume: v}).read(ctx, func(rg *block_gc.RefGraph) error {
+			var err error
+			holds, err = rg.GetHolds(ctx, block_gc.BlockIRI(ref))
+			return err
+		})
+		if err != nil || holds != 1 {
+			t.Fatalf("found page %s holds=%d err=%v, want 1", ref.MarshalString(), holds, err)
+		}
 	}
 
 	// Collect and check the record was counted and its name released.

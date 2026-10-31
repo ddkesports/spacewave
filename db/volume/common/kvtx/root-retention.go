@@ -275,8 +275,9 @@ func (v *Volume) SetBucketRoots(ctx context.Context, bucketID string, entries []
 		}
 
 		// Move each named root.
+		batch := &namingBatch{entries: entries, existed: existed}
 		for _, root := range roots {
-			if err := setBucketRoot(ctx, blocks, rg, bucketID, root.Name, root.Ref); err != nil {
+			if err := setBucketRoot(ctx, blocks, rg, batch, bucketID, root.Name, root.Ref); err != nil {
 				return err
 			}
 		}
@@ -292,7 +293,8 @@ func (v *Volume) SetBucketRoots(ctx context.Context, bucketID string, entries []
 }
 
 // setBucketRoot requires a shared physical transaction for bytes and graph.
-func setBucketRoot(ctx context.Context, blocks block.StoreOps, rg *block_gc.RefGraph, bucketID, name string, ref *block.BlockRef) error {
+// batch is the batch the transaction stored, or nil when it stored none.
+func setBucketRoot(ctx context.Context, blocks block.StoreOps, rg *block_gc.RefGraph, batch *namingBatch, bucketID, name string, ref *block.BlockRef) error {
 	// Read the root the owner node holds now.
 	owner := RootOwnerIRI(bucketID, name)
 	bucket := block_gc.BucketIRI(bucketID)
@@ -334,30 +336,101 @@ func setBucketRoot(ctx context.Context, blocks block.StoreOps, rg *block_gc.RefG
 		return err
 	}
 
-	// Count the held pages of a deadlist record the first time it is named.
+	// Count the new holders of a deadlist record the first time it is named.
 	if ref.GetEmpty() || !strings.HasPrefix(name, block.DeadlistRootPrefix) || slices.Contains(old, next) {
 		return nil
 	}
-	return addDeadlistHolds(ctx, blocks, rg, ref)
+	return batch.countRecord(ctx, blocks, rg, ref)
 }
 
-// addDeadlistHolds adds one shared count to each page the deadlist record at
-// ref lists as held. Naming the record is the holder's save, so the count
-// lands in the transaction that makes the new holders durable, exactly once
-// per record: renaming it due, or naming it again, adds nothing.
-func addDeadlistHolds(ctx context.Context, blocks block.StoreOps, rg *block_gc.RefGraph, ref *block.BlockRef) error {
+// namingBatch is the batch of entries a transaction stores with the roots it
+// names. A block's shared count is its holders minus one, and naming a
+// deadlist record is the save of its version's new holders, so the counts
+// land then, from exactly one source per page:
+//
+//   - A stored page the batch carries gains one count per entry the batch
+//     newly stores that names it. The log saw such a page as created, since
+//     only the store knew it existed, so the record's held list misses it.
+//   - Any other held page is counted from the record's held list, including a
+//     page an earlier version kept that the batch newly stores.
+//
+// A stored page named only by other stored pages gains nothing: no new holder
+// reached it. Sub-blocks are encoded inside their block and never stored
+// alone, so their block's count covers them. An entry the batch newly stores
+// declares its refs, since the Volume refuses one that does not.
+type namingBatch struct {
+	entries []*block.PutBatchEntry
+	existed []bool
+	// counted holds the found pages once they are counted, so naming a
+	// second record in the batch does not count them again.
+	counted map[string]struct{}
+}
+
+// countRecord adds the shared counts of naming the deadlist record at ref for
+// the first time. batch may be nil.
+func (b *namingBatch) countRecord(ctx context.Context, blocks block.StoreOps, rg *block_gc.RefGraph, ref *block.BlockRef) error {
 	// Read the record from the transaction that stores it.
 	_, dead, err := block.ReadDeadlist(ctx, blocks, ref)
 	if err != nil {
 		return fmt.Errorf("count held pages of deadlist record: %w", err)
 	}
 
-	// Count each held page.
-	held := make([]string, len(dead.Held))
-	for i, page := range dead.Held {
-		held[i] = block_gc.BlockIRI(page)
+	// Count the found pages once per batch, then the held pages it did not.
+	var holds []string
+	var counted map[string]struct{}
+	if b != nil {
+		if b.counted == nil {
+			holds = b.foundHolds()
+			b.counted = make(map[string]struct{}, len(holds))
+			for _, key := range holds {
+				b.counted[key] = struct{}{}
+			}
+		}
+		counted = b.counted
 	}
-	return rg.AddHolds(ctx, held)
+	for _, page := range dead.Held {
+		key := block_gc.BlockIRI(page)
+		if _, ok := counted[key]; !ok {
+			holds = append(holds, key)
+		}
+	}
+	return rg.AddHolds(ctx, holds)
+}
+
+// foundHolds returns one entry per edge from a page the batch newly stores to
+// a page it found stored.
+func (b *namingBatch) foundHolds() []string {
+	// Gather the pages the store already held.
+	found := make(map[string]struct{})
+	for i, e := range b.entries {
+		if b.existed[i] && !e.Tombstone {
+			found[block_gc.BlockIRI(e.Ref)] = struct{}{}
+		}
+	}
+	if len(found) == 0 {
+		return nil
+	}
+
+	// Count each newly stored page's edges into them, once per child.
+	var holds []string
+	for i, e := range b.entries {
+		if b.existed[i] || e.Tombstone {
+			continue
+		}
+		seen := make(map[string]struct{}, len(e.Refs))
+		for _, child := range e.Refs {
+			key := block_gc.BlockIRI(child)
+			if _, ok := found[key]; !ok {
+				continue
+			}
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			holds = append(holds, key)
+		}
+	}
+	return holds
 }
 
 // ReleaseBucketRoots drops the bucket's staging edges to roots in one
