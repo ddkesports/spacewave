@@ -330,7 +330,34 @@ func setBucketRoot(ctx context.Context, blocks block.StoreOps, rg *block_gc.RefG
 			removes = append(removes, block_gc.RefEdge{Subject: owner, Object: previous})
 		}
 	}
-	return rg.ApplyRefBatch(ctx, adds, removes)
+	if err := rg.ApplyRefBatch(ctx, adds, removes); err != nil {
+		return err
+	}
+
+	// Count the held pages of a deadlist record the first time it is named.
+	if ref.GetEmpty() || !strings.HasPrefix(name, block.DeadlistRootPrefix) || slices.Contains(old, next) {
+		return nil
+	}
+	return addDeadlistHolds(ctx, blocks, rg, ref)
+}
+
+// addDeadlistHolds adds one shared count to each page the deadlist record at
+// ref lists as held. Naming the record is the holder's save, so the count
+// lands in the transaction that makes the new holders durable, exactly once
+// per record: renaming it due, or naming it again, adds nothing.
+func addDeadlistHolds(ctx context.Context, blocks block.StoreOps, rg *block_gc.RefGraph, ref *block.BlockRef) error {
+	// Read the record from the transaction that stores it.
+	_, dead, err := block.ReadDeadlist(ctx, blocks, ref)
+	if err != nil {
+		return fmt.Errorf("count held pages of deadlist record: %w", err)
+	}
+
+	// Count each held page.
+	held := make([]string, len(dead.Held))
+	for i, page := range dead.Held {
+		held[i] = block_gc.BlockIRI(page)
+	}
+	return rg.AddHolds(ctx, held)
 }
 
 // ReleaseBucketRoots drops the bucket's staging edges to roots in one

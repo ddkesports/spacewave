@@ -345,6 +345,11 @@ export interface Deadlist {
    * the first block.
    */
   parts?: BlockRef[]
+  /**
+   * Held are live stored pages that may have gained a holder. Naming the
+   * record adds one shared count to each.
+   */
+  held?: BlockRef[]
 }
 
 export const Deadlist: MessageType<Deadlist> =
@@ -356,4 +361,5 @@ export const Deadlist: MessageType<Deadlist> =
     [5, 'removed', 11, 1, BlockRef.codec],
     [6, 'kept', 11, 1, BlockRef.codec],
     [7, 'parts', 11, 1, BlockRef.codec],
+    [8, 'held', 11, 1, BlockRef.codec],
   ])

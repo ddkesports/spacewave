@@ -21,9 +21,9 @@ const deadlistSampleSize = 8
 // checkDueDeadlists checks each due deadlist record a bucket names under
 // block.DeadlistDueRootPrefix against mark, which read every child list and
 // kept the named roots' edges. A page the record lists as replaced or removed
-// that the mark reached is a deadlist error: it is counted and logged, and
-// nothing frees by the record. Each checked record's name is released, so a
-// later pass sweeps it. A record the store no longer holds is released
+// that the mark reached and no shared count holds is a deadlist error: it is
+// counted and logged, and nothing frees by the record. Each checked record's
+// name is released, so a later pass sweeps it. A record the store no longer holds is released
 // unchecked; one that fails to read stays for the next pass.
 func (v *Volume) checkDueDeadlists(ctx context.Context, mark *block_gc.BlockMark) error {
 	for _, edge := range mark.OwnerEdges {
@@ -50,7 +50,12 @@ func (v *Volume) checkDueDeadlists(ctx context.Context, mark *block_gc.BlockMark
 			}
 			continue
 		default:
-			v.countDeadlist(bucketID, name, mark, dead)
+			if err := v.countDeadlist(ctx, bucketID, name, mark, dead); err != nil {
+				if le := v.logDeadlist(bucketID, name); le != nil {
+					le.WithError(err).Warn("unable to read shared counts of due deadlist record")
+				}
+				continue
+			}
 		}
 
 		// Release its name.
@@ -65,23 +70,45 @@ func (v *Volume) checkDueDeadlists(ctx context.Context, mark *block_gc.BlockMark
 }
 
 // countDeadlist counts a checked record and the pages it lists as dead that
-// mark reached, logging a sample of them.
-func (v *Volume) countDeadlist(bucketID, name string, mark *block_gc.BlockMark, dead *block.Replacements) {
+// mark reached, logging a sample of them. A reached page with a shared count
+// is held by another holder, not an error.
+func (v *Volume) countDeadlist(ctx context.Context, bucketID, name string, mark *block_gc.BlockMark, dead *block.Replacements) error {
 	// Find the listed pages the mark reached.
+	var reached []string
+	for _, page := range slices.Concat(dead.Replaced, dead.Removed) {
+		if node := block_gc.BlockIRI(page); mark.Live.Has(node) {
+			reached = append(reached, node)
+		}
+	}
+
+	// Drop the reached pages another holder keeps.
 	var live []string
 	n := 0
-	for _, page := range slices.Concat(dead.Replaced, dead.Removed) {
-		if mark.Live.Has(block_gc.BlockIRI(page)) {
-			if n++; len(live) < deadlistSampleSize {
-				live = append(live, page.MarshalString())
+	if len(reached) != 0 {
+		err := (&transactionRefGraph{volume: v}).read(ctx, func(rg *block_gc.RefGraph) error {
+			for _, node := range reached {
+				holds, err := rg.GetHolds(ctx, node)
+				if err != nil {
+					return err
+				}
+				if holds != 0 {
+					continue
+				}
+				if n++; len(live) < deadlistSampleSize {
+					live = append(live, node)
+				}
 			}
+			return nil
+		})
+		if err != nil {
+			return err
 		}
 	}
 
 	// Count them, logging any.
 	v.deadlistsChecked.Add(1)
 	if n == 0 {
-		return
+		return nil
 	}
 	v.deadlistLivePages.Add(uint64(n))
 	if le := v.logDeadlist(bucketID, name); le != nil {
@@ -89,6 +116,7 @@ func (v *Volume) countDeadlist(bucketID, name string, mark *block_gc.BlockMark, 
 			WithField("sample", live).
 			Error("due deadlist record lists pages the mark reached")
 	}
+	return nil
 }
 
 // logDeadlist returns the log entry for a due record, or nil when the volume

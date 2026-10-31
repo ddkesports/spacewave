@@ -22,6 +22,14 @@ type Replacements struct {
 	// Kept lists live pages a write attached under a new parent, such as a
 	// moved subtree or a written page. Expanding Removed stops at them.
 	Kept []*BlockRef
+	// Held lists the stored pages, among Kept, that may have gained a holder:
+	// a page the interval wrote, or the new root, now names a stored page that
+	// no page the interval replaced named, such as another World's object root
+	// or a copied subtree. Each adds one shared count when the record is
+	// named. A held page whose old parent the record lists dead moved instead,
+	// as when the root moves onto a page below it; applying the record takes
+	// that count back.
+	Held []*BlockRef
 }
 
 // Expand visits each page in Removed and each page under one, stopping at the
@@ -49,11 +57,27 @@ func (r *Replacements) Expand(ctx context.Context, src StoreOps, visit func(ref 
 // so it leaves the dead pages even when r reported it, as when a later write
 // stores a page again or attaches a subtree r removed. Expansion stops at
 // every page either interval replaced or kept; stopping early only leaks.
+//
+// A page next holds that r reported dead moved within the joined interval and
+// gains no holder. A page r holds that next reports dead keeps both: the count
+// its holder added, and the death that takes it back.
 func (r *Replacements) Then(next *Replacements) *Replacements {
 	// Collect the pages next keeps.
 	live := make(map[string]struct{}, len(next.Kept))
 	for _, ref := range next.Kept {
 		live[ref.MarshalString()] = struct{}{}
+	}
+
+	// Collect the pages r reported dead.
+	died := make(map[string]struct{}, len(r.Replaced)+len(r.Removed))
+	for _, ref := range slices.Concat(r.Replaced, r.Removed) {
+		died[ref.MarshalString()] = struct{}{}
+	}
+	held := slices.Clone(r.Held)
+	for _, ref := range next.Held {
+		if _, ok := died[ref.MarshalString()]; !ok {
+			held = append(held, ref)
+		}
 	}
 	dead := func(lists ...[]*BlockRef) []*BlockRef {
 		var out []*BlockRef
@@ -72,5 +96,6 @@ func (r *Replacements) Then(next *Replacements) *Replacements {
 		Replaced: dead(r.Replaced, next.Replaced),
 		Removed:  dead(r.Removed, next.Removed),
 		Kept:     slices.Concat(r.Kept, next.Kept),
+		Held:     held,
 	}
 }

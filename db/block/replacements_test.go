@@ -17,7 +17,8 @@ type recording struct {
 
 // TestReplacementsMatchDiff walks a chain root -> mid -> leaf through edits,
 // moves, removals and root changes, and checks each interval's record against
-// the diff of the old and new trees.
+// the diff of the old and new trees, and the pages it holds against the
+// stored pages each scenario gives a second parent.
 func TestReplacementsMatchDiff(t *testing.T) {
 	// Every scenario writes to one in-memory store.
 	ctx := t.Context()
@@ -59,15 +60,20 @@ func TestReplacementsMatchDiff(t *testing.T) {
 		return r
 	}
 
-	// check writes the transaction and compares its record with the diff.
-	check := func(name string, r *recording, from *block.BlockRef) {
+	// check writes the transaction, compares its record with the diff, and
+	// checks it holds exactly the pages in held.
+	check := func(name string, r *recording, from *block.BlockRef, held ...*block.BlockRef) {
 		// The interval's record names exactly what the diff finds dead.
 		to, _, err := r.tx.Write(ctx, true)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := block_mock.CheckReplacements(ctx, store, from, to, r.log.Take(to)); err != nil {
+		rep := r.log.Take(to)
+		if err := block_mock.CheckReplacements(ctx, store, from, to, rep); err != nil {
 			t.Fatalf("%s: %v", name, err)
+		}
+		if len(rep.Held) != len(held) || (len(held) == 1 && !rep.Held[0].EqualsRef(held[0])) {
+			t.Fatalf("%s: held %v, want %v", name, rep.Held, held)
 		}
 
 		// A write with nothing dirty records nothing.
@@ -75,8 +81,8 @@ func TestReplacementsMatchDiff(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		rep := r.log.Take(to)
-		if len(rep.Replaced)+len(rep.Removed) != 0 {
+		rep = r.log.Take(to)
+		if len(rep.Replaced)+len(rep.Removed)+len(rep.Held) != 0 {
 			t.Fatalf("%s: clean interval recorded %d replaced, %d removed", name, len(rep.Replaced), len(rep.Removed))
 		}
 	}
@@ -105,7 +111,7 @@ func TestReplacementsMatchDiff(t *testing.T) {
 	other := chain("other")
 	r = open(from)
 	r.mid.SetRefAtCursor(other, true)
-	check("swap", r, from)
+	check("swap", r, from, other)
 
 	// Move the leaf under a new middle block.
 	from = chain("move")
@@ -129,7 +135,7 @@ func TestReplacementsMatchDiff(t *testing.T) {
 	if err := r.tx.SetRoot(r.mid); err != nil {
 		t.Fatal(err)
 	}
-	check("reroot", r, from)
+	check("reroot", r, from, r.mid.GetRef())
 
 	// Two writes in one interval: the first write's pages die in the second.
 	from = chain("twice")

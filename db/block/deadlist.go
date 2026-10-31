@@ -54,6 +54,9 @@ func EncodeDeadlist(seq uint64, from, to *BlockRef, dead *Replacements) ([]*PutB
 	for _, ref := range dead.Kept {
 		add(ref, func(d *Deadlist) *[]*BlockRef { return &d.Kept })
 	}
+	for _, ref := range dead.Held {
+		add(ref, func(d *Deadlist) *[]*BlockRef { return &d.Held })
+	}
 
 	// Encode the parts after the first, then the first naming them.
 	var entries []*PutBatchEntry
@@ -95,7 +98,7 @@ func ReadDeadlist(ctx context.Context, src StoreOps, ref *BlockRef) (*Deadlist, 
 	if err != nil {
 		return nil, nil, err
 	}
-	dead := &Replacements{Replaced: first.Replaced, Removed: first.Removed, Kept: first.Kept}
+	dead := &Replacements{Replaced: first.Replaced, Removed: first.Removed, Kept: first.Kept, Held: first.Held}
 	for _, partRef := range first.Parts {
 		part, err := readDeadlistBlock(ctx, src, partRef)
 		if err != nil {
@@ -104,6 +107,7 @@ func ReadDeadlist(ctx context.Context, src StoreOps, ref *BlockRef) (*Deadlist, 
 		dead.Replaced = append(dead.Replaced, part.Replaced...)
 		dead.Removed = append(dead.Removed, part.Removed...)
 		dead.Kept = append(dead.Kept, part.Kept...)
+		dead.Held = append(dead.Held, part.Held...)
 	}
 	return first, dead, nil
 }

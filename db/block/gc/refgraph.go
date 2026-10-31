@@ -31,6 +31,9 @@ const (
 	// kindYoungHead is the one record of the young log's range, as
 	// MarkYoung describes.
 	kindYoungHead byte = 'g'
+	// kindHold keys the shared count of a block by the block. Its value is
+	// a uvarint, the block's holders minus one, kept only above zero.
+	kindHold byte = 'h'
 	// kindIncoming keys an edge by object then subject.
 	kindIncoming byte = 'i'
 	// kindNode keyed the node inventory of the mark-sweep collector, which
@@ -62,7 +65,8 @@ const (
 // empty one. Blocks are collected by marking from the roots, so a block never
 // joins the unreferenced queue: the queue's staging edge to a block creates
 // the block's child list, exists while the list does, and is never removed on
-// its own. Incoming queries of a block report its owners that are not blocks,
+// its own. A block another holder shares also keeps a shared count, as AddHolds
+// describes, which goes with its child list. Incoming queries of a block report its owners that are not blocks,
 // and the unreferenced queue while the block is tracked. While a block pass
 // runs, each write also logs the blocks it adopts, as MarkBlocks describes.
 // Each write also logs the blocks whose child lists it creates or changes in
@@ -408,14 +412,17 @@ func hasIncomingTx(ctx context.Context, tx kvtx.Tx, object string, ignored map[s
 
 // RemoveNodeRefs removes the observed outgoing targets in bounded transactions.
 // New unrelated edges may be added after this operation's initial snapshot. A
-// block's child list goes first, so the block is no longer tracked; its
-// children never join the unreferenced queue.
+// block's child list and shared count go first, so the block is no longer
+// tracked; its children never join the unreferenced queue.
 func (g *RefGraph) RemoveNodeRefs(ctx context.Context, node string, markOrphaned bool) ([]string, error) {
 	// Drop a block's child list.
 	var children []string
 	if isBlockNode(node) {
 		err := g.transaction(ctx, true, func(ctx context.Context, tx kvtx.Tx) error {
-			// Read the list, then delete it.
+			// Drop the shared count, then read the list and delete it.
+			if err := tx.Delete(ctx, graphKey(kindHold, node)); err != nil {
+				return err
+			}
 			var found bool
 			var err error
 			children, found, err = readChildrenTx(ctx, tx, node)

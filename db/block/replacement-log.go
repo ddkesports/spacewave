@@ -123,6 +123,11 @@ func (l *ReplacementLog) recordWrite(base, page *pageBase) {
 // not touch, live as a whole. The candidates are the old root, every replaced
 // page and every page one named. A candidate not live is dead: a replaced or
 // created page has its children accounted, any other heads a dead subtree.
+//
+// A live page outside both maps that no replaced page named, and that is not
+// the old root, is held: the walk reached it from a created page, or it is the
+// new root. It gained a holder unless its old parent died untouched, which
+// only applying the record can see.
 func (l *ReplacementLog) net(to *BlockRef) *Replacements {
 	// Walk the live pages from the new root through the touched pages.
 	live := make(map[string]*BlockRef)
@@ -191,9 +196,16 @@ func (l *ReplacementLog) net(to *BlockRef) *Replacements {
 	// Keep the live pages that no replaced page named: attached here from a
 	// position outside the touched pages, or written by this interval. A
 	// written page may equal a stored page inside a removed subtree.
+	from := l.from.MarshalString()
 	for key, ref := range live {
-		if _, isNamed := named[key]; !isNamed {
-			out.Kept = append(out.Kept, ref)
+		if _, isNamed := named[key]; isNamed {
+			continue
+		}
+		out.Kept = append(out.Kept, ref)
+		_, isReplaced := l.replaced[key]
+		_, isCreated := l.created[key]
+		if !isReplaced && !isCreated && key != from {
+			out.Held = append(out.Held, ref)
 		}
 	}
 	return out

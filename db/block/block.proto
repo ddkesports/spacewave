@@ -172,5 +172,8 @@ message Deadlist {
   // Parts are further Deadlist blocks with the rest of the refs, set only on
   // the first block.
   repeated BlockRef parts = 7;
+  // Held are live stored pages that may have gained a holder. Naming the
+  // record adds one shared count to each.
+  repeated BlockRef held = 8;
 }
 

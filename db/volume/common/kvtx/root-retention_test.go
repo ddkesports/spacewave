@@ -632,33 +632,71 @@ func TestRootRetentionSingleMarkLeavesBacklog(t *testing.T) {
 	}
 }
 
-// TestDueDeadlistCheckedAgainstMark checks that a block pass counts the pages
-// a due deadlist record lists that the mark reached, releases the record's
-// name, and that a later pass sweeps the record.
+// TestDueDeadlistCheckedAgainstMark checks that naming a deadlist record
+// counts its held pages once, that a block pass counts the pages a due record
+// lists that the mark reached and no shared count holds, releases the
+// record's name, and that a later pass sweeps the record.
 func TestDueDeadlistCheckedAgainstMark(t *testing.T) {
-	// Hold a live page under a name.
+	// Hold a live page and a shared page under names.
 	v, _ := newPublicationTestVolume(t)
 	ctx := t.Context()
-	data := []byte("live page")
-	live, err := block.BuildBlockRef(data, nil)
-	if err != nil {
-		t.Fatal(err)
+	var entries []*block.PutBatchEntry
+	page := func(data string) *block.BlockRef {
+		// Address the page and queue it for the first write.
+		t.Helper()
+		ref, err := block.BuildBlockRef([]byte(data), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries = append(entries, &block.PutBatchEntry{Ref: ref, Data: []byte(data), RefsKnown: true})
+		return ref
 	}
+	live, shared := page("live page"), page("shared page")
 	gone, err := block.BuildBlockRef([]byte("dead page"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	entries := []*block.PutBatchEntry{{Ref: live, Data: data, RefsKnown: true}}
 
-	// Name a due record that lists the live page and a dead one.
-	dead := &block.Replacements{Replaced: []*block.BlockRef{live}, Removed: []*block.BlockRef{gone}}
+	// Name a pending record that lists the live and shared pages and a dead
+	// one, and holds the shared page.
+	dead := &block.Replacements{
+		Replaced: []*block.BlockRef{live, shared},
+		Removed:  []*block.BlockRef{gone},
+		Held:     []*block.BlockRef{shared},
+	}
 	record, recordRef, err := block.EncodeDeadlist(1, nil, nil, dead)
 	if err != nil {
 		t.Fatal(err)
 	}
-	roots := []block.NamedRoot{{Name: "head", Ref: live}, {Name: block.DeadlistDueRootName(1), Ref: recordRef}}
+	roots := []block.NamedRoot{
+		{Name: "head", Ref: live},
+		{Name: "other", Ref: shared},
+		{Name: block.DeadlistRootName(1), Ref: recordRef},
+	}
 	if err := v.SetBucketRoots(ctx, "bucket", append(entries, record...), roots); err != nil {
 		t.Fatal(err)
+	}
+
+	// Name it again, then move it due: the shared page keeps one count.
+	pending := []block.NamedRoot{{Name: block.DeadlistRootName(1), Ref: recordRef}}
+	if err := v.SetBucketRoots(ctx, "bucket", nil, pending); err != nil {
+		t.Fatal(err)
+	}
+	due := []block.NamedRoot{
+		{Name: block.DeadlistRootName(1)},
+		{Name: block.DeadlistDueRootName(1), Ref: recordRef},
+	}
+	if err := v.SetBucketRoots(ctx, "bucket", nil, due); err != nil {
+		t.Fatal(err)
+	}
+	var holds uint64
+	err = (&transactionRefGraph{volume: v}).read(ctx, func(rg *block_gc.RefGraph) error {
+		var err error
+		holds, err = rg.GetHolds(ctx, block_gc.BlockIRI(shared))
+		return err
+	})
+	if err != nil || holds != 1 {
+		t.Fatalf("shared page holds=%d err=%v, want 1", holds, err)
 	}
 
 	// Collect and check the record was counted and its name released.
