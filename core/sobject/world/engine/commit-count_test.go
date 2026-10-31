@@ -4,17 +4,22 @@ package sobject_world_engine_test
 
 import (
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/aperturerobotics/controllerbus/bus"
 	"github.com/aperturerobotics/controllerbus/controller/resolver"
 	storage_native "github.com/s4wave/spacewave/bldr/storage/native"
+	"github.com/s4wave/spacewave/core/metrics"
 	provider "github.com/s4wave/spacewave/core/provider"
 	provider_local "github.com/s4wave/spacewave/core/provider/local"
 	"github.com/s4wave/spacewave/core/sobject"
 	sobject_world_engine "github.com/s4wave/spacewave/core/sobject/world/engine"
+	"github.com/s4wave/spacewave/db/block"
+	block_mock "github.com/s4wave/spacewave/db/block/mock"
 	"github.com/s4wave/spacewave/db/bucket"
+	bucket_lookup "github.com/s4wave/spacewave/db/bucket/lookup"
 	"github.com/s4wave/spacewave/db/s4db"
 	volume_s4db "github.com/s4wave/spacewave/db/volume/s4db"
 	"github.com/s4wave/spacewave/db/world"
@@ -130,6 +135,43 @@ func (w *localWorld) create(t *testing.T, key string) {
 	}
 }
 
+// createWithPayload commits a World write that creates the object key with
+// a root block it puts, the operation's payload.
+func (w *localWorld) createWithPayload(t *testing.T, key string) {
+	// Put the root block through the write.
+	t.Helper()
+	ctx := t.Context()
+	tx, err := w.eng.NewTransaction(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Discard()
+	var oref *bucket.ObjectRef
+	err = tx.AccessWorldState(ctx, nil, func(bls *bucket_lookup.Cursor) error {
+		// Encode the block and put it as the object's root.
+		data, err := block_mock.NewExample(key).MarshalVT()
+		if err != nil {
+			return err
+		}
+		oref = bls.GetRef().Clone()
+		oref.RootRef, _, err = bls.PutBlock(ctx, data, &block.PutOpts{RefsKnown: true})
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create the object at it and commit.
+	obj, err := tx.CreateObject(ctx, key, oref)
+	world.ReleaseObjectState(obj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // newWrite returns an uncommitted World write that creates the object key.
 func (w *localWorld) newWrite(t *testing.T, key string) world.Tx {
 	// Open a write and create the object in it.
@@ -173,8 +215,11 @@ func TestLocalWorldCommitPhysicalCommits(t *testing.T) {
 // install are two database commits: the SharedObject state, then the hold of
 // the checkpoint World, the replay span and the replay save together.
 func TestCheckpointInstallPhysicalCommits(t *testing.T) {
-	// Write one operation short of a checkpoint and let the engine settle.
+	// Write one operation short of a checkpoint, the first with a payload, and
+	// let the engine settle.
 	w, so := startGatedWorld(t, t.TempDir(), nil)
+	flows := scrapeWriteFlows(t)
+	w.createWithPayload(t, "checkpoint/payload")
 	var n int
 	for ; admittedOps(t, so) < sobject.MinCheckpointOperations-1; n++ {
 		w.create(t, "checkpoint/"+strconv.Itoa(n))
@@ -200,6 +245,51 @@ func TestCheckpointInstallPhysicalCommits(t *testing.T) {
 	if got := waitSeqIdle(t, w) - written; got != 2 {
 		t.Fatalf("checkpoint and install made %d physical commits, want 2", got)
 	}
+
+	// The metrics count every commit, each kind of byte, and the checkpoint.
+	after := scrapeWriteFlows(t)
+	if got := after["spacewave_world_commits_total"] - flows["spacewave_world_commits_total"]; got < float64(n+2) {
+		t.Fatalf("counted %v commits, want at least %d", got, n+2)
+	}
+	for _, kind := range []string{"world", "payload", "state", "replay"} {
+		key := "spacewave_world_commit_bytes_total{kind=" + kind + "}"
+		if after[key] <= flows[key] {
+			t.Fatalf("counted no %s bytes", kind)
+		}
+	}
+	if after["spacewave_world_checkpoints_total"] <= flows["spacewave_world_checkpoints_total"] {
+		t.Fatal("counted no checkpoint")
+	}
+	if _, ok := after["spacewave_world_checkpoint_skips_total{reason=pending}"]; !ok {
+		t.Fatal("no checkpoint skip series")
+	}
+}
+
+// scrapeWriteFlows gathers the process metrics and returns the World write
+// counters, keyed by name and any kind or reason label.
+func scrapeWriteFlows(t *testing.T) map[string]float64 {
+	// Gather the families.
+	t.Helper()
+	families, err := metrics.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Keep the World series.
+	values := make(map[string]float64)
+	for _, f := range families {
+		if !strings.HasPrefix(f.GetName(), "spacewave_world_") {
+			continue
+		}
+		for _, m := range f.GetMetric() {
+			key := f.GetName()
+			for _, l := range m.GetLabel() {
+				key += "{" + l.GetName() + "=" + l.GetValue() + "}"
+			}
+			values[key] = m.GetCounter().GetValue()
+		}
+	}
+	return values
 }
 
 // waitSeqIdle waits until the database makes no commit for 300 ms and returns

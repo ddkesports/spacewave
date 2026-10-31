@@ -225,13 +225,6 @@ func (e *soEngine) prepareStableCheckpoint(ctx context.Context, snap sobject.Sha
 		return nil, nil
 	}
 
-	// Skip while an admission waits for its receipt: the checkpoint writes
-	// the state directly, and the update after the last receipt settles
-	// checkpoints again.
-	if e.pending() {
-		return nil, nil
-	}
-
 	// Wait for enough stable operations whose World the replay holds. The
 	// leader publishes every ordered batch, since the other participants
 	// install its checkpoints instead of replaying.
@@ -244,9 +237,18 @@ func (e *soEngine) prepareStableCheckpoint(ctx context.Context, snap sobject.Sha
 		return nil, nil
 	}
 
+	// Skip while an admission waits for its receipt: the checkpoint writes
+	// the state directly, and the update after the last receipt settles
+	// checkpoints again.
+	if e.pending() {
+		countSkip(CheckpointSkipPending)
+		return nil, nil
+	}
+
 	// Encode the World after the stable prefix.
 	world := e.replay.stateAfter(prefix)
 	if world == nil {
+		countSkip(CheckpointSkipUnplaced)
 		return nil, nil
 	}
 	data, err := world.MarshalVT()
@@ -264,7 +266,11 @@ func (e *soEngine) adoptStable(ctx context.Context, ckpt *stableCheckpoint) erro
 		return e.adoptStableCheckpoint(ctx, ckpt.host, state, ckpt.prefix, ckpt.data)
 	})
 	if errors.Is(err, errStableCheckpointStale) {
+		countSkip(CheckpointSkipStale)
 		return nil
+	}
+	if err == nil {
+		writeFlows.checkpoints.Add(1)
 	}
 	return err
 }
