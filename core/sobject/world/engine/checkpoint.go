@@ -9,6 +9,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/s4wave/spacewave/core/sobject"
 	block_transform "github.com/s4wave/spacewave/db/block/transform"
+	"github.com/s4wave/spacewave/db/kvtx"
 	"github.com/s4wave/spacewave/db/world"
 	"github.com/s4wave/spacewave/net/crypto"
 	"github.com/s4wave/spacewave/net/peer"
@@ -260,7 +261,15 @@ func (e *soEngine) prepareStableCheckpoint(ctx context.Context, snap sobject.Sha
 // adoptStable signs and adopts ckpt under the host lock, unless the held state
 // moved past its stable point. The host lock writes after any pending receipt,
 // on the durable state.
+//
+// The state write commits ordered, releasing the host lock before the store
+// flushes it, since World writes queue their operations under that lock. A
+// crash before the flush loses only the checkpoint: the state before it holds
+// the same operations, and the next stable point checkpoints again. Every
+// path that sends the state off the machine waits for SOHost.WaitDurable
+// first, so no peer sees a checkpoint a crash could undo.
 func (e *soEngine) adoptStable(ctx context.Context, ckpt *stableCheckpoint) error {
+	ctx = kvtx.WithOrderedCommitContext(ctx)
 	err := ckpt.host.GetSOHost().UpdateSOState(ctx, func(state *sobject.SOState) error {
 		return e.adoptStableCheckpoint(ctx, ckpt.host, state, ckpt.prefix, ckpt.data)
 	})
