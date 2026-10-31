@@ -163,9 +163,12 @@ type stableCheckpoint struct {
 // adopts it. It returns the receipt that resolves once the store holds it, or
 // nil when it already does. ok is false when the World is not readable. The
 // receipt is only waited on. The caller holds the writer lock.
+//
+// Without the page view every World is stored by the publication that admitted
+// it, so the store holds it once the last admitted publication lands: each
+// publication follows the one before it, and a failed one fails its successors.
 func (e *soEngine) nameWorld(ctx context.Context, world *InnerState, n int, height uint64) (*block.PublicationReceipt, bool, error) {
-	// Compose what died since the last named World. Without the page view
-	// every World is stored.
+	// Compose what died since the last named World.
 	r := e.replay
 	if r.pages != nil && !r.readable(n) {
 		return nil, false, nil
@@ -175,7 +178,7 @@ func (e *soEngine) nameWorld(ctx context.Context, world *InnerState, n int, heig
 		return nil, false, err
 	}
 	if r.pages == nil {
-		return nil, true, nil
+		return e.lastReceipt(), true, nil
 	}
 
 	// A World a save carried is named once that save lands.
@@ -322,12 +325,10 @@ func (e *soEngine) prepareStableCheckpoint(ctx context.Context, snap sobject.Sha
 		return nil, nil
 	}
 
-	// Skip while an earlier checkpoint is in flight. Without the page view
-	// skip while an admission waits for its receipt too: the checkpoint
-	// writes the state directly, naming a World only the pending publications
-	// hold, and the update after the last receipt settles checkpoints again.
-	// With it the checkpoint names its World in a publication after them.
-	if e.stableBusy.Load() || (e.replay.pages == nil && e.pending()) {
+	// Skip while an earlier checkpoint is in flight. A World only pending
+	// publications hold is named by their receipts, so writes that never
+	// pause do not starve the checkpoint.
+	if e.stableBusy.Load() {
 		countSkip(CheckpointSkipPending)
 		return nil, nil
 	}
@@ -358,9 +359,7 @@ func (e *soEngine) prepareStableCheckpoint(ctx context.Context, snap sobject.Sha
 	if err != nil {
 		return nil, err
 	}
-	if e.replay.pages != nil {
-		e.stableBusy.Store(true)
-	}
+	e.stableBusy.Store(true)
 	return &stableCheckpoint{host: host, prefix: prefix, data: data, height: held.GetHeight(), named: named}, nil
 }
 

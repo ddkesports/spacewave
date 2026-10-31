@@ -34,8 +34,8 @@ func (k WriteKind) String() string {
 type CheckpointSkip int
 
 const (
-	// CheckpointSkipPending is a checkpoint skipped while an admission awaits
-	// its receipt.
+	// CheckpointSkipPending is a checkpoint skipped while an earlier one is
+	// in flight.
 	CheckpointSkipPending CheckpointSkip = iota
 	// CheckpointSkipUnplaced is a checkpoint skipped because the replay holds
 	// no World after the stable prefix.
