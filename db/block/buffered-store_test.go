@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	"github.com/s4wave/spacewave/db/tx"
 	"github.com/s4wave/spacewave/net/hash"
 )
 
@@ -532,6 +535,39 @@ func TestBufferedStoreReportsDrainErrorAtFlush(t *testing.T) {
 		if !found {
 			t.Fatal("a block queued across the failure was not written")
 		}
+	}
+}
+
+// TestBufferedStoreRefusesReadOnlyAtOnce checks that a failed write backs off
+// before the drain returns, except a read-only store's refusal, which no retry
+// can pass.
+func TestBufferedStoreRefusesReadOnlyAtOnce(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		wait time.Duration
+	}{
+		{errors.New("connection lost"), drainBackoff(1)},
+		{fmt.Errorf("put: %w", tx.ErrNotWrite), 0},
+	} {
+		synctest.Test(t, func(t *testing.T) {
+			// Fail every drain write with the error.
+			ctx := t.Context()
+			inner := newCountStore(hash.HashType_HashType_BLAKE3)
+			inner.failPut = tc.err
+			store := NewBufferedStore(ctx, inner)
+			if _, _, err := store.PutBlock(ctx, []byte("hello"), nil); err != nil {
+				t.Fatal(err.Error())
+			}
+
+			// The failed sync returns after the back-off alone.
+			start := time.Now()
+			if _, err := store.Sync(ctx); !errors.Is(err, tc.err) {
+				t.Fatalf("sync = %v, want %v", err, tc.err)
+			}
+			if waited := time.Since(start); waited != tc.wait {
+				t.Fatalf("%v: sync waited %s, want %s", tc.err, waited, tc.wait)
+			}
+		})
 	}
 }
 

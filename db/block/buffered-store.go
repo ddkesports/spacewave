@@ -3,12 +3,14 @@ package block
 import (
 	"bytes"
 	"context"
+	"errors"
 	"slices"
 	"time"
 
 	"github.com/aperturerobotics/util/broadcast"
 	"github.com/aperturerobotics/util/csync"
 	trace "github.com/s4wave/spacewave/db/traceutil"
+	"github.com/s4wave/spacewave/db/tx"
 	"github.com/s4wave/spacewave/net/hash"
 )
 
@@ -735,13 +737,16 @@ func (s *BufferedStore) drainNextBatch(ctx context.Context) (bool, error) {
 		} else if ctx.Err() == nil {
 			s.writeFailures++
 			s.writeFailuresTotal++
-			backoff = drainBackoff(s.writeFailures)
+			if !errors.Is(err, tx.ErrNotWrite) {
+				backoff = drainBackoff(s.writeFailures)
+			}
 		}
 		broadcastFn()
 	})
 
 	// Back off before returning a failed write, holding drainMu so the next
-	// drain retries the batch no sooner.
+	// drain retries the batch no sooner. A read-only store refuses every
+	// retry, so its refusal returns at once.
 	if backoff != 0 {
 		trace.Logf(ctx, "hydra/block/buffered-store/drain/write-failed", "backoff=%s err=%v", backoff, err)
 		select {
