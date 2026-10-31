@@ -154,6 +154,7 @@ func TestDurableReaderSurvivesReclaim(t *testing.T) {
 // readWorldBlocks reads every block the World root of tx references through
 // the store of tx and returns the root and the number of blocks.
 func readWorldBlocks(t *testing.T, tx world.Tx) (*block.BlockRef, int) {
+	// Walk the graph under the root, counting each block read.
 	t.Helper()
 	var root *block.BlockRef
 	var n int
@@ -173,6 +174,7 @@ func readWorldBlocks(t *testing.T, tx world.Tx) (*block.BlockRef, int) {
 // sweep collects every block of the volume of w that no root holds and
 // returns the number of blocks it removed.
 func sweep(t *testing.T, w *localWorld) int {
+	// Collect over the volume's reference graph.
 	t.Helper()
 	rg := w.vol.(kvtx_volume.KvtxVolume).GetRefGraph()
 	stats, err := block_gc.NewCollector(rg, w.vol, nil).Collect(t.Context())
@@ -181,4 +183,3 @@ func sweep(t *testing.T, w *localWorld) int {
 	}
 	return stats.BlocksSwept
 }
-

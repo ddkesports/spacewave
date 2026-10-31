@@ -7,10 +7,10 @@ import (
 	"sync"
 	"testing"
 
+	bstore "github.com/s4wave/spacewave/core/bstore"
 	provider_local "github.com/s4wave/spacewave/core/provider/local"
 	"github.com/s4wave/spacewave/core/sobject"
 	sobject_world_engine "github.com/s4wave/spacewave/core/sobject/world/engine"
-	bstore "github.com/s4wave/spacewave/core/bstore"
 	"github.com/s4wave/spacewave/db/block"
 	transform_all "github.com/s4wave/spacewave/db/block/transform/all"
 	world_mock "github.com/s4wave/spacewave/db/world/mock"
@@ -134,6 +134,7 @@ func (s *gatedSharedObject) hold(failure error) (applying <-chan struct{}, relea
 // then sees the publications pending while the volume is free for a sweep.
 // release may be called more than once.
 func (s *gatedSharedObject) holdReceipts() (release func()) {
+	// Arm the gate, and disarm it and resolve the held receipts on release.
 	held := make(chan struct{})
 	s.mtx.Lock()
 	s.held = held
@@ -149,6 +150,7 @@ func (s *gatedSharedObject) holdReceipts() (release func()) {
 // GetBlockStore returns the SharedObject's block store, whose publications
 // holdReceipts can hold.
 func (s *gatedSharedObject) GetBlockStore() bstore.BlockStore {
+	// Wrap the local block store.
 	store, ok := s.SharedObject.GetBlockStore().(*provider_local.BlockStore)
 	if !ok {
 		panic("SharedObject block store is not a local provider block store")
@@ -181,6 +183,9 @@ func (g *gatedBlockStore) SubmitAtomic(ctx context.Context, p *block.AtomicPubli
 	if err != nil || held == nil {
 		return receipt, err
 	}
+
+	// Return a proxy the store's receipt and the gate resolve, after the
+	// proxy before it.
 	proxy := block.NewRetainedPublicationReceipt(receipt.Release)
 	g.s.mtx.Lock()
 	if g.s.committed == nil {
@@ -189,6 +194,8 @@ func (g *gatedBlockStore) SubmitAtomic(ctx context.Context, p *block.AtomicPubli
 	g.s.committed[proxy] = receipt
 	g.s.last = proxy
 	g.s.mtx.Unlock()
+
+	// Resolve it once the store's receipt resolves and the gate opens.
 	go func() {
 		<-receipt.Done()
 		<-held

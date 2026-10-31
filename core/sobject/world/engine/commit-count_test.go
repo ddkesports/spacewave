@@ -115,6 +115,7 @@ func openLocalAccount(t *testing.T, dir string, soRef *sobject.SharedObjectRef) 
 // newLocalWorld returns the World eng of the SharedObject soRef in the local
 // account acc on tb.
 func newLocalWorld(t *testing.T, tb *testbed.Testbed, acc provider.ProviderAccount, eng sobject_world_engine.Engine, soRef *sobject.SharedObjectRef) *localWorld {
+	// Read the account volume and its database.
 	t.Helper()
 	vol := acc.(*provider_local.ProviderAccount).GetVolume()
 	db := volume_s4db.GetDB(vol)
