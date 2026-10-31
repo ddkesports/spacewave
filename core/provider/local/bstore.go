@@ -63,6 +63,8 @@ type placementState struct {
 	reads readSet
 	// evictGate is held by each eviction pass and by a storage move.
 	evictGate *csync.Mutex
+	// evictAdmit paces eviction passes, or holds nil.
+	evictAdmit *atomic.Pointer[block_store_writeback.EvictAdmit]
 }
 
 // live reports which blocks a bucket reclaim must keep: the blocks the
@@ -442,7 +444,7 @@ func (t *bstoreTracker) executeBlockStoreTracker(rctx context.Context) error {
 
 	// Track the store's placement, which places new writes, refills evicted
 	// blocks and reclaims backend storage.
-	placement := &placementState{wb: wb, local: localBucket, remote: &t.remote, evictGate: &t.evictGate}
+	placement := &placementState{wb: wb, local: localBucket, remote: &t.remote, evictGate: &t.evictGate, evictAdmit: &t.a.evictAdmit}
 	placement.tracker, _ = t.a.vol.GetRefGraph().(block_gc.BlockTracker)
 	placement.backend.Store(backend)
 	placement.setPolicy(placed.GetCache())

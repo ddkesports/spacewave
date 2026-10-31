@@ -24,6 +24,11 @@ const epochKey = "epoch"
 // evictableBytesKey holds the summed size of the eviction queue entries.
 const evictableBytesKey = "evictable-bytes"
 
+// EvictAdmit is called before each eviction batch with the bytes the previous
+// batch dropped, zero before the first. It may wait, to pace a pass against the
+// disk's other writers; its error ends the pass.
+type EvictAdmit func(ctx context.Context, lastBytes int64) error
+
 // evictBatchBlocks bounds the entries one eviction step reads and commits.
 const evictBatchBlocks = 1024
 
@@ -224,11 +229,14 @@ func (s *Store) Refill(ctx context.Context, ref *block.BlockRef, stored *block.S
 // The volume shares values by hash across its block stores. Eviction relies on
 // each placed store sealing its blocks with its own transform keys, so no other
 // store holds the same hash.
+//
+// A non-nil admit paces the pass, as EvictAdmit describes.
 func (s *Store) Evict(
 	ctx context.Context,
 	remote block.StoreOps,
 	maxBytes int64,
 	keep func(*hash.Hash) bool,
+	admit EvictAdmit,
 ) (EvictResult, error) {
 	// Commit the pass ordered: it drops only values the remote holds, so a
 	// crash that loses its commits leaves values the next pass drops again,
@@ -258,7 +266,14 @@ func (s *Store) Evict(
 	}
 
 	// Evict in batches until the byte target or the new epoch.
+	var last int64
 	for result.EvictedBytes < maxBytes {
+		if admit != nil {
+			if err := admit(ctx, result.EvictedBytes-last); err != nil {
+				return result, err
+			}
+		}
+		last = result.EvictedBytes
 		done, err := s.evictBatch(ctx, remote, epoch, maxBytes, keep, &result)
 		if err != nil || done {
 			return result, err

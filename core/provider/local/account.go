@@ -20,6 +20,7 @@ import (
 	provider_gccleanup "github.com/s4wave/spacewave/core/provider/gccleanup"
 	"github.com/s4wave/spacewave/core/session"
 	"github.com/s4wave/spacewave/core/sobject"
+	block_store_writeback "github.com/s4wave/spacewave/db/block/store/writeback"
 	block_transform "github.com/s4wave/spacewave/db/block/transform"
 	"github.com/s4wave/spacewave/db/volume"
 	volume_controller "github.com/s4wave/spacewave/db/volume/controller"
@@ -95,6 +96,9 @@ type ProviderAccount struct {
 	gcCleanupRunner *provider_gccleanup.Runner
 	// gcCleanupCollect overrides cleanup collection in tests.
 	gcCleanupCollect provider_gccleanup.CollectFunc
+	// evictAdmit paces the eviction passes of the placed block stores, or
+	// holds nil.
+	evictAdmit atomic.Pointer[block_store_writeback.EvictAdmit]
 }
 
 // GetVolume returns the parent volume for the account.

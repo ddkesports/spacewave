@@ -154,10 +154,31 @@ func (p *placementState) evict(ctx context.Context, maxBytes int64) (block_store
 	}
 	defer release()
 
-	// Evict to the open backend.
+	// Evict to the open backend, paced by the account's admit.
 	remote := p.remote.Load()
 	if remote == nil {
 		return result, nil
 	}
-	return p.wb.Evict(ctx, remote.store, maxBytes, p.reads.take())
+	admit := func(ctx context.Context, lastBytes int64) error {
+		if p.evictAdmit == nil {
+			return nil
+		}
+		if fn := p.evictAdmit.Load(); fn != nil {
+			return (*fn)(ctx, lastBytes)
+		}
+		return nil
+	}
+	return p.wb.Evict(ctx, remote.store, maxBytes, p.reads.take(), admit)
+}
+
+// SetEvictAdmit paces the eviction passes of the account's placed block
+// stores: each pass calls admit before each batch, as EvictAdmit describes. A
+// nil admit lets passes run unpaced. Running passes see the change at their
+// next batch.
+func (a *ProviderAccount) SetEvictAdmit(admit block_store_writeback.EvictAdmit) {
+	if admit == nil {
+		a.evictAdmit.Store(nil)
+		return
+	}
+	a.evictAdmit.Store(&admit)
 }
