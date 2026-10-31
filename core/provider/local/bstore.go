@@ -71,6 +71,8 @@ type placementState struct {
 	// sqlPublish publishes the writes of a store whose SQL backend is
 	// primary, or holds nil when local cannot publish its heads.
 	sqlPublish *sqlPublisher
+	// fallbackFills runs and counts the fills of the SQL read fallback.
+	fallbackFills fallbackFills
 }
 
 // live reports which blocks a bucket reclaim must keep: the blocks the
@@ -144,6 +146,8 @@ type UploadStatus struct {
 	Backend *account_settings.StorageBackend
 	// Status is the upload status of the queued writes.
 	block_store_writeback.Status
+	// Fallback counts the reads and fills of the store's read fallback.
+	Fallback FallbackStatus
 }
 
 // GetID returns the inner store id.
@@ -175,7 +179,7 @@ func (b *BlockStore) InvalidateDecodedBlockRef(ctx context.Context, ref *block.B
 // closed when either changes.
 func (b *BlockStore) GetUploadStatus() (UploadStatus, <-chan struct{}) {
 	status, changed := b.placement.wb.GetStatus()
-	return UploadStatus{Backend: b.placement.backend.Load(), Status: status}, changed
+	return UploadStatus{Backend: b.placement.backend.Load(), Status: status, Fallback: b.placement.fallbackFills.status()}, changed
 }
 
 // ReclaimStorage drops the blocks the volume no longer tracks or holds from
@@ -422,14 +426,14 @@ func (t *bstoreTracker) executeBlockStoreTracker(rctx context.Context) error {
 	}
 	var settings *settingsWatch
 	var placed *account_settings.BlockStorePlacement
-	var backend *account_settings.StorageBackend
+	var backend, fallback *account_settings.StorageBackend
 	if settingsRef != nil && settingsRef.GetBlockStoreId() != t.id {
 		settings, err = t.a.watchAccountSettings(ctx, settingsRef)
 		if err != nil {
 			return err
 		}
 		defer settings.release()
-		placed, backend, err = t.nextBackend(ctx, settings)
+		placed, backend, fallback, err = t.nextBackend(ctx, settings)
 		if err != nil {
 			return err
 		}
@@ -484,6 +488,17 @@ func (t *bstoreTracker) executeBlockStoreTracker(rctx context.Context) error {
 	}
 	le.WithField("sql-primary", sqlStore != nil).Info("mounting bstore")
 
+	// Open the read fallback, which connects on its first read, so an
+	// unreachable database never fails the mount.
+	var fallbackStore backendStore
+	if fallback != nil {
+		fallbackStore, err = t.openFallbackStore(ctx, fallback)
+		if err != nil {
+			return err
+		}
+		defer fallbackStore.Close()
+	}
+
 	// Upload the recorded writes to the current backend until the store
 	// unmounts.
 	upload := routine.NewStateRoutineContainerWithLoggerVT[*account_settings.StorageBackend](
@@ -498,28 +513,20 @@ func (t *bstoreTracker) executeBlockStoreTracker(rctx context.Context) error {
 	defer t.swapRemote(nil)
 	defer upload.ClearContext()
 
-	// Read the local store first, then the backend's bucket, then peers.
+	// Read the local store first, then the backend's bucket, then the read
+	// fallback, then peers.
 	localStore := block_store.NewStore(blockStoreLocalID, wb)
-	lowerOps := block_store.NewStoreReadThrough(
+	recorded := &readRecorder{StoreOps: localBucket, reads: &placement.reads}
+	reads, copies := placement.readChains(
+		recorded,
+		localBucket,
 		func() block.StoreOps { return t.getRemoteReads(placement) },
 		func() block.StoreOps { return t.a.getP2PStore(bucketID) },
-		nil,
-	)
-	recorded := &readRecorder{StoreOps: localBucket, reads: &placement.reads}
-	readOps := block_store.NewStoreReadThrough(
-		func() block.StoreOps { return recorded },
-		func() block.StoreOps { return lowerOps },
-		placement.fill,
-	)
-	copyOps := block_store.NewStoreReadThrough(
-		func() block.StoreOps { return localBucket },
-		func() block.StoreOps { return lowerOps },
-		nil,
+		fallbackStore,
 	)
 
 	// A primary SQL backend takes the writes. Its publisher drains published
 	// blocks to it outside the writer's lock, and serves them until they land.
-	var reads, copies block.StoreOps = readOps, copyOps
 	if sqlStore != nil {
 		localStore, reads = sqlPrimaryStores(blockStoreLocalID, localBucket, sqlStore, func() block.StoreOps {
 			return t.a.getP2PStore(bucketID)
@@ -585,13 +592,16 @@ func (t *bstoreTracker) executeBlockStoreTracker(rctx context.Context) error {
 		return err
 	}
 	for settings != nil {
-		placed, next, err := t.nextBackend(ctx, settings)
+		placed, next, nextFallback, err := t.nextBackend(ctx, settings)
 		if err != nil {
 			return err
 		}
 		placement.setPolicy(placed.GetCache())
 		if sqlStore != nil && !next.EqualVT(backend) {
 			return errors.New("placement of an SQL primary store changed, remounting")
+		}
+		if !nextFallback.EqualVT(fallback) {
+			return errors.New("read fallback of the store changed, remounting")
 		}
 		if !next.EqualVT(backend) {
 			placement.backend.Store(next)

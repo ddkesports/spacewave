@@ -39,12 +39,12 @@ func (s *AccountSettings) FindBlockStorePlacement(blockStoreID string) *BlockSto
 	return nil
 }
 
-// PlacedBlockStoreIDs returns the ids of the block stores placed on the
-// storage backend.
+// PlacedBlockStoreIDs returns the ids of the block stores that use the storage
+// backend, as the backend holding them or as their read fallback.
 func (s *AccountSettings) PlacedBlockStoreIDs(backendID string) []string {
 	var ids []string
 	for _, placement := range s.GetBlockStorePlacements() {
-		if placement.GetStorageBackendId() == backendID {
+		if placement.GetStorageBackendId() == backendID || placement.GetFallbackStorageBackendId() == backendID {
 			ids = append(ids, placement.GetBlockStoreId())
 		}
 	}
@@ -128,7 +128,8 @@ func (s *AccountSettings) setDefaultStorageBackend(id string) error {
 // returns it to the account's own storage when the backend id is empty.
 //
 // Leaving a backend releases the store's objects there. Returning to a
-// backend cancels its pending release, since the store writes there again.
+// backend cancels its pending release, since the store writes there again, and
+// so does naming it as the read fallback, since the store still reads there.
 func (s *AccountSettings) setBlockStorePlacement(placement *BlockStorePlacement) error {
 	// Require a block store id and an existing target backend.
 	blockStoreID := placement.GetBlockStoreId()
@@ -139,12 +140,46 @@ func (s *AccountSettings) setBlockStorePlacement(placement *BlockStorePlacement)
 	if backendID != "" && s.FindStorageBackend(backendID) == nil {
 		return ErrStorageBackendNotFound
 	}
+	if err := s.checkReadFallback(placement); err != nil {
+		return err
+	}
 
 	// Apply the new placement, canceling a pending release on the backend.
 	s.unplaceBlockStore(blockStoreID)
 	if backendID != "" {
 		s.BlockStorePlacements = append(s.BlockStorePlacements, placement.CloneVT())
 		s.dropStorageRelease(placement)
+
+		// A backend the store still reads as its fallback is not released.
+		if fallbackID := placement.GetFallbackStorageBackendId(); fallbackID != "" {
+			s.dropStorageRelease(&BlockStorePlacement{BlockStoreId: blockStoreID, StorageBackendId: fallbackID})
+		}
+	}
+	return nil
+}
+
+// checkReadFallback requires that a placement's read fallback is an SQL
+// backend beside an S3 backend that holds the store, so an SQL backend is
+// never both the store's primary and its fallback.
+func (s *AccountSettings) checkReadFallback(placement *BlockStorePlacement) error {
+	// Accept a placement without a fallback.
+	fallbackID := placement.GetFallbackStorageBackendId()
+	if fallbackID == "" {
+		return nil
+	}
+
+	// Require an S3 backend to hold the store.
+	if s.FindStorageBackend(placement.GetStorageBackendId()).GetS3() == nil {
+		return errors.New("a read fallback needs a block store placed on an S3 backend")
+	}
+
+	// Require the fallback to exist and to be an SQL backend.
+	fallback := s.FindStorageBackend(fallbackID)
+	if fallback == nil {
+		return errors.Wrap(ErrStorageBackendNotFound, fallbackID)
+	}
+	if fallback.GetSql() == nil {
+		return errors.New("the read fallback must be an SQL backend")
 	}
 	return nil
 }
