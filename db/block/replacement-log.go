@@ -1,6 +1,9 @@
 package block
 
-import "sync"
+import (
+	"context"
+	"sync"
+)
 
 // pageBase is a stored page and the refs it names.
 type pageBase struct {
@@ -22,6 +25,9 @@ type ReplacementLog struct {
 	replaced map[string]pageBase
 	// created holds each page a write stored, by ref.
 	created map[string]pageBase
+	// found holds each written page the store already held, moved from
+	// created by TakeStored, by ref.
+	found map[string]pageBase
 	// forfeit is set when the interval's record cannot be trusted.
 	forfeit bool
 }
@@ -65,11 +71,62 @@ func (l *ReplacementLog) Take(to *BlockRef) *Replacements {
 	return out
 }
 
+// TakeStored is Take for writes that may store a page another writer already
+// stored. stored reports which of the given created pages the store already
+// held and marks their writes counted, as BufferedStore.MarkStored does. Such
+// a page is one the interval named rather than created, so the record counts
+// it held where it gained a holder. When stored fails, the interval is
+// forfeited.
+//
+// The probe runs under the log's lock: the writes of the interval are done
+// when its root is taken.
+func (l *ReplacementLog) TakeStored(ctx context.Context, to *BlockRef, stored func(context.Context, []*BlockRef) ([]bool, error)) *Replacements {
+	// Probe the created pages and net the interval under the lock.
+	l.mtx.Lock()
+	defer l.mtx.Unlock()
+	if !l.forfeit && len(l.created) != 0 {
+		l.moveStored(ctx, stored)
+	}
+	var out *Replacements
+	if !l.forfeit {
+		out = l.net(to)
+	}
+	l.reset(to)
+	return out
+}
+
+// moveStored moves from created to found each page stored reports the store
+// held, or forfeits the interval when stored fails. Assumes mtx is locked.
+func (l *ReplacementLog) moveStored(ctx context.Context, stored func(context.Context, []*BlockRef) ([]bool, error)) {
+	// Ask about every created page at once.
+	keys := make([]string, 0, len(l.created))
+	refs := make([]*BlockRef, 0, len(l.created))
+	for key, page := range l.created {
+		keys = append(keys, key)
+		refs = append(refs, page.ref)
+	}
+	found, err := stored(ctx, refs)
+	if err != nil {
+		l.forfeit = true
+		return
+	}
+
+	// The found pages were named, not created.
+	for i, ok := range found {
+		if ok {
+			l.found[keys[i]] = l.created[keys[i]]
+			delete(l.created, keys[i])
+		}
+	}
+}
+
 // reset starts an empty interval at the root from. Assumes mtx is locked.
 func (l *ReplacementLog) reset(from *BlockRef) {
+	// Start from the root with empty maps.
 	l.from = from.Clone()
 	l.replaced = make(map[string]pageBase)
 	l.created = make(map[string]pageBase)
+	l.found = make(map[string]pageBase)
 	l.forfeit = false
 }
 
@@ -118,35 +175,54 @@ func (l *ReplacementLog) recordWrite(base, page *pageBase) {
 // net derives the interval's Replacements with the root now at to. Assumes
 // mtx is locked.
 //
-// The live pages are those to reaches through the pages the interval created
-// or replaced; a page outside both maps is a stored subtree the interval did
-// not touch, live as a whole. The candidates are the old root, every replaced
-// page and every page one named. A candidate not live is dead: a replaced or
-// created page has its children accounted, any other heads a dead subtree.
+// The live pages are those to reaches through the pages the interval wrote:
+// created, found or replaced. A page outside the three maps is a stored
+// subtree the interval did not touch, live as a whole. The candidates are the
+// old root, every replaced page and every page one named. A candidate not live
+// is dead: a replaced or created page has its children accounted, any other
+// heads a dead subtree.
 //
-// A live page outside both maps that no replaced page named, and that is not
-// the old root, is held: the walk reached it from a created page, or it is the
-// new root. It gained a holder unless its old parent died untouched, which
-// only applying the record can see.
+// A live page outside the created and replaced maps that no replaced page
+// named, and that is not the old root, is held when the new root or a created
+// page names it: it gained a holder unless its old parent died untouched,
+// which only applying the record can see. A found page's children gained no
+// holder, since the stored copy already named them.
 func (l *ReplacementLog) net(to *BlockRef) *Replacements {
-	// Walk the live pages from the new root through the touched pages.
+	// Walk the live pages from the new root through the written pages,
+	// marking each page the new root or a created page names.
+	type step struct {
+		ref    *BlockRef
+		direct bool
+	}
 	live := make(map[string]*BlockRef)
-	stk := []*BlockRef{to}
+	direct := make(map[string]struct{})
+	stk := []step{{to, true}}
 	for len(stk) != 0 {
-		ref := stk[len(stk)-1]
+		st := stk[len(stk)-1]
 		stk = stk[:len(stk)-1]
-		if ref.GetEmpty() {
+		if st.ref.GetEmpty() {
 			continue
 		}
-		key := ref.MarshalString()
+		key := st.ref.MarshalString()
+		if st.direct {
+			direct[key] = struct{}{}
+		}
 		if _, ok := live[key]; ok {
 			continue
 		}
-		live[key] = ref
+		live[key] = st.ref
 		if page, ok := l.created[key]; ok {
-			stk = append(stk, page.refs...)
+			for _, ref := range page.refs {
+				stk = append(stk, step{ref, true})
+			}
 		} else if page, ok := l.replaced[key]; ok {
-			stk = append(stk, page.refs...)
+			for _, ref := range page.refs {
+				stk = append(stk, step{ref, true})
+			}
+		} else if page, ok := l.found[key]; ok {
+			for _, ref := range page.refs {
+				stk = append(stk, step{ref, false})
+			}
 		}
 	}
 
@@ -202,9 +278,10 @@ func (l *ReplacementLog) net(to *BlockRef) *Replacements {
 			continue
 		}
 		out.Kept = append(out.Kept, ref)
+		_, isDirect := direct[key]
 		_, isReplaced := l.replaced[key]
 		_, isCreated := l.created[key]
-		if !isReplaced && !isCreated && key != from {
+		if isDirect && !isReplaced && !isCreated && key != from {
 			out.Held = append(out.Held, ref)
 		}
 	}

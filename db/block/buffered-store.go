@@ -22,6 +22,7 @@ type pendingBlock struct {
 	tombstone     bool
 	queued        bool
 	borrowed      bool
+	counted       bool
 	metadataBytes int
 }
 
@@ -143,12 +144,15 @@ func (s *BufferedStore) BeginReadOperation(context.Context) (StoreOps, func(), e
 // PutBlock buffers a block in memory and drains synchronously only when
 // backpressure requires capacity.
 func (s *BufferedStore) PutBlock(ctx context.Context, data []byte, opts *PutOpts) (*BlockRef, bool, error) {
-	return s.putBlock(ctx, data, opts, true)
+	return s.putBlock(ctx, data, opts, true, false)
 }
 
 // putBlock verifies and buffers a block, optionally resolving prior existence.
 // Batch callers discard the existence result and let storage deduplicate at drain.
-func (s *BufferedStore) putBlock(ctx context.Context, data []byte, opts *PutOpts, checkExists bool) (*BlockRef, bool, error) {
+//
+// counted marks the write as one its writer counted, as PutBatchEntry.Counted
+// does. A pending entry stays counted only while every write of it was.
+func (s *BufferedStore) putBlock(ctx context.Context, data []byte, opts *PutOpts, checkExists, counted bool) (*BlockRef, bool, error) {
 	// Require a live write context and nonempty block data.
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
@@ -204,7 +208,7 @@ func (s *BufferedStore) putBlock(ctx context.Context, data []byte, opts *PutOpts
 	if drainErr != nil {
 		return nil, false, drainErr
 	}
-	if existingPending != nil && !existingPending.tombstone && existingPending.covers(opts.GetRefs(), opts.GetRefsKnown()) {
+	if existingPending != nil && !existingPending.tombstone && existingPending.covers(opts.GetRefs(), opts.GetRefsKnown()) && (counted || !existingPending.counted) {
 		return finish(ref, true)
 	}
 
@@ -251,6 +255,7 @@ func (s *BufferedStore) putBlock(ctx context.Context, data []byte, opts *PutOpts
 		data:          bytes.Clone(data),
 		refs:          CloneBlockRefs(opts.GetRefs()),
 		refsKnown:     opts.GetRefsKnown(),
+		counted:       counted,
 		metadataBytes: metadataBytes,
 	}
 	for {
@@ -274,7 +279,7 @@ func (s *BufferedStore) putBlock(ctx context.Context, data []byte, opts *PutOpts
 			// Merge dependencies into an existing block or enqueue a new block.
 			if p := s.pending[key]; p != nil && !p.tombstone {
 				alreadyExists = true
-				if p.covers(pendingClone.refs, pendingClone.refsKnown) {
+				if p.covers(pendingClone.refs, pendingClone.refsKnown) && (counted || !p.counted) {
 					done = true
 					return
 				}
@@ -284,6 +289,7 @@ func (s *BufferedStore) putBlock(ctx context.Context, data []byte, opts *PutOpts
 				merged := *pendingClone
 				merged.refs = CloneBlockRefs(p.refs)
 				merged.refsKnown = p.refsKnown || pendingClone.refsKnown
+				merged.counted = p.counted && counted
 				for _, child := range pendingClone.refs {
 					if !containsBlockRefs(merged.refs, []*BlockRef{child}) {
 						merged.refs = append(merged.refs, child.Clone())
@@ -363,7 +369,7 @@ func (s *BufferedStore) PutBlockBatch(ctx context.Context, entries []*PutBatchEn
 			ForceBlockRef: ref,
 			Refs:          CloneBlockRefs(entry.Refs),
 			RefsKnown:     entry.RefsKnown,
-		}, false)
+		}, false, entry.Counted)
 		if err != nil {
 			return nil, err
 		}
@@ -836,6 +842,7 @@ func (s *BufferedStore) takeDrainBatchLocked(maxEntries int) *drainBatch {
 			Refs:      pending.refs,
 			RefsKnown: pending.refsKnown,
 			Tombstone: pending.tombstone,
+			Counted:   pending.counted,
 		})
 	}
 

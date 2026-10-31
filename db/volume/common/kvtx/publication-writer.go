@@ -599,6 +599,9 @@ func (w *publicationWriter) apply(
 	if req.existed, err = gc.PutBlockBatch(ctx, p.Entries); err != nil {
 		return err
 	}
+	if err := addExistedHolds(ctx, blocks, rg, p.Entries, req.existed); err != nil {
+		return err
+	}
 	if err := gc.FlushPending(ctx); err != nil {
 		return err
 	}
@@ -606,9 +609,8 @@ func (w *publicationWriter) apply(
 	// Move the published root under its name. A temporary reader owner
 	// bridges publication and consumer handoff, and can be reaped after a
 	// crash.
-	batch := &namingBatch{entries: p.Entries, existed: req.existed}
 	if p.RootName != "" {
-		if err := setBucketRoot(ctx, blocks, rg, batch, p.BucketID, p.RootName, p.Root); err != nil {
+		if err := setBucketRoot(ctx, blocks, rg, p.BucketID, p.RootName, p.Root); err != nil {
 			return err
 		}
 		if req.rootOwner != "" {
@@ -629,7 +631,7 @@ func (w *publicationWriter) apply(
 
 	// Set the further named roots.
 	for _, root := range p.Roots {
-		if err := setBucketRoot(ctx, blocks, rg, batch, p.BucketID, root.Name, root.Ref); err != nil {
+		if err := setBucketRoot(ctx, blocks, rg, p.BucketID, root.Name, root.Ref); err != nil {
 			return err
 		}
 	}

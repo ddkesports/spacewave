@@ -220,6 +220,18 @@ func (s *countStore) GetBlockExists(ctx context.Context, ref *BlockRef) (bool, e
 	return ok, nil
 }
 
+func (s *countStore) GetBlockExistsBatch(ctx context.Context, refs []*BlockRef) ([]bool, error) {
+	out := make([]bool, len(refs))
+	for i, ref := range refs {
+		found, err := s.GetBlockExists(ctx, ref)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = found
+	}
+	return out, nil
+}
+
 func (s *countStore) RmBlock(ctx context.Context, ref *BlockRef) error {
 	// Remove the block bytes under the test-store lock.
 	key, err := marshalRefKey(ref)

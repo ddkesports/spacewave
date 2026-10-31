@@ -633,8 +633,7 @@ func TestRootRetentionSingleMarkLeavesBacklog(t *testing.T) {
 }
 
 // TestDueDeadlistCheckedAgainstMark checks that naming a deadlist record
-// counts its held pages and the found pages its batch newly names once, that
-// a block pass counts the pages a due record
+// counts its held pages once, that a block pass counts the pages a due record
 // lists that the mark reached and no shared count holds, releases the
 // record's name, and that a later pass sweeps the record.
 func TestDueDeadlistCheckedAgainstMark(t *testing.T) {
@@ -653,7 +652,6 @@ func TestDueDeadlistCheckedAgainstMark(t *testing.T) {
 		return ref
 	}
 	live, shared := page("live page"), page("shared page")
-	stored, unlisted := page("stored page"), page("unlisted page")
 	gone, err := block.BuildBlockRef([]byte("dead page"), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -691,51 +689,22 @@ func TestDueDeadlistCheckedAgainstMark(t *testing.T) {
 	if err := v.SetBucketRoots(ctx, "bucket", nil, due); err != nil {
 		t.Fatal(err)
 	}
-	var holds uint64
-	err = (&transactionRefGraph{volume: v}).read(ctx, func(rg *block_gc.RefGraph) error {
-		var err error
-		holds, err = rg.GetHolds(ctx, block_gc.BlockIRI(shared))
-		return err
-	})
-	if err != nil || holds != 1 {
-		t.Fatalf("shared page holds=%d err=%v, want 1", holds, err)
-	}
-
-	// Encode a new parent of two stored pages and a record that lists one of
-	// them as held.
-	parentData := []byte("parent of the stored pages")
-	parent, err := block.BuildBlockRef(parentData, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	record2, record2Ref, err := block.EncodeDeadlist(2, nil, nil, &block.Replacements{Held: []*block.BlockRef{stored}})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Store both pages again with the parent and the record: each found page
-	// gains one count, not two.
-	batch := append([]*block.PutBatchEntry{
-		{Ref: stored, Data: []byte("stored page"), RefsKnown: true},
-		{Ref: unlisted, Data: []byte("unlisted page"), RefsKnown: true},
-		{Ref: parent, Data: parentData, Refs: []*block.BlockRef{stored, unlisted}, RefsKnown: true},
-	}, record2...)
-	named := []block.NamedRoot{
-		{Name: "parent", Ref: parent},
-		{Name: block.DeadlistRootName(2), Ref: record2Ref},
-	}
-	if err := v.SetBucketRoots(ctx, "bucket", batch, named); err != nil {
-		t.Fatal(err)
-	}
-	for _, ref := range []*block.BlockRef{stored, unlisted} {
-		err = (&transactionRefGraph{volume: v}).read(ctx, func(rg *block_gc.RefGraph) error {
+	holds := func(ref *block.BlockRef) uint64 {
+		// Read the count in a graph transaction.
+		t.Helper()
+		var n uint64
+		err := (&transactionRefGraph{volume: v}).read(ctx, func(rg *block_gc.RefGraph) error {
 			var err error
-			holds, err = rg.GetHolds(ctx, block_gc.BlockIRI(ref))
+			n, err = rg.GetHolds(ctx, block_gc.BlockIRI(ref))
 			return err
 		})
-		if err != nil || holds != 1 {
-			t.Fatalf("found page %s holds=%d err=%v, want 1", ref.MarshalString(), holds, err)
+		if err != nil {
+			t.Fatal(err)
 		}
+		return n
+	}
+	if n := holds(shared); n != 1 {
+		t.Fatalf("shared page holds=%d, want 1", n)
 	}
 
 	// Collect and check the record was counted and its name released.
@@ -762,5 +731,46 @@ func TestDueDeadlistCheckedAgainstMark(t *testing.T) {
 	}
 	if found, err := v.GetBlockExists(ctx, live); err != nil || !found {
 		t.Fatalf("live page found=%v err=%v, want kept", found, err)
+	}
+
+	// A put that finds the live page stored counts a racing holder, unless
+	// its writer counted the holder already.
+	for _, counted := range []bool{true, false} {
+		entry := &block.PutBatchEntry{Ref: live, Data: []byte("live page"), RefsKnown: true, Counted: counted}
+		if err := v.SetBucketRoots(ctx, "bucket", []*block.PutBatchEntry{entry}, []block.NamedRoot{{Name: "again", Ref: live}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := holds(live); n != 1 {
+		t.Fatalf("live page holds=%d after a counted and an uncounted put, want 1", n)
+	}
+
+	// A counted put that finds its page freed since the probe names the
+	// page's children afresh: a stored child gains a count, inside the batch
+	// or outside it, and a child the batch writes afresh does not.
+	revived, err := block.BuildBlockRef([]byte("revived page"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := block.BuildBlockRef([]byte("fresh page"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := []*block.PutBatchEntry{
+		{Ref: revived, Data: []byte("revived page"), Refs: []*block.BlockRef{live, shared, fresh}, RefsKnown: true, Counted: true},
+		{Ref: live, Data: []byte("live page"), RefsKnown: true, Counted: true},
+		{Ref: fresh, Data: []byte("fresh page"), RefsKnown: true},
+	}
+	if err := v.SetBucketRoots(ctx, "bucket", batch, []block.NamedRoot{{Name: "revived", Ref: revived}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name string
+		ref  *block.BlockRef
+		want uint64
+	}{{"live", live, 2}, {"shared", shared, 2}, {"fresh", fresh, 0}, {"revived", revived, 0}} {
+		if n := holds(c.ref); n != c.want {
+			t.Fatalf("%s page holds=%d after the revived put, want %d", c.name, n, c.want)
+		}
 	}
 }

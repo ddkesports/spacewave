@@ -12,4 +12,9 @@ type PutBatchEntry struct {
 	RefsKnown bool
 	// Tombstone marks the block ref as deleted.
 	Tombstone bool
+	// Counted reports that the writer found the block stored before writing
+	// it and counted the holder it adds, so a store that counts shared blocks
+	// adds no count when the put finds it. A layer that drops the flag
+	// over-counts, which leaks and never frees.
+	Counted bool
 }
