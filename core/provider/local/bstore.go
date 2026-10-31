@@ -114,9 +114,17 @@ func (p *placementState) fill(ctx context.Context, primary block.StoreOps, ref *
 		if err != nil {
 			return err
 		}
-		if tracked[0] {
-			return p.wb.Refill(ctx, ref, stored)
+		if !tracked[0] {
+			return block_store.CacheFill(ctx, primary, ref, stored)
 		}
+
+		// The read that refilled it keeps it from eviction, as a read
+		// served from the disk would, so the next pass cannot drop it.
+		if err := p.wb.Refill(ctx, ref, stored); err != nil {
+			return err
+		}
+		p.reads.add(ref.GetHash())
+		return nil
 	}
 
 	// Fill any other block as a cache fill.
