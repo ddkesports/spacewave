@@ -304,3 +304,56 @@ export const PutOpts: MessageType<PutOpts> =
     [5, 'cache_fill', 8],
     [6, 'refs_known', 8],
   ])
+
+/**
+ * Deadlist is one block of the record of what died between two named Worlds
+ * of one engine. It declares only its parts as refs, so a mark keeps the record
+ * without reaching the pages it lists.
+ *
+ * protobuf-go-lite:disable-json
+ *
+ * @generated from message block.Deadlist
+ */
+export interface Deadlist {
+  /**
+   * Seq orders the engine's records. The record is named deadlist/<seq>
+   * while pending and deadlist-due/<seq> once due.
+   */
+  seq?: bigint
+  /**
+   * From is the root of the named World the interval starts at.
+   */
+  from?: BlockRef
+  /**
+   * To is the root of the named World the interval ends at.
+   */
+  to?: BlockRef
+  /**
+   * Replaced are dead pages whose own children are accounted for here.
+   */
+  replaced?: BlockRef[]
+  /**
+   * Removed are the roots of dead stored subtrees.
+   */
+  removed?: BlockRef[]
+  /**
+   * Kept are live pages that stop the expansion of Removed.
+   */
+  kept?: BlockRef[]
+  /**
+   * Parts are further Deadlist blocks with the rest of the refs, set only on
+   * the first block.
+   */
+  parts?: BlockRef[]
+}
+
+export const Deadlist: MessageType<Deadlist> =
+  /* @__PURE__ */ createMessageType<Deadlist>('block.Deadlist', () => [
+    [1, 'seq', 4],
+    [2, 'from', 11, 0, BlockRef.codec],
+    [3, 'to', 11, 0, BlockRef.codec],
+    [4, 'replaced', 11, 1, BlockRef.codec],
+    [5, 'removed', 11, 1, BlockRef.codec],
+    [6, 'kept', 11, 1, BlockRef.codec],
+    [7, 'parts', 11, 1, BlockRef.codec],
+  ])

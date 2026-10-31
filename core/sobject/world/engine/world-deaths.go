@@ -67,22 +67,24 @@ func (d *worldDeaths) add(from, to *block.BlockRef, dead *block.Replacements) {
 	d.count++
 }
 
-// take composes what died from the last named World to the World at root, and
-// starts the next interval at root. ok is false when no chain of recorded
-// transitions reaches root or one on it forfeited; the interval then leaks.
-// Only the transitions root reaches stay.
-func (d *worldDeaths) take(root *block.BlockRef) (dead *block.Replacements, ok bool) {
+// take composes what died from the last named World, from, to the World at
+// root, and starts the next interval at root. ok is false when no chain of
+// recorded transitions reaches root or one on it forfeited; the interval then
+// leaks. from is nil when the interval forfeited before root was named. Only
+// the transitions root reaches stay.
+func (d *worldDeaths) take(root *block.BlockRef) (from *block.BlockRef, dead *block.Replacements, ok bool) {
 	// Find a path from the last named World to root and compose it.
 	d.mtx.Lock()
 	defer d.mtx.Unlock()
-	if d.from != nil {
+	from = d.from
+	if from != nil {
 		dead, ok = d.compose(d.from, root)
 	}
 
 	// Keep the transitions root reaches and start there.
 	d.prune(root)
 	d.from = root.Clone()
-	return dead, ok
+	return from, dead, ok
 }
 
 // compose finds a path of transitions from from to root, breadth first, and

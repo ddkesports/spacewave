@@ -170,7 +170,9 @@ func (e *soEngine) nameWorld(ctx context.Context, world *InnerState, n int, heig
 		return nil, false, nil
 	}
 	root := world.GetHeadRef().GetRootRef()
-	r.composeDeaths(root)
+	if err := r.composeDeaths(root); err != nil {
+		return nil, false, err
+	}
 	if r.pages == nil {
 		return nil, true, nil
 	}

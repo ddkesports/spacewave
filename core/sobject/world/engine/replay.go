@@ -171,6 +171,9 @@ type replayer struct {
 	// deaths gathers the World transitions the engine's block engines commit,
 	// or is nil before the engine starts.
 	deaths *worldDeaths
+	// ledger tracks the deadlist records of the named Worlds when pages is
+	// set and the store holds named roots.
+	ledger deadlistLedger
 	// pendingWorlds are the checkpoint Worlds named before their adoption,
 	// held until the checkpoint moves past the height each was prepared at.
 	pendingWorlds []pendingWorld
@@ -280,6 +283,7 @@ func (r *replayer) rebase(ctx context.Context, snap sobject.SharedObjectStateSna
 	positions := r.positionsAbove(base)
 	r.written = max(0, r.written-(len(r.positions)-len(positions)))
 	r.base, r.positions = base, positions
+	r.adoptDeadlists()
 	r.prunePending(checkpoint.GetHeight())
 	r.changed, r.deferred = true, false
 	r.span, r.spanLen = nil, 0
@@ -502,15 +506,21 @@ func (r *replayer) load(ctx context.Context) error {
 			r.markApplied(outcome.GetHash())
 		}
 	}
+
+	// Replay from the checkpoint when the outcomes do not reach the head.
 	if !state.EqualVT(head) {
 		r.c.le.Warn("saved replay does not lead to its head, replaying from the checkpoint")
 		return nil
 	}
+
+	// Resume from the saved replay and its deadlist records.
 	r.base, r.positions = base, positions
 	r.changed, r.deferred = false, false
 	if r.pages == nil {
 		return nil
 	}
+	r.ledger = restoreDeadlists(cursor)
+	r.adoptDeadlists()
 
 	// Name the base and the head of the saved replay, the Worlds it reads
 	// back, and drop it when either is not readable.
@@ -562,7 +572,7 @@ func (r *replayer) save(ctx context.Context) error {
 		return err
 	}
 
-	// Write the cursor.
+	// Write the cursor. The hold applied before it named its deadlists.
 	store, release, err := r.so.AccessLocalStateStore(ctx, replayCursorStoreID, nil)
 	if err != nil {
 		return err
@@ -575,7 +585,7 @@ func (r *replayer) save(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	r.saved()
+	r.ledger.confirm(r.saved())
 	return nil
 }
 
@@ -602,6 +612,7 @@ func (r *replayer) holdSpan(ctx context.Context, hold *rootHold) error {
 	if err := r.stallBase(ctx); err != nil {
 		return err
 	}
+	r.advanceDeadlists()
 	if !r.unsaved() {
 		return nil
 	}
@@ -627,6 +638,11 @@ func (r *replayer) holdSpan(ctx context.Context, hold *rootHold) error {
 	if r.baseUnheld {
 		hold.add(r.baseHold)
 	}
+	if !hold.skip {
+		puts, roots := r.ledger.carry()
+		hold.entries = append(hold.entries, puts...)
+		hold.roots = append(hold.roots, roots...)
+	}
 	r.pend(span)
 	return nil
 }
@@ -642,6 +658,7 @@ func (r *replayer) pendingSave(ctx context.Context, publisher sobject.StatePubli
 	if err := r.stallBase(ctx); err != nil {
 		return nil, nil, nil, err
 	}
+	r.advanceDeadlists()
 	if !r.changed && len(payloads) == 0 {
 		return nil, nil, nil, nil
 	}
@@ -666,6 +683,8 @@ func (r *replayer) pendingSave(ctx context.Context, publisher sobject.StatePubli
 		entries = append(entries, r.baseHold.entries...)
 		roots = append(roots, r.baseHold.roots...)
 	}
+	puts, deadlists := r.ledger.carry()
+	entries, roots = append(entries, puts...), append(roots, deadlists...)
 
 	// Write the cursor only when it changed.
 	var head *block.AtomicHeadUpdate
@@ -689,11 +708,13 @@ func (r *replayer) pend(span *block.BlockRef) {
 }
 
 // saved records that the replay is durable as it stands, with the span the
-// pending save named.
-func (r *replayer) saved() {
+// pending save named. It returns the deadlist generation the save carried,
+// which the caller confirms once the save is durable.
+func (r *replayer) saved() uint64 {
 	r.changed, r.deferred, r.baseUnheld = false, false, false
 	r.span, r.spanLen = r.next, r.nextLen
 	r.next, r.nextLen = nil, 0
+	return r.ledger.saved()
 }
 
 // unsave records that the replay is durable only as it stood when base was
@@ -712,6 +733,7 @@ func (r *replayer) unsave(base *InnerState, span *block.BlockRef, spanLen int, b
 		r.span, r.spanLen = nil, 0
 	}
 	r.next, r.nextLen = nil, 0
+	r.ledger.unsave()
 }
 
 // encodeSpan returns the span block holding the World after every position
@@ -771,9 +793,12 @@ func (r *replayer) encodeCursor() ([]byte, error) {
 		head = r.positions[n-1].state
 	}
 	cursor := &ReplayCursor{
-		Base:     r.base,
-		Head:     head,
-		Outcomes: make([]*ReplayCursorOutcome, n),
+		Base:            r.base,
+		Head:            head,
+		Outcomes:        make([]*ReplayCursorOutcome, n),
+		Deadlists:       r.ledger.encode(),
+		NextDeadlist:    r.ledger.next,
+		AdoptedDeadlist: r.ledger.adopted,
 	}
 
 	// Record each outcome with its World.
@@ -963,13 +988,43 @@ func (r *replayer) transitions() []world_block.EngineOption {
 }
 
 // composeDeaths composes what died from the last named World to the World at
-// root and counts it. A forfeited interval leaks.
-func (r *replayer) composeDeaths(root *block.BlockRef) {
+// root, counts it, and adds its deadlist record for the next save when the
+// store holds named roots. A forfeited interval leaks.
+func (r *replayer) composeDeaths(root *block.BlockRef) error {
+	// Compose and count the interval.
 	if r.deaths == nil {
+		return nil
+	}
+	from, dead, ok := r.deaths.take(root)
+	countDeaths(dead, ok)
+
+	// Record it where the store can name it.
+	if r.pages == nil || !r.pages.SupportsRootRetention() {
+		return nil
+	}
+	r.changed = true
+	return r.ledger.name(from, root, dead, ok)
+}
+
+// adoptDeadlists records that the base adopted its World, and stamps the
+// reader pins taken from now on with the adopted record.
+func (r *replayer) adoptDeadlists() {
+	if r.pages == nil {
 		return
 	}
-	dead, ok := r.deaths.take(root)
-	countDeaths(dead, ok)
+	r.ledger.adopt(r.base.GetHeadRef().GetRootRef())
+	r.pages.stamps.setEpoch(r.ledger.adopted)
+}
+
+// advanceDeadlists moves the records no reader pin holds back to due, marking
+// the replay changed when any moved.
+func (r *replayer) advanceDeadlists() {
+	if r.pages == nil {
+		return
+	}
+	if r.ledger.advance(r.pages.stamps.oldest()) {
+		r.changed = true
+	}
 }
 
 // worldLost reports whether the root block of the World state is missing from

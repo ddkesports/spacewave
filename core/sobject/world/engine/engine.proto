@@ -69,6 +69,27 @@ message ReplayCursor {
   // Head is the World after the last outcome. The engine holds it as its
   // installed World.
   InnerState head = 3;
+  // Deadlists are the pending deadlist records in sequence order. Each is
+  // named once the save that carries the cursor is durable.
+  repeated ReplayDeadlist deadlists = 4;
+  // NextDeadlist is the sequence of the next deadlist record.
+  uint64 next_deadlist = 5;
+  // AdoptedDeadlist is the sequence of the latest record whose World the
+  // base adopted, or 0.
+  uint64 adopted_deadlist = 6;
+}
+
+// ReplayDeadlist is a pending deadlist record of a named World.
+message ReplayDeadlist {
+  // Seq is the record's sequence.
+  uint64 seq = 1;
+  // From is the root of the named World the interval starts at, unset when
+  // the interval forfeited before it.
+  .block.BlockRef from = 2;
+  // To is the root of the named World the interval ends at.
+  .block.BlockRef to = 3;
+  // Record is the record's first block, unset when the interval forfeited.
+  .block.BlockRef record = 4;
 }
 
 // ReplayCursorOutcome is the outcome of one replayed operation.

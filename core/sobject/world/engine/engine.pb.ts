@@ -127,6 +127,20 @@ export interface ReplayCursor {
    * installed World.
    */
   head?: InnerState
+  /**
+   * Deadlists are the pending deadlist records in sequence order. Each is
+   * named once the save that carries the cursor is durable.
+   */
+  deadlists?: ReplayDeadlist[]
+  /**
+   * NextDeadlist is the sequence of the next deadlist record.
+   */
+  nextDeadlist?: bigint
+  /**
+   * AdoptedDeadlist is the sequence of the latest record whose World the
+   * base adopted, or 0.
+   */
+  adoptedDeadlist?: bigint
 }
 
 export const ReplayCursor: MessageType<ReplayCursor> =
@@ -136,6 +150,45 @@ export const ReplayCursor: MessageType<ReplayCursor> =
       [1, 'base', 11, 0, InnerState.codec],
       [2, 'outcomes', 11, 1, ReplayCursorOutcome.codec],
       [3, 'head', 11, 0, InnerState.codec],
+      [4, 'deadlists', 11, 1, ReplayDeadlist.codec],
+      [5, 'next_deadlist', 4],
+      [6, 'adopted_deadlist', 4],
+    ],
+  )
+
+/**
+ * ReplayDeadlist is a pending deadlist record of a named World.
+ *
+ * @generated from message sobject.world.engine.ReplayDeadlist
+ */
+export interface ReplayDeadlist {
+  /**
+   * Seq is the record's sequence.
+   */
+  seq?: bigint
+  /**
+   * From is the root of the named World the interval starts at, unset when
+   * the interval forfeited before it.
+   */
+  from?: BlockRef
+  /**
+   * To is the root of the named World the interval ends at.
+   */
+  to?: BlockRef
+  /**
+   * Record is the record's first block, unset when the interval forfeited.
+   */
+  record?: BlockRef
+}
+
+export const ReplayDeadlist: MessageType<ReplayDeadlist> =
+  /* @__PURE__ */ createMessageType<ReplayDeadlist>(
+    'sobject.world.engine.ReplayDeadlist',
+    () => [
+      [1, 'seq', 4],
+      [2, 'from', 11, 0, BlockRef.codec],
+      [3, 'to', 11, 0, BlockRef.codec],
+      [4, 'record', 11, 0, BlockRef.codec],
     ],
   )
 

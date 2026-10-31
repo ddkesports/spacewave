@@ -35,6 +35,8 @@ type writeAdmission struct {
 	// named are the Worlds the publication's base hold names whole, whose
 	// kept pages leave the page view once it succeeds.
 	named []*block.BlockRef
+	// deadlists is the deadlist generation the publication carried.
+	deadlists uint64
 }
 
 // admit records a publication admitted with receipt, then records its replay
@@ -53,7 +55,7 @@ func (e *soEngine) admit(receipt *block.PublicationReceipt, held *bucket.ObjectR
 		named:         e.replay.unheldRoots(),
 	})
 	e.retained = held
-	e.replay.saved()
+	e.admissions[len(e.admissions)-1].deadlists = e.replay.saved()
 }
 
 // lastReceipt returns the receipt of the last admitted publication, which the
@@ -86,6 +88,7 @@ func (e *soEngine) settle() {
 		// it named.
 		if adm.receipt.Err() == nil {
 			e.admissions = e.admissions[1:]
+			e.replay.ledger.confirm(adm.deadlists)
 			e.storedPages(e.lifetime, adm.named)
 			continue
 		}

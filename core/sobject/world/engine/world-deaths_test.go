@@ -41,7 +41,7 @@ func TestWorldDeathsComposesAcceptedChain(t *testing.T) {
 	d.add(a, x, replaced("p"))
 	d.add(a, b, replaced("q", "r"))
 	d.add(b, c, &block.Replacements{Replaced: []*block.BlockRef{ref("s")}, Kept: []*block.BlockRef{ref("q")}})
-	dead, ok := d.take(c)
+	_, dead, ok := d.take(c)
 	if !ok {
 		t.Fatal("forfeited the accepted chain")
 	}
@@ -51,7 +51,7 @@ func TestWorldDeathsComposesAcceptedChain(t *testing.T) {
 
 	// A transition from a World never named leaves a gap.
 	d.add(x, ref("y"), replaced("t"))
-	if _, ok := d.take(ref("y")); ok {
+	if _, _, ok := d.take(ref("y")); ok {
 		t.Fatal("composed across a gap")
 	}
 
@@ -60,11 +60,11 @@ func TestWorldDeathsComposesAcceptedChain(t *testing.T) {
 	e, f := ref("e"), ref("f")
 	d.add(ref("y"), e, nil)
 	d.add(e, f, replaced("u"))
-	if _, ok := d.take(f); ok {
+	if _, _, ok := d.take(f); ok {
 		t.Fatal("composed over a forfeited commit")
 	}
 	d.add(f, ref("g"), replaced("v"))
-	if dead, ok := d.take(ref("g")); !ok || !has(dead, "v") || has(dead, "u") {
+	if _, dead, ok := d.take(ref("g")); !ok || !has(dead, "v") || has(dead, "u") {
 		t.Fatalf("next interval: %v ok=%v", dead, ok)
 	}
 }

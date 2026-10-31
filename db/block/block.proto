@@ -149,3 +149,28 @@ enum OverlayMode {
   // packfile garbage collection / repack).
   UPPER_READBACK_CACHE = 8;
 }
+
+// Deadlist is one block of the record of what died between two named Worlds
+// of one engine. It declares only its parts as refs, so a mark keeps the record
+// without reaching the pages it lists.
+//
+//protobuf-go-lite:disable-json
+message Deadlist {
+  // Seq orders the engine's records. The record is named deadlist/<seq>
+  // while pending and deadlist-due/<seq> once due.
+  uint64 seq = 1;
+  // From is the root of the named World the interval starts at.
+  BlockRef from = 2;
+  // To is the root of the named World the interval ends at.
+  BlockRef to = 3;
+  // Replaced are dead pages whose own children are accounted for here.
+  repeated BlockRef replaced = 4;
+  // Removed are the roots of dead stored subtrees.
+  repeated BlockRef removed = 5;
+  // Kept are live pages that stop the expansion of Removed.
+  repeated BlockRef kept = 6;
+  // Parts are further Deadlist blocks with the rest of the refs, set only on
+  // the first block.
+  repeated BlockRef parts = 7;
+}
+

@@ -44,6 +44,8 @@ type worldPages struct {
 	pageView
 	// inner is the SharedObject's block store.
 	inner bstore.BlockStore
+	// stamps stamps each reader pin with the adopted deadlist record.
+	stamps readerStamps
 }
 
 // newWorldPages wraps the SharedObject's block store with an empty page set.
@@ -323,11 +325,15 @@ func (w *worldPages) PinRoot(ctx context.Context, ref *block.BlockRef) (func(), 
 	}
 	w.set.mu.Unlock()
 	if page != nil {
-		return sync.OnceFunc(func() { w.set.unpin(key, pin) }), nil
+		return w.stamps.stamp(func() { w.set.unpin(key, pin) }), nil
 	}
 
 	// Pin a root the store holds.
-	return block.PinRoot(ctx, w.inner, ref)
+	release, err := block.PinRoot(ctx, w.inner, ref)
+	if err != nil {
+		return nil, err
+	}
+	return w.stamps.stamp(release), nil
 }
 
 // OpenStage opens a stage on the store. Reads see the kept pages; writes go

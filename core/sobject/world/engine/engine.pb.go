@@ -158,6 +158,14 @@ type ReplayCursor struct {
 	// Head is the World after the last outcome. The engine holds it as its
 	// installed World.
 	Head *InnerState `protobuf:"bytes,3,opt,name=head,proto3" json:"head,omitempty"`
+	// Deadlists are the pending deadlist records in sequence order. Each is
+	// named once the save that carries the cursor is durable.
+	Deadlists []*ReplayDeadlist `protobuf:"bytes,4,rep,name=deadlists,proto3" json:"deadlists,omitempty"`
+	// NextDeadlist is the sequence of the next deadlist record.
+	NextDeadlist uint64 `protobuf:"varint,5,opt,name=next_deadlist,json=nextDeadlist,proto3" json:"nextDeadlist,omitempty"`
+	// AdoptedDeadlist is the sequence of the latest record whose World the
+	// base adopted, or 0.
+	AdoptedDeadlist uint64 `protobuf:"varint,6,opt,name=adopted_deadlist,json=adoptedDeadlist,proto3" json:"adoptedDeadlist,omitempty"`
 }
 
 func (x *ReplayCursor) Reset() {
@@ -183,6 +191,75 @@ func (x *ReplayCursor) GetOutcomes() []*ReplayCursorOutcome {
 func (x *ReplayCursor) GetHead() *InnerState {
 	if x != nil {
 		return x.Head
+	}
+	return nil
+}
+
+func (x *ReplayCursor) GetDeadlists() []*ReplayDeadlist {
+	if x != nil {
+		return x.Deadlists
+	}
+	return nil
+}
+
+func (x *ReplayCursor) GetNextDeadlist() uint64 {
+	if x != nil {
+		return x.NextDeadlist
+	}
+	return 0
+}
+
+func (x *ReplayCursor) GetAdoptedDeadlist() uint64 {
+	if x != nil {
+		return x.AdoptedDeadlist
+	}
+	return 0
+}
+
+// ReplayDeadlist is a pending deadlist record of a named World.
+type ReplayDeadlist struct {
+	unknownFields []byte
+	// Seq is the record's sequence.
+	Seq uint64 `protobuf:"varint,1,opt,name=seq,proto3" json:"seq,omitempty"`
+	// From is the root of the named World the interval starts at, unset when
+	// the interval forfeited before it.
+	From *block.BlockRef `protobuf:"bytes,2,opt,name=from,proto3" json:"from,omitempty"`
+	// To is the root of the named World the interval ends at.
+	To *block.BlockRef `protobuf:"bytes,3,opt,name=to,proto3" json:"to,omitempty"`
+	// Record is the record's first block, unset when the interval forfeited.
+	Record *block.BlockRef `protobuf:"bytes,4,opt,name=record,proto3" json:"record,omitempty"`
+}
+
+func (x *ReplayDeadlist) Reset() {
+	*x = ReplayDeadlist{}
+}
+
+func (*ReplayDeadlist) ProtoMessage() {}
+
+func (x *ReplayDeadlist) GetSeq() uint64 {
+	if x != nil {
+		return x.Seq
+	}
+	return 0
+}
+
+func (x *ReplayDeadlist) GetFrom() *block.BlockRef {
+	if x != nil {
+		return x.From
+	}
+	return nil
+}
+
+func (x *ReplayDeadlist) GetTo() *block.BlockRef {
+	if x != nil {
+		return x.To
+	}
+	return nil
+}
+
+func (x *ReplayDeadlist) GetRecord() *block.BlockRef {
+	if x != nil {
+		return x.Record
 	}
 	return nil
 }
@@ -698,9 +775,12 @@ func (m *ReplayCursor) CloneVT() *ReplayCursor {
 		return (*ReplayCursor)(nil)
 	}
 	r := new(ReplayCursor)
+	r.NextDeadlist = m.NextDeadlist
+	r.AdoptedDeadlist = m.AdoptedDeadlist
 	r.Base = protobuf_go_lite.CloneVTValue(m.Base)
 	r.Outcomes = protobuf_go_lite.CloneVTSlice(m.Outcomes)
 	r.Head = protobuf_go_lite.CloneVTValue(m.Head)
+	r.Deadlists = protobuf_go_lite.CloneVTSlice(m.Deadlists)
 	if len(m.unknownFields) > 0 {
 		r.unknownFields = slices.Clone(m.unknownFields)
 	}
@@ -708,6 +788,25 @@ func (m *ReplayCursor) CloneVT() *ReplayCursor {
 }
 
 func (m *ReplayCursor) CloneMessageVT() protobuf_go_lite.CloneMessage {
+	return m.CloneVT()
+}
+
+func (m *ReplayDeadlist) CloneVT() *ReplayDeadlist {
+	if m == nil {
+		return (*ReplayDeadlist)(nil)
+	}
+	r := new(ReplayDeadlist)
+	r.Seq = m.Seq
+	r.From = protobuf_go_lite.CloneVTValue(m.From)
+	r.To = protobuf_go_lite.CloneVTValue(m.To)
+	r.Record = protobuf_go_lite.CloneVTValue(m.Record)
+	if len(m.unknownFields) > 0 {
+		r.unknownFields = slices.Clone(m.unknownFields)
+	}
+	return r
+}
+
+func (m *ReplayDeadlist) CloneMessageVT() protobuf_go_lite.CloneMessage {
 	return m.CloneVT()
 }
 
@@ -1048,11 +1147,49 @@ func (this *ReplayCursor) EqualVT(that *ReplayCursor) bool {
 	if !protobuf_go_lite.IsEqualVT(this.Head, that.Head) {
 		return false
 	}
+	if !protobuf_go_lite.EqualVTSliceImplicit(this.Deadlists, that.Deadlists, func() *ReplayDeadlist { return &ReplayDeadlist{} }) {
+		return false
+	}
+	if this.NextDeadlist != that.NextDeadlist {
+		return false
+	}
+	if this.AdoptedDeadlist != that.AdoptedDeadlist {
+		return false
+	}
 	return string(this.unknownFields) == string(that.unknownFields)
 }
 
 func (this *ReplayCursor) EqualMessageVT(thatMsg any) bool {
 	that, ok := thatMsg.(*ReplayCursor)
+	if !ok {
+		return false
+	}
+	return this.EqualVT(that)
+}
+
+func (this *ReplayDeadlist) EqualVT(that *ReplayDeadlist) bool {
+	if this == that {
+		return true
+	} else if this == nil || that == nil {
+		return false
+	}
+	if this.Seq != that.Seq {
+		return false
+	}
+	if !protobuf_go_lite.IsEqualVT(this.From, that.From) {
+		return false
+	}
+	if !protobuf_go_lite.IsEqualVT(this.To, that.To) {
+		return false
+	}
+	if !protobuf_go_lite.IsEqualVT(this.Record, that.Record) {
+		return false
+	}
+	return string(this.unknownFields) == string(that.unknownFields)
+}
+
+func (this *ReplayDeadlist) EqualMessageVT(thatMsg any) bool {
+	that, ok := thatMsg.(*ReplayDeadlist)
 	if !ok {
 		return false
 	}
@@ -1626,6 +1763,27 @@ func (x *ReplayCursor) MarshalProtoJSON(s *json.MarshalState) {
 		s.WriteObjectField("head")
 		x.Head.MarshalProtoJSON(s.WithField("head"))
 	}
+	if len(x.Deadlists) > 0 || s.HasField("deadlists") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("deadlists")
+		s.WriteArrayStart()
+		var wroteElement bool
+		for _, element := range x.Deadlists {
+			s.WriteMoreIf(&wroteElement)
+			element.MarshalProtoJSON(s.WithField("deadlists"))
+		}
+		s.WriteArrayEnd()
+	}
+	if x.NextDeadlist != 0 || s.HasField("nextDeadlist") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("nextDeadlist")
+		s.WriteUint64(x.NextDeadlist)
+	}
+	if x.AdoptedDeadlist != 0 || s.HasField("adoptedDeadlist") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("adoptedDeadlist")
+		s.WriteUint64(x.AdoptedDeadlist)
+	}
 	s.WriteObjectEnd()
 }
 
@@ -1675,12 +1833,114 @@ func (x *ReplayCursor) UnmarshalProtoJSON(s *json.UnmarshalState) {
 			}
 			x.Head = &InnerState{}
 			x.Head.UnmarshalProtoJSON(s.WithField("head", true))
+		case "deadlists":
+			s.AddField("deadlists")
+			if s.ReadNil() {
+				x.Deadlists = nil
+				return
+			}
+			s.ReadArray(func() {
+				if s.ReadNil() {
+					x.Deadlists = append(x.Deadlists, nil)
+					return
+				}
+				v := &ReplayDeadlist{}
+				v.UnmarshalProtoJSON(s.WithField("deadlists", false))
+				if s.Err() != nil {
+					return
+				}
+				x.Deadlists = append(x.Deadlists, v)
+			})
+		case "next_deadlist", "nextDeadlist":
+			s.AddField("next_deadlist")
+			x.NextDeadlist = s.ReadUint64()
+		case "adopted_deadlist", "adoptedDeadlist":
+			s.AddField("adopted_deadlist")
+			x.AdoptedDeadlist = s.ReadUint64()
 		}
 	})
 }
 
 // UnmarshalJSON unmarshals the ReplayCursor from JSON.
 func (x *ReplayCursor) UnmarshalJSON(b []byte) error {
+	return json.DefaultUnmarshalerConfig.Unmarshal(b, x)
+}
+
+// MarshalProtoJSON marshals the ReplayDeadlist message to JSON.
+func (x *ReplayDeadlist) MarshalProtoJSON(s *json.MarshalState) {
+	if x == nil {
+		s.WriteNil()
+		return
+	}
+	s.WriteObjectStart()
+	var wroteField bool
+	if x.Seq != 0 || s.HasField("seq") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("seq")
+		s.WriteUint64(x.Seq)
+	}
+	if x.From != nil || s.HasField("from") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("from")
+		x.From.MarshalProtoJSON(s.WithField("from"))
+	}
+	if x.To != nil || s.HasField("to") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("to")
+		x.To.MarshalProtoJSON(s.WithField("to"))
+	}
+	if x.Record != nil || s.HasField("record") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("record")
+		x.Record.MarshalProtoJSON(s.WithField("record"))
+	}
+	s.WriteObjectEnd()
+}
+
+// MarshalJSON marshals the ReplayDeadlist to JSON.
+func (x *ReplayDeadlist) MarshalJSON() ([]byte, error) {
+	return json.DefaultMarshalerConfig.Marshal(x)
+}
+
+// UnmarshalProtoJSON unmarshals the ReplayDeadlist message from JSON.
+func (x *ReplayDeadlist) UnmarshalProtoJSON(s *json.UnmarshalState) {
+	if s.ReadNil() {
+		return
+	}
+	s.ReadObject(func(key string) {
+		switch key {
+		default:
+			s.Skip() // ignore unknown field
+		case "seq":
+			s.AddField("seq")
+			x.Seq = s.ReadUint64()
+		case "from":
+			if s.ReadNil() {
+				x.From = nil
+				return
+			}
+			x.From = &block.BlockRef{}
+			x.From.UnmarshalProtoJSON(s.WithField("from", true))
+		case "to":
+			if s.ReadNil() {
+				x.To = nil
+				return
+			}
+			x.To = &block.BlockRef{}
+			x.To.UnmarshalProtoJSON(s.WithField("to", true))
+		case "record":
+			if s.ReadNil() {
+				x.Record = nil
+				return
+			}
+			x.Record = &block.BlockRef{}
+			x.Record.UnmarshalProtoJSON(s.WithField("record", true))
+		}
+	})
+}
+
+// UnmarshalJSON unmarshals the ReplayDeadlist from JSON.
+func (x *ReplayDeadlist) UnmarshalJSON(b []byte) error {
 	return json.DefaultUnmarshalerConfig.Unmarshal(b, x)
 }
 
@@ -2620,6 +2880,28 @@ func (m *ReplayCursor) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	if m.unknownFields != nil {
 		i = protobuf_go_lite.EncodeRawBytes(dAtA, i, m.unknownFields)
 	}
+	if m.AdoptedDeadlist != 0 {
+		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(m.AdoptedDeadlist))
+		i--
+		dAtA[i] = 0x30
+	}
+	if m.NextDeadlist != 0 {
+		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(m.NextDeadlist))
+		i--
+		dAtA[i] = 0x28
+	}
+	if len(m.Deadlists) > 0 {
+		for iNdEx := len(m.Deadlists) - 1; iNdEx >= 0; iNdEx-- {
+			size, err := m.Deadlists[iNdEx].MarshalToSizedBufferVT(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(size))
+			i--
+			dAtA[i] = 0x22
+		}
+	}
 	if m.Head != nil {
 		size, err := m.Head.MarshalToSizedBufferVT(dAtA[:i])
 		if err != nil {
@@ -2651,6 +2933,73 @@ func (m *ReplayCursor) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(size))
 		i--
 		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *ReplayDeadlist) MarshalVT() (dAtA []byte, err error) {
+	if m == nil {
+		return nil, nil
+	}
+	size := m.SizeVT()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBufferVT(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *ReplayDeadlist) MarshalToVT(dAtA []byte) (int, error) {
+	size := m.SizeVT()
+	return m.MarshalToSizedBufferVT(dAtA[:size])
+}
+
+func (m *ReplayDeadlist) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
+	if m == nil {
+		return 0, nil
+	}
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.unknownFields != nil {
+		i = protobuf_go_lite.EncodeRawBytes(dAtA, i, m.unknownFields)
+	}
+	if m.Record != nil {
+		size, err := m.Record.MarshalToSizedBufferVT(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(size))
+		i--
+		dAtA[i] = 0x22
+	}
+	if m.To != nil {
+		size, err := m.To.MarshalToSizedBufferVT(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(size))
+		i--
+		dAtA[i] = 0x1a
+	}
+	if m.From != nil {
+		size, err := m.From.MarshalToSizedBufferVT(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(size))
+		i--
+		dAtA[i] = 0x12
+	}
+	if m.Seq != 0 {
+		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(m.Seq))
+		i--
+		dAtA[i] = 0x8
 	}
 	return len(dAtA) - i, nil
 }
@@ -3404,6 +3753,35 @@ func (m *ReplayCursor) SizeVT() (n int) {
 		l = m.Head.SizeVT()
 		n += protobuf_go_lite.SizeMessage(1, l)
 	}
+	for _, e := range m.Deadlists {
+		l = e.SizeVT()
+		n += protobuf_go_lite.SizeMessage(1, l)
+	}
+	n += protobuf_go_lite.SizeVarintNonZero(1, m.NextDeadlist)
+	n += protobuf_go_lite.SizeVarintNonZero(1, m.AdoptedDeadlist)
+	n += len(m.unknownFields)
+	return n
+}
+
+func (m *ReplayDeadlist) SizeVT() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	n += protobuf_go_lite.SizeVarintNonZero(1, m.Seq)
+	if m.From != nil {
+		l = m.From.SizeVT()
+		n += protobuf_go_lite.SizeMessage(1, l)
+	}
+	if m.To != nil {
+		l = m.To.SizeVT()
+		n += protobuf_go_lite.SizeMessage(1, l)
+	}
+	if m.Record != nil {
+		l = m.Record.SizeVT()
+		n += protobuf_go_lite.SizeMessage(1, l)
+	}
 	n += len(m.unknownFields)
 	return n
 }
@@ -3757,10 +4135,56 @@ func (x *ReplayCursor) MarshalProtoText() string {
 		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "head")
 		protobuf_go_lite.TextWriteTextMarshaler(&sb, x.Head)
 	}
+	if len(x.Deadlists) > 0 {
+		protobuf_go_lite.TextWriteListStart(&sb, initialLen, "deadlists")
+		for i, v := range x.Deadlists {
+			protobuf_go_lite.TextWriteListSeparator(&sb, i)
+			if v == nil {
+				protobuf_go_lite.TextWriteTextMarshaler(&sb, &ReplayDeadlist{})
+			} else {
+				protobuf_go_lite.TextWriteTextMarshaler(&sb, v)
+			}
+		}
+		protobuf_go_lite.TextWriteListEnd(&sb)
+	}
+	if x.NextDeadlist != 0 {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "next_deadlist")
+		protobuf_go_lite.TextWriteUint(&sb, x.NextDeadlist)
+	}
+	if x.AdoptedDeadlist != 0 {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "adopted_deadlist")
+		protobuf_go_lite.TextWriteUint(&sb, x.AdoptedDeadlist)
+	}
 	return protobuf_go_lite.TextFinishMessage(&sb)
 }
 
 func (x *ReplayCursor) String() string {
+	return x.MarshalProtoText()
+}
+
+func (x *ReplayDeadlist) MarshalProtoText() string {
+	var sb protobuf_go_lite.TextBuilder
+	initialLen := protobuf_go_lite.TextStartMessage(&sb, "ReplayDeadlist")
+	if x.Seq != 0 {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "seq")
+		protobuf_go_lite.TextWriteUint(&sb, x.Seq)
+	}
+	if x.From != nil {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "from")
+		protobuf_go_lite.TextWriteTextMarshaler(&sb, x.From)
+	}
+	if x.To != nil {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "to")
+		protobuf_go_lite.TextWriteTextMarshaler(&sb, x.To)
+	}
+	if x.Record != nil {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "record")
+		protobuf_go_lite.TextWriteTextMarshaler(&sb, x.Record)
+	}
+	return protobuf_go_lite.TextFinishMessage(&sb)
+}
+
+func (x *ReplayDeadlist) String() string {
 	return x.MarshalProtoText()
 }
 
@@ -4307,6 +4731,134 @@ func (m *ReplayCursor) UnmarshalVT(dAtA []byte) error {
 				m.Head = &InnerState{}
 			}
 			if err := m.Head.UnmarshalVT(dAtA[msgStart:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 4:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Deadlists", wireType)
+			}
+			msgStart, postIndex, err := protobuf_go_lite.DecodeLengthDelimited(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			m.Deadlists = append(m.Deadlists, &ReplayDeadlist{})
+			if err := m.Deadlists[len(m.Deadlists)-1].UnmarshalVT(dAtA[msgStart:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 5:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field NextDeadlist", wireType)
+			}
+			m.NextDeadlist = 0
+			m.NextDeadlist, iNdEx, err = protobuf_go_lite.DecodeVarint(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+		case 6:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AdoptedDeadlist", wireType)
+			}
+			m.AdoptedDeadlist = 0
+			m.AdoptedDeadlist, iNdEx, err = protobuf_go_lite.DecodeVarint(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+		default:
+			iNdEx = preIndex
+			skippy, err := protobuf_go_lite.Skip(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return protobuf_go_lite.ErrInvalidLength
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.unknownFields = append(m.unknownFields, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+
+func (m *ReplayDeadlist) UnmarshalVT(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	var err error
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		wire, iNdEx, err = protobuf_go_lite.DecodeVarint(dAtA, iNdEx)
+		if err != nil {
+			return err
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: ReplayDeadlist: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: ReplayDeadlist: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Seq", wireType)
+			}
+			m.Seq = 0
+			m.Seq, iNdEx, err = protobuf_go_lite.DecodeVarint(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field From", wireType)
+			}
+			msgStart, postIndex, err := protobuf_go_lite.DecodeLengthDelimited(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			if m.From == nil {
+				m.From = &block.BlockRef{}
+			}
+			if err := m.From.UnmarshalVT(dAtA[msgStart:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field To", wireType)
+			}
+			msgStart, postIndex, err := protobuf_go_lite.DecodeLengthDelimited(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			if m.To == nil {
+				m.To = &block.BlockRef{}
+			}
+			if err := m.To.UnmarshalVT(dAtA[msgStart:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 4:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Record", wireType)
+			}
+			msgStart, postIndex, err := protobuf_go_lite.DecodeLengthDelimited(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			if m.Record == nil {
+				m.Record = &block.BlockRef{}
+			}
+			if err := m.Record.UnmarshalVT(dAtA[msgStart:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex

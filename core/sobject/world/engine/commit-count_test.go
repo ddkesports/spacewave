@@ -3,6 +3,7 @@
 package sobject_world_engine_test
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -17,10 +18,12 @@ import (
 	"github.com/s4wave/spacewave/core/sobject"
 	sobject_world_engine "github.com/s4wave/spacewave/core/sobject/world/engine"
 	"github.com/s4wave/spacewave/db/block"
+	block_gc "github.com/s4wave/spacewave/db/block/gc"
 	block_mock "github.com/s4wave/spacewave/db/block/mock"
 	"github.com/s4wave/spacewave/db/bucket"
 	bucket_lookup "github.com/s4wave/spacewave/db/bucket/lookup"
 	"github.com/s4wave/spacewave/db/s4db"
+	kvtx_volume "github.com/s4wave/spacewave/db/volume/common/kvtx"
 	volume_s4db "github.com/s4wave/spacewave/db/volume/s4db"
 	"github.com/s4wave/spacewave/db/world"
 	world_mock "github.com/s4wave/spacewave/db/world/mock"
@@ -37,6 +40,8 @@ type localWorld struct {
 	le *logrus.Entry
 	// eng is the World engine.
 	eng sobject_world_engine.Engine
+	// acc is the provider account holding the SharedObject.
+	acc *provider_local.ProviderAccount
 	// db is the account volume's database.
 	db *s4db.DB
 	// soRef identifies the SharedObject.
@@ -117,12 +122,14 @@ func openLocalAccount(t *testing.T, dir string, soRef *sobject.SharedObjectRef) 
 // newLocalWorld returns the World eng of the SharedObject soRef in the local
 // account acc on tb.
 func newLocalWorld(t *testing.T, tb *testbed.Testbed, acc provider.ProviderAccount, eng sobject_world_engine.Engine, soRef *sobject.SharedObjectRef) *localWorld {
+	// Find the account database.
 	t.Helper()
-	db := volume_s4db.GetDB(acc.(*provider_local.ProviderAccount).GetVolume())
+	local := acc.(*provider_local.ProviderAccount)
+	db := volume_s4db.GetDB(local.GetVolume())
 	if db == nil {
 		t.Fatal("account volume is not s4db")
 	}
-	return &localWorld{bus: tb.Bus, le: tb.Logger, eng: eng, db: db, soRef: soRef}
+	return &localWorld{bus: tb.Bus, le: tb.Logger, eng: eng, acc: local, db: db, soRef: soRef}
 }
 
 // create commits a World write that creates the object key.
@@ -237,7 +244,7 @@ func TestCheckpointInstallPhysicalCommits(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer relDurable()
-	_, err = durable.WaitValueWithValidator(t.Context(), func(snap sobject.SharedObjectStateSnapshot) (bool, error) {
+	snap, err := durable.WaitValueWithValidator(t.Context(), func(snap sobject.SharedObjectStateSnapshot) (bool, error) {
 		return checkpointTrimmed(t.Context(), snap)
 	}, nil)
 	if err != nil {
@@ -274,6 +281,74 @@ func TestCheckpointInstallPhysicalCommits(t *testing.T) {
 	}
 	if got := after["spacewave_world_death_forfeits_total"] - flows["spacewave_world_death_forfeits_total"]; got != 0 {
 		t.Fatalf("forfeited %v intervals", got)
+	}
+
+	// The checkpoint named a record of those deaths, and its World reaches
+	// none of them.
+	checkpoint, err := snap.GetCheckpoint(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := &sobject_world_engine.InnerState{}
+	if err := state.UnmarshalVT(checkpoint.GetStateData()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Gather the pages the checkpoint World reaches.
+	live := make(map[string]struct{})
+	err = block.WalkGraph(t.Context(), so.GetBlockStore(), []*block.BlockRef{state.GetHeadRef().GetRootRef()}, 0, func(ref *block.BlockRef, _ *block.StoredBlock) error {
+		live[ref.MarshalString()] = struct{}{}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Check every named record against them.
+	records := w.deadlists(t, so.GetBlockStore())
+	if len(records) == 0 {
+		t.Fatal("named no deadlist record")
+	}
+	for _, dead := range records {
+		for _, ref := range slices.Concat(dead.Replaced, dead.Removed) {
+			if _, ok := live[ref.MarshalString()]; ok {
+				t.Fatalf("deadlist lists %s, which the checkpoint World reaches", ref.MarshalString())
+			}
+		}
+	}
+}
+
+// deadlists reads every deadlist record the volume names for the World, due
+// or pending, from store.
+func (w *localWorld) deadlists(t *testing.T, store block.StoreOps) []*block.Replacements {
+	// Find the bucket's named roots in the volume's graph.
+	t.Helper()
+	graph := w.acc.GetVolume().(kvtx_volume.KvtxVolume).GetRefGraph()
+	bucketID := provider_local.BlockStoreBucketID(w.acc.GetProviderID(), w.acc.GetAccountID(), w.soRef.GetBlockStoreId())
+
+	// Read each record by sequence until neither name holds one.
+	var out []*block.Replacements
+	for seq := uint64(1); ; seq++ {
+		var refs []string
+		for _, name := range []string{block.DeadlistRootName(seq), block.DeadlistDueRootName(seq)} {
+			named, err := graph.GetOutgoingRefs(t.Context(), kvtx_volume.RootOwnerIRI(bucketID, name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			refs = append(refs, named...)
+		}
+		if len(refs) == 0 {
+			return out
+		}
+		ref, ok := block_gc.ParseBlockIRI(refs[0])
+		if !ok {
+			t.Fatalf("deadlist root names %s", refs[0])
+		}
+		_, dead, err := block.ReadDeadlist(t.Context(), store, ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, dead)
 	}
 }
 
