@@ -2,6 +2,7 @@ package provider_local
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -127,8 +128,8 @@ func (r *readSet) load(ctx context.Context, store readStore) error {
 	// Fill the two newest generations from the newest chunks back.
 	r.mtx.Lock()
 	defer r.mtx.Unlock()
-	for i := len(chunks) - 1; i >= 0; i-- {
-		chunk := chunks[i]
+	for _, chunk := range slices.Backward(chunks) {
+
 		var gen map[readKey]struct{}
 		switch {
 		case r.turned.IsZero() || chunk.Generation.Equal(r.turned):

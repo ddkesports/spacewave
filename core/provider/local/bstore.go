@@ -435,16 +435,18 @@ func (t *bstoreTracker) executeBlockStoreTracker(rctx context.Context) error {
 		}
 	}
 
-	// Record the writes still to upload beside the store.
+	// Record the writes still to upload beside the store, in the volume that
+	// holds its blocks: a block and its marker commit in one transaction.
+	markersID := BlockStoreWritebackObjectStoreID(
+		t.a.t.p.info.GetProviderId(),
+		t.a.t.accountInfo.GetProviderAccountId(),
+		t.id,
+	)
 	markers, _, markersRef, err := volume.ExBuildObjectStoreAPI(
 		ctx,
 		t.a.t.p.b,
 		false,
-		BlockStoreWritebackObjectStoreID(
-			t.a.t.p.info.GetProviderId(),
-			t.a.t.accountInfo.GetProviderAccountId(),
-			t.id,
-		),
+		markersID,
 		volID,
 		ctxCancel,
 	)
@@ -452,7 +454,7 @@ func (t *bstoreTracker) executeBlockStoreTracker(rctx context.Context) error {
 		return err
 	}
 	defer markersRef.Release()
-	wb, err := block_store_writeback.NewStore(ctx, localBucket, t.a.vol, markers.GetObjectStore(), backend != nil)
+	wb, err := block_store_writeback.NewStore(ctx, localBucket, t.a.vol, markers.GetObjectStore(), markersID, backend != nil)
 	if err != nil {
 		return err
 	}

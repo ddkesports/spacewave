@@ -68,9 +68,11 @@ func (v *Volume) withDirectAtomic(ctx context.Context, fn func(block.StoreOps, *
 		committed = err == nil
 	}
 
-	// Settle the deferred edits and wake Volume statistics watchers.
+	// Settle the deferred edits, report the committed markers and wake Volume
+	// statistics watchers.
 	v.settleDeferred(edits, committed)
 	if committed {
+		p.blocks.marks.committed()
 		v.broadcastStorageStatsChanged()
 	}
 	return err

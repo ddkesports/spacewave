@@ -2,10 +2,13 @@
 // uploads it to a remote store in the background.
 //
 // A write is acknowledged once the local store holds the block and a durable
-// marker names it. Upload drains the markers to the remote store and clears
-// each marker only after the remote store holds its block, so writes made
-// while the remote is unreachable upload after it returns, across restarts.
-// Backfill queues the blocks stored before a remote was chosen.
+// marker names it. The marker lives in the same key-value store as the block
+// and commits in the same transaction (see kvtx.BlockMarker), so a crash
+// leaves either both or neither, and a publication of many blocks marks them
+// all in its own transaction. Upload drains the markers to the remote store
+// and clears each marker only after the remote store holds its block, so
+// writes made while the remote is unreachable upload after it returns, across
+// restarts. Backfill queues the blocks stored before a remote was chosen.
 //
 // A marker waits a settle age before it uploads, so a block the garbage
 // collector sweeps meanwhile never reaches the remote: the upload finds the
@@ -13,9 +16,9 @@
 package block_store_writeback
 
 import (
+	"bytes"
 	"context"
 	"slices"
-	"strconv"
 	"time"
 
 	"github.com/aperturerobotics/util/broadcast"
@@ -60,9 +63,14 @@ type Store struct {
 	// values holds the local block values below any ownership tracking, so
 	// eviction and refill change values alone.
 	values block.StoreOps
-	// markers holds one marker per block awaiting upload.
+	// markers holds one marker per block awaiting upload, in the key-value
+	// store that holds the blocks.
 	markers kvtx.Store
-	// mtx orders marker mutations with their projection into status.
+	// markersID is the ID of the object store that markers views.
+	markersID string
+	// mtx orders upload clears, backfill queueing and enablement changes with
+	// their projection into status. Block writes mark without it, inside their
+	// own transactions.
 	mtx csync.Mutex
 	// evictMtx runs one eviction pass at a time, and disabling uploads waits
 	// for the pass to end.
@@ -71,6 +79,9 @@ type Store struct {
 	bcast broadcast.Broadcast
 	// status projects the committed markers and the upload policy.
 	status Status
+	// gen counts enablement changes, guarded by bcast. A transaction that
+	// marked blocks projects them into status only if no change followed it.
+	gen uint64
 	// reads bounds the upload's local reads in flight by the disk's load.
 	reads *readGate
 }
@@ -84,16 +95,22 @@ func (s *Store) GetStoreParts() []block.StorePart {
 // run. Queued blocks upload at once until SetPolicy sets a settle age. values
 // holds the same blocks as local without its ownership tracking.
 //
+// markers is the object store with ID markersID in the key-value store that
+// holds the blocks of local. Writes through the Store mark their blocks in the
+// transaction that stores them, so local must store its blocks in that
+// key-value store with kvtx.BlockMarker support (see the kvtx Volume).
+//
 // When enabled is false, writes are not queued until SetEnabled enables them.
 func NewStore(
 	ctx context.Context,
 	local, values block.StoreOps,
 	markers kvtx.Store,
+	markersID string,
 	enabled bool,
 ) (*Store, error) {
 	// Connect local block writes to the durable upload markers.
-	s := &Store{local: local, values: values, markers: markers, reads: newReadGate()}
-	s.MarkingStore = NewMarkingStore(local, s.mark)
+	s := &Store{local: local, values: values, markers: markers, markersID: markersID, reads: newReadGate()}
+	s.MarkingStore = NewTxMarkingStore(local, s)
 
 	// Restore the pending upload counts, eviction queue size and completed
 	// backfill target.
@@ -174,9 +191,11 @@ func (s *Store) GetStatus() (Status, <-chan struct{}) {
 
 // SetEnabled starts or stops queueing writes for upload.
 //
-// Disabling drops the queued markers, the eviction queue and the backfill
-// target: the remote store no longer needs the markers, and the local store
-// must keep the blocks it holds.
+// Enabling returns once every write transaction that began while queueing was
+// off has ended, so a Backfill that follows lists their blocks. Disabling
+// drops the queued markers, the eviction queue and the backfill target: the
+// remote store no longer needs the markers, and the local store must keep the
+// blocks it holds.
 func (s *Store) SetEnabled(ctx context.Context, enabled bool) error {
 	// Serialize upload enablement with marker mutations.
 	release, err := s.mtx.Lock(ctx)
@@ -185,32 +204,20 @@ func (s *Store) SetEnabled(ctx context.Context, enabled bool) error {
 	}
 	defer release()
 
-	// Drop pending markers and the backfill target when uploads are disabled,
-	// after any eviction pass, whose commits would count entries dropped here.
+	// Drop pending markers and the backfill target after any eviction pass,
+	// whose commits would count entries dropped here.
 	if !enabled {
 		releaseEvict, err := s.evictMtx.Lock(ctx)
 		if err != nil {
 			return err
 		}
 		defer releaseEvict()
-		err = kvtx.RunTransaction(ctx, true, s.writeTx, func(ctx context.Context, tx kvtx.Tx) error {
-			for _, prefix := range []string{markedPrefix, queuePrefix, evictPrefix} {
-				if err := deletePrefix(ctx, tx, prefix); err != nil {
-					return err
-				}
-			}
-			if err := tx.Delete(ctx, []byte(evictableBytesKey)); err != nil {
-				return err
-			}
-			return tx.Delete(ctx, []byte(backfillKey))
-		})
-		if err != nil {
-			return errors.Wrap(err, "drop pending uploads")
-		}
 	}
 
-	// Publish upload enablement and the resulting queue status.
+	// Publish upload enablement first, so a write that starts after this point
+	// queues or skips by the new setting, and one in flight projects nothing.
 	s.bcast.HoldLock(func(broadcast func(), _ func() <-chan struct{}) {
+		s.gen++
 		s.status.Enabled = enabled
 		if !enabled {
 			s.status.Pending, s.status.PendingBytes = 0, 0
@@ -220,6 +227,27 @@ func (s *Store) SetEnabled(ctx context.Context, enabled bool) error {
 		}
 		broadcast()
 	})
+
+	// A write transaction ahead of this one in the store's order either marked
+	// by the old setting or ends before the write below returns. Dropping the
+	// markers also removes those a disabled-to-enabled race left behind.
+	err = kvtx.RunTransaction(ctx, true, s.writeTx, func(ctx context.Context, tx kvtx.Tx) error {
+		if enabled {
+			return nil
+		}
+		for _, prefix := range []string{markedPrefix, queuePrefix, evictPrefix} {
+			if err := deletePrefix(ctx, tx, prefix); err != nil {
+				return err
+			}
+		}
+		if err := tx.Delete(ctx, []byte(evictableBytesKey)); err != nil {
+			return err
+		}
+		return tx.Delete(ctx, []byte(backfillKey))
+	})
+	if err != nil {
+		return errors.Wrap(err, "change upload enablement")
+	}
 	return nil
 }
 
@@ -256,7 +284,7 @@ func (s *Store) Backfill(
 				marks = append(marks, Mark{Hash: ref.GetHash(), Size: max(stat.Size, 0)})
 			}
 		}
-		if err := s.mark(ctx, marks); err != nil {
+		if err := s.queue(ctx, marks); err != nil {
 			return err
 		}
 	}
@@ -316,7 +344,7 @@ func (s *Store) waitDue(ctx context.Context) error {
 		var changed <-chan struct{}
 		s.bcast.HoldLock(func(_ func(), getWaitCh func() <-chan struct{}) {
 			changed = getWaitCh()
-			pending = s.status.Pending != 0
+			pending = s.status.Pending > 0
 			due = s.status.Oldest.Add(s.status.Policy.Settle)
 			ready = pending && (!now.Before(due) || s.status.Policy.overLimit(s.status.PendingBytes))
 		})
@@ -349,8 +377,11 @@ func (s *Store) waitDue(ctx context.Context) error {
 type pendingBlock struct {
 	queueKey  []byte
 	markedKey []byte
-	ref       *block.BlockRef
-	size      int64
+	// value is the queue entry's value when the batch read it. A write of the
+	// block since then changes the entry's value.
+	value []byte
+	ref   *block.BlockRef
+	size  int64
 	// dropped is set when the local store no longer held the block, so the
 	// batch did not upload it.
 	dropped bool
@@ -389,6 +420,7 @@ func (s *Store) scanBatch(ctx context.Context) ([]pendingBlock, error) {
 			batch = append(batch, pendingBlock{
 				queueKey:  entry.key,
 				markedKey: markedKey(entry.hash),
+				value:     entry.value,
 				ref:       block.NewBlockRef(entry.hash),
 				size:      entry.size,
 			})
@@ -504,11 +536,46 @@ func (s *Store) GetUploadReads() int {
 	return s.reads.getLimit()
 }
 
-// mark queues written blocks for upload in one transaction.
+// MarkerStoreID returns the ID of the object store that holds the markers.
+func (s *Store) MarkerStoreID() string {
+	return s.markersID
+}
+
+// MarkBlocks queues the blocks a write stores, in the transaction that stores
+// them. The queue status follows once the transaction commits.
 //
-// A disabled store skips the lock. The check repeats under the lock so a mark
+// A disabled store queues nothing. SetEnabled orders itself against the
+// transactions in flight, so a block stored while disabled is listed by the
+// Backfill that follows enabling.
+func (s *Store) MarkBlocks(ctx context.Context, tx kvtx.Tx, blocks []kvtx.BlockMark) (func(), error) {
+	// Skip upload markers while queueing is disabled.
+	gen, enabled := s.getEnabledGen()
+	if !enabled {
+		return nil, nil
+	}
+
+	// Queue the blocks at one write time.
+	now := time.Now()
+	marks := make([]Mark, len(blocks))
+	for i, b := range blocks {
+		marks[i] = Mark{Hash: b.Hash, Size: b.Size, At: now}
+	}
+	delta, err := queueMarks(ctx, tx, marks)
+	if err != nil {
+		return nil, errors.Wrap(err, "queue block upload")
+	}
+	if delta.added == 0 {
+		return nil, nil
+	}
+	return func() { s.applyQueued(gen, delta) }, nil
+}
+
+// queue queues blocks for upload in one transaction of their own, as a
+// backfill does for blocks that are stored already.
+//
+// A disabled store skips the lock. The check repeats under the lock so a call
 // racing SetEnabled(false) cannot queue after the queue is dropped.
-func (s *Store) mark(ctx context.Context, marks []Mark) error {
+func (s *Store) queue(ctx context.Context, marks []Mark) error {
 	// Skip upload markers while queueing is disabled.
 	if !s.isEnabled() {
 		return nil
@@ -520,62 +587,49 @@ func (s *Store) mark(ctx context.Context, marks []Mark) error {
 		return err
 	}
 	defer release()
-	if !s.isEnabled() {
+	gen, enabled := s.getEnabledGen()
+	if !enabled {
 		return nil
 	}
 
-	// A repeated write finds its marker and keeps its first write time.
-	var added int
-	var addedBytes int64
-	var oldest time.Time
+	// Queue the markers in one write transaction.
+	var delta queueDelta
 	err = kvtx.RunTransaction(ctx, true, s.writeTx, func(ctx context.Context, tx kvtx.Tx) error {
-		added, addedBytes, oldest = 0, 0, time.Time{}
-		for _, mark := range marks {
-			key := markedKey(mark.Hash)
-			found, err := tx.Exists(ctx, key)
-			if err != nil {
-				return err
-			}
-			if found {
-				continue
-			}
-			at := queueTime(mark.At)
-			if err := tx.Set(ctx, key, nil); err != nil {
-				return err
-			}
-			if err := tx.Set(ctx, queueKey(at, mark.Hash), []byte(strconv.FormatInt(mark.Size, 10))); err != nil {
-				return err
-			}
-			if added == 0 || at.Before(oldest) {
-				oldest = at
-			}
-			added++
-			addedBytes += mark.Size
-		}
-		return nil
+		var err error
+		delta, err = queueMarks(ctx, tx, marks)
+		return err
 	})
 	if err != nil {
 		return errors.Wrap(err, "queue block upload")
 	}
-	if added != 0 {
-		s.bcast.HoldLock(func(broadcast func(), _ func() <-chan struct{}) {
-			if s.status.Pending == 0 || oldest.Before(s.status.Oldest) {
-				s.status.Oldest = oldest
-			}
-			s.status.Pending += added
-			s.status.PendingBytes += addedBytes
-			broadcast()
-		})
-	}
+	s.applyQueued(gen, delta)
 	return nil
+}
+
+// applyQueued projects blocks queued by a committed transaction into the
+// status and wakes Upload, unless queueing was enabled or disabled since the
+// transaction marked them: the change dropped or rebuilt the status.
+func (s *Store) applyQueued(gen uint64, delta queueDelta) {
+	s.bcast.HoldLock(func(broadcast func(), _ func() <-chan struct{}) {
+		// Ignore a transaction that predates the latest enable or disable.
+		if s.gen != gen || !s.status.Enabled {
+			return
+		}
+		if s.status.Pending <= 0 || delta.oldest.Before(s.status.Oldest) {
+			s.status.Oldest = delta.oldest
+		}
+		s.status.Pending += delta.added
+		s.status.PendingBytes += delta.addedBytes
+		broadcast()
+	})
 }
 
 // clear removes the markers of uploaded blocks, queues them for eviction at
 // the current epoch, and clears the last failure.
 //
 // A dropped block written again since the batch read it keeps its marker: the
-// write found the marker and queued nothing, so clearing it would leave the
-// block on the local store alone.
+// write changed the queue entry's value, and the block is on the local store
+// alone.
 func (s *Store) clear(ctx context.Context, batch []pendingBlock) error {
 	// Serialize uploaded marker removal with queue status updates.
 	release, err := s.mtx.Lock(ctx)
@@ -583,22 +637,6 @@ func (s *Store) clear(ctx context.Context, batch []pendingBlock) error {
 		return err
 	}
 	defer release()
-
-	// Keep the markers of dropped blocks the local store holds again. A write
-	// stores its block before it takes the lock to mark it, so a block absent
-	// here is marked again after the clear.
-	for i := range batch {
-		if !batch[i].dropped {
-			continue
-		}
-		stat, err := s.local.StatBlock(ctx, batch[i].ref)
-		if err != nil {
-			return errors.Wrap(err, "stat dropped block")
-		}
-		if stat != nil {
-			batch[i].queueKey = nil
-		}
-	}
 
 	// Remove uploaded block markers, count their cleared bytes, and read the
 	// write time of the queue's new head.
@@ -614,14 +652,11 @@ func (s *Store) clear(ctx context.Context, batch []pendingBlock) error {
 		}
 		cleared, uploaded, clearedBytes, uploadedBytes, queuedBytes = 0, 0, 0, 0, 0
 		for _, pending := range batch {
-			if pending.queueKey == nil {
-				continue
-			}
-			found, err := tx.Exists(ctx, pending.queueKey)
+			value, found, err := tx.Get(ctx, pending.queueKey)
 			if err != nil {
 				return err
 			}
-			if !found {
+			if !found || (pending.dropped && !bytes.Equal(value, pending.value)) {
 				continue
 			}
 			if err := tx.Delete(ctx, pending.queueKey); err != nil {
@@ -694,6 +729,17 @@ func (s *Store) isEnabled() bool {
 	return enabled
 }
 
+// getEnabledGen reports whether writes are queued for upload, and the count of
+// enablement changes that setting follows.
+func (s *Store) getEnabledGen() (uint64, bool) {
+	var gen uint64
+	var enabled bool
+	s.bcast.HoldLock(func(_ func(), _ func() <-chan struct{}) {
+		gen, enabled = s.gen, s.status.Enabled
+	})
+	return gen, enabled
+}
+
 // readTx opens a read transaction on the marker store.
 func (s *Store) readTx(ctx context.Context) (kvtx.Tx, error) {
 	return s.markers.NewTransaction(ctx, false)
@@ -708,4 +754,5 @@ func (s *Store) writeTx(ctx context.Context) (kvtx.Tx, error) {
 var (
 	_ block.StoreOps   = (*Store)(nil)
 	_ block.StoreParts = (*Store)(nil)
+	_ kvtx.BlockMarker = (*Store)(nil)
 )
