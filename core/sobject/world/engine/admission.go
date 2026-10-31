@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 
+	"github.com/pkg/errors"
 	"github.com/s4wave/spacewave/core/sobject"
 	"github.com/s4wave/spacewave/db/block"
 	"github.com/s4wave/spacewave/db/bucket"
@@ -164,12 +165,45 @@ func (e *soEngine) reinstall(ctx context.Context) uint64 {
 	return seqno
 }
 
+// failedAdmission drops the admissions whose receipts succeeded, in admission
+// order, and returns the error of a failed receipt it finds, without settling
+// it. A commit calls it in place of settle, so it never drops the World it
+// forked from or runs the reinstall hooks: the receipt's watcher or the next
+// write settles the failure. The caller holds the writer lock.
+func (e *soEngine) failedAdmission() error {
+	for _, adm := range e.admissions {
+		select {
+		case <-adm.receipt.Done():
+			if err := adm.receipt.Err(); err != nil {
+				return errors.Wrap(err, "write admitted after a failed publication")
+			}
+		default:
+		}
+	}
+	for len(e.admissions) != 0 {
+		select {
+		case <-e.admissions[0].receipt.Done():
+			e.admissions = e.admissions[1:]
+		default:
+			return nil
+		}
+	}
+	return nil
+}
+
 // admittedState settles the resolved receipts and returns the admitted state,
 // waiting for a snapshot without the operations of failed publications. The
 // caller holds the writer lock.
 func (e *soEngine) admittedState(ctx context.Context) (sobject.SharedObjectStateSnapshot, error) {
 	// Settle first, so a failure just resolved is waited out.
 	e.settle()
+	return e.readAdmittedState(ctx)
+}
+
+// readAdmittedState returns the admitted state, waiting for a snapshot
+// without the operations of settled failed publications. The caller holds the
+// writer lock.
+func (e *soEngine) readAdmittedState(ctx context.Context) (sobject.SharedObjectStateSnapshot, error) {
 	ctr, rel, err := accessAdmittedState(ctx, e.so, nil)
 	if err != nil {
 		return nil, err
@@ -218,9 +252,11 @@ type reinstallHook struct {
 
 // OnReinstall calls fn with the World seqno when failed writes are dropped,
 // before a later write is admitted, and when a new engine opens in this
-// controller. fn runs under the writer lock, from settle on whichever
-// goroutine holds it, which may be a write's own, or from setWriter. A
-// goroutine waiting in WaitDurable never runs fn and never waits for it.
+// controller. fn runs under the writer lock, from settle on the receipt's
+// watcher, on a write's goroutine as it forks before its body runs, or on an
+// engine call that changes engine state, or from setWriter. A commit never
+// settles a failure: queueOperation fails the write instead. A goroutine
+// waiting in WaitDurable never runs fn and never waits for it.
 func (e *soEngine) OnReinstall(_ context.Context, fn func(seqno uint64)) (func(), error) {
 	return e.c.onReinstall(fn), nil
 }

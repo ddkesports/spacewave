@@ -10,7 +10,10 @@ type AdmitCommitter interface {
 	// CommitAdmit commits the write and returns once the engine admitted it
 	// and installed the World after it, which later writes fork from. Readers
 	// see that World once it is durable. On error the write was not admitted,
-	// or it failed before CommitAdmit returned. Call Release on the Admission.
+	// or it failed before CommitAdmit returned. A write whose base the engine
+	// drops for a failed publication during its commit fails with that error
+	// and is never replayed onto the reinstalled World. Call Release on the
+	// Admission.
 	CommitAdmit(ctx context.Context) (Admission, error)
 }
 
@@ -38,16 +41,15 @@ type ReinstallNotifier interface {
 	// returned func unregisters fn.
 	//
 	// fn runs under the engine's writer lock, in settle order, and must not
-	// open a World transaction. The lock order is the engine's writer lock
-	// first, the consumer's second: fn may block on a consumer lock, and no
-	// goroutine may hold that lock while it calls the engine for its writer
-	// lock, which opening a write transaction, committing one and every engine
-	// call that changes its state do. fn then runs on a goroutine that holds
-	// no consumer lock: the receipt's watcher, a goroutine opening a write or
-	// changing engine state, which may be a goroutine committing a write when
-	// a failure resolved before its admission, or the one opening a new
-	// engine. WaitDurable takes no engine lock and never waits for fn: it
-	// returns a failed receipt's error without waiting for the reinstall.
+	// open a World transaction. It runs on the receipt's watcher, on a
+	// writer's goroutine as it forks before the write's body runs, on a
+	// goroutine entering another engine call that changes its state, or on
+	// the one opening a new engine; never during a commit. The lock order is
+	// the engine's writer lock first, the consumer's second: fn may block on
+	// a consumer lock that is taken only inside a write's body, after the
+	// fork, and released after CommitAdmit returns. WaitDurable takes no
+	// engine lock and never waits for fn: it returns a failed receipt's error
+	// without waiting for the reinstall.
 	OnReinstall(ctx context.Context, fn func(seqno uint64)) (func(), error)
 }
 

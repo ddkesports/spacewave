@@ -92,7 +92,10 @@ func (t *soEngineWriteTx) Commit(ctx context.Context) error {
 // CommitAdmit releases the writer lock and returns once the publication
 // admits the write and the engine installs its World, so the next write forks
 // from it. The Admission waits for the receipt. Without a publication the
-// write is durable when CommitAdmit returns.
+// write is durable when CommitAdmit returns. A write whose World follows a
+// publication that failed before its admission fails with that failure; it
+// is never replayed onto the reinstalled World, and CommitAdmit runs no
+// reinstall hook.
 func (t *soEngineWriteTx) CommitAdmit(ctx context.Context) (world.Admission, error) {
 	// Admit the write.
 	ctx, task := trace.NewTask(ctx, "alpha/so-engine/write-tx/commit")

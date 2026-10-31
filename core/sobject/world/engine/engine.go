@@ -690,8 +690,16 @@ func (e *soEngine) queueOperation(ctx context.Context, opData []byte, fork *repl
 	ctx, cancel := e.detach(ctx)
 	defer cancel()
 
+	// Fail it when a publication its World follows failed: its own receipt
+	// follows that one and fails with it, so it is never replayed onto the
+	// reinstalled World. The failure is left to the receipt's watcher or the
+	// next write, which run the reinstall hooks outside any commit.
+	if err := e.failedAdmission(); err != nil {
+		return err
+	}
+
 	// Find it in the set.
-	snap, err := e.admittedState(ctx)
+	snap, err := e.readAdmittedState(ctx)
 	if err != nil {
 		return err
 	}
