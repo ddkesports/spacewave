@@ -362,7 +362,7 @@ func TestSharingWalkGates(t *testing.T) {
 	// place.
 	rg = newTestRefGraph(t)
 	addTestRoot(t, rg, leaf)
-	if s, err := rg.BeginSharing(ctx); err != nil || s.Phase != SharingClearingHolds {
+	if s, err = rg.BeginSharing(ctx); err != nil || s.Phase != SharingClearingHolds {
 		t.Fatalf("rooted graph phase %c err %v, want a walk", s.Phase, err)
 	}
 	for s.Phase != SharingForgetting {
