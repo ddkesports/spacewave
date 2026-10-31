@@ -42,12 +42,12 @@ type soEngineWriteTx struct {
 	clock *commitClock
 	// seqno is the World seqno after the write, set at admission.
 	seqno uint64
-	// durablePos is the durable head's position of the World after the
-	// write, which readers see once the durable head reaches it.
-	durablePos uint64
-	// reinstalled is the seqno of the World the engine reinstalled after the
-	// write's publication failed.
-	reinstalled uint64
+	// durable is the durable head's install of the World after the write,
+	// which readers see once the durable head installs it, or nil when the
+	// engine has a single head.
+	durable *durableInstall
+	// before is the seqno of the World before the write's publication.
+	before uint64
 	// admission is set once CommitAdmit returns it. Discard then leaves the
 	// write to the admission's Release.
 	admission *soAdmission
@@ -116,7 +116,7 @@ func (t *soEngineWriteTx) CommitAdmit(ctx context.Context) (world.Admission, err
 	}
 	if err == nil {
 		waitCtx, cancel := t.eng.detach(ctx)
-		err = t.eng.waitDurable(waitCtx, t.durablePos)
+		_, _, err = t.eng.waitDurable(waitCtx, t.durable)
 		cancel()
 	}
 	if err != nil {
@@ -233,7 +233,7 @@ func (t *soEngineWriteTx) admit(ctx context.Context) error {
 	// Record the World after the write and release the writer lock.
 	if err == nil {
 		t.seqno, err = t.eng.admitted.GetSeqno(ctx)
-		t.durablePos = t.eng.durablePos()
+		t.durable = t.eng.lastDurable()
 	}
 	t.unlockWriteMtx()
 	if err != nil {
@@ -243,8 +243,10 @@ func (t *soEngineWriteTx) admit(ctx context.Context) error {
 }
 
 // waitReceipt waits for the publication to resolve, finishes the borrow of the
-// candidate blocks with its result and returns its error, once the engine
-// reinstalled the World from before a failed publication. Admission commits
+// candidate blocks with its result and returns its error. A failed
+// publication returns at once: the receipt's watcher reinstalls the World
+// from before it, and the next write settles the failure before it forks, so
+// the writer never waits for the reinstall or its hooks. Admission commits
 // the write to the durable result, so the wait ignores ctx's cancellation and
 // ends with the engine's lifetime. The outcome is then unknown: waitReceipt
 // returns the wait's error, and the publisher's result finishes the borrow and
@@ -268,12 +270,10 @@ func (t *soEngineWriteTx) waitReceipt(ctx context.Context) error {
 		return err
 	}
 
-	// A failed publication returns only after the engine reinstalls the World
-	// from before it. The accepted World root holds a published candidate.
+	// The accepted World root holds a published candidate.
 	err = receipt.Err()
 	batch.Complete(err)
 	if err != nil {
-		t.reinstalled = t.eng.reinstall(ctx)
 		return err
 	}
 	t.candidateRoot = nil
@@ -358,7 +358,7 @@ func (t *soEngineWriteTx) publish(ctx context.Context, publisher sobject.StatePu
 	// carries the replay save once its receipt succeeds.
 	held := t.fork.state.GetHeadRef().CloneVT()
 	held.BucketId = t.eng.so.GetBlockStore().GetID()
-	t.receipt, t.batch = receipt, batch
+	t.receipt, t.batch, t.before = receipt, batch, before
 	t.eng.admit(receipt, held, before)
 	t.fork.published = true
 	return receipt, nil
@@ -433,20 +433,31 @@ func (a *soAdmission) Seqno() uint64 {
 	return a.t.seqno
 }
 
-// WaitDurable waits for the receipt, then for the durable head to reach the
-// write, and returns its seqno. A failed write returns once the engine
-// reinstalled the World before it, with that World's seqno. Later calls
-// return the first result.
+// WaitDurable waits for the receipt, then for the durable head to install or
+// drop the write, and returns the seqno readers see. A failed write returns
+// once the durable head dropped it, with the seqno of the World readers kept,
+// which is the World the engine reinstalls: neither waits for the writer
+// lock. Later calls return the first result.
 func (a *soAdmission) WaitDurable(ctx context.Context) (uint64, error) {
 	a.wait.Do(func() {
 		t := a.t
-		if err := t.waitReceipt(ctx); err != nil {
-			a.waitedAt, a.waitErr = t.reinstalled, fmt.Errorf("world publication receipt: %w", err)
+		rerr := t.waitReceipt(ctx)
+		if rerr != nil && t.receipt == nil {
+			// The wait ended with the engine: the outcome is unknown.
+			a.waitErr = fmt.Errorf("world publication receipt: %w", rerr)
 			return
 		}
 		waitCtx, cancel := t.eng.detach(ctx)
 		defer cancel()
-		a.waitedAt, a.waitErr = t.seqno, t.eng.waitDurable(waitCtx, t.durablePos)
+		dropped, kept, err := t.eng.waitDurable(waitCtx, t.durable)
+		switch {
+		case rerr != nil && dropped:
+			a.waitedAt, a.waitErr = kept, fmt.Errorf("world publication receipt: %w", rerr)
+		case rerr != nil:
+			a.waitedAt, a.waitErr = t.before, fmt.Errorf("world publication receipt: %w", rerr)
+		default:
+			a.waitedAt, a.waitErr = t.seqno, err
+		}
 	})
 	return a.waitedAt, a.waitErr
 }

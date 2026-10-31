@@ -463,6 +463,13 @@ func (e *soEngine) lockReplayed(ctx context.Context, clock *commitClock) (func()
 		_, holdWriteMtxTask := trace.NewTask(ctx, "alpha/so-engine/write-tx/hold-write-mtx")
 		unlockWriteMtx = wrapReleaseWithTask(unlockWriteMtx, holdWriteMtxTask)
 
+		// A retired engine admits nothing: its successor settled its
+		// admissions under this lock before reading its head.
+		if e.lifetime.Err() != nil {
+			unlockWriteMtx()
+			return nil, world_block.ErrEngineClosed
+		}
+
 		// Replay and install the World of the current operation set.
 		snapshot, err := e.admittedState(ctx)
 		if err == nil {
@@ -800,6 +807,11 @@ func (e *soEngine) applyHold(ctx context.Context, hold *rootHold) error {
 		return e.holdThenSave(ctx, hold)
 	}
 
+	// A retired engine admits nothing, as in lockReplayed.
+	if e.lifetime.Err() != nil {
+		return world_block.ErrEngineClosed
+	}
+
 	// Submit the held blocks and roots with the replay cursor.
 	cursor, err := e.replay.encodeCursor()
 	if err != nil {
@@ -843,4 +855,5 @@ const acceptedWorldRootName = "accepted-world"
 var (
 	_ Engine                     = (*soEngine)(nil)
 	_ world.IndexedChangeWatcher = (*soEngine)(nil)
+	_ world.ReinstallNotifier    = (*soEngine)(nil)
 )

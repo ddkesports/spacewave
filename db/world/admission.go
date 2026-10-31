@@ -34,14 +34,40 @@ type Admission interface {
 type ReinstallNotifier interface {
 	// OnReinstall calls fn with the World seqno each time the engine drops
 	// failed writes and installs the World without them, and when a new
-	// engine opens in their place. fn runs under the engine's writer lock,
-	// before a later write is admitted; it must not open a World
-	// transaction. The returned func unregisters fn.
-	OnReinstall(fn func(seqno uint64)) func()
+	// engine opens in their place, before a later write is admitted. The
+	// returned func unregisters fn.
+	//
+	// fn runs under the engine's writer lock, in settle order, and must not
+	// open a World transaction. The lock order is the engine's writer lock
+	// first, the consumer's second: fn may block on a consumer lock, and no
+	// goroutine may hold that lock while it calls the engine for its writer
+	// lock, which opening a write transaction, committing one and every engine
+	// call that changes its state do. fn then runs on a goroutine that holds
+	// no consumer lock: the receipt's watcher, a goroutine opening a write or
+	// changing engine state, which may be a goroutine committing a write when
+	// a failure resolved before its admission, or the one opening a new
+	// engine. WaitDurable takes no engine lock and never waits for fn: it
+	// returns a failed receipt's error without waiting for the reinstall.
+	OnReinstall(ctx context.Context, fn func(seqno uint64)) (func(), error)
+}
+
+// OnReinstall registers fn with eng's reinstall hooks. An engine that does
+// not report reinstalls admits no write before it is durable and never drops
+// one, so fn is not registered and the returned func does nothing.
+func OnReinstall(ctx context.Context, eng Engine, fn func(seqno uint64)) (func(), error) {
+	if rn, ok := eng.(ReinstallNotifier); ok {
+		return rn.OnReinstall(ctx, fn)
+	}
+	return func() {}, nil
 }
 
 // CommitAdmit commits tx and returns its Admission. A Tx that cannot commit
-// at admission commits in full and returns an Admission that is durable.
+// at admission commits in full and returns an Admission that is durable. Its
+// seqno is tx's GetSeqno read after the writes and before Commit, which a
+// world_block Tx advances with each change. That is the seqno after the
+// write when the engine serializes its write transactions, as a world_block
+// Engine does; a Tx whose engine applies concurrent writes at commit cannot
+// report it, and an AdmitCommitter must be used there.
 func CommitAdmit(ctx context.Context, tx Tx) (Admission, error) {
 	if ac, ok := tx.(AdmitCommitter); ok {
 		return ac.CommitAdmit(ctx)

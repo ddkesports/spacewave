@@ -20,9 +20,10 @@ type durableHead struct {
 	// bcast guards the fields below and broadcasts when done advances.
 	bcast broadcast.Broadcast
 	// queue holds the Worlds not yet installed or dropped, in install order.
-	queue []durableInstall
-	// queued is the position of the last queued World.
+	queue []*durableInstall
+	// queued is the position of the last queued World, and last is that World.
 	queued uint64
+	last   *durableInstall
 	// done is the position of the last World installed or dropped.
 	done uint64
 }
@@ -36,6 +37,11 @@ type durableInstall struct {
 	after *block.PublicationReceipt
 	// ref is the World head.
 	ref *bucket.ObjectRef
+	// dropped is set when the durable head dropped the World after a failed
+	// receipt, and seqno is then the seqno of the World readers kept. Both
+	// are set before done reaches pos.
+	dropped bool
+	seqno   uint64
 }
 
 // splitHeads reports whether readers and writers use separate block engines.
@@ -44,30 +50,29 @@ func (e *soEngine) splitHeads() bool {
 }
 
 // queueDurable queues ref for the durable head after the last admitted
-// publication, installs what it can and returns the install's position. The
-// caller holds the writer lock and installed ref for writers.
-func (e *soEngine) queueDurable(ref *bucket.ObjectRef) uint64 {
+// publication and installs what it can. The caller holds the writer lock and
+// installed ref for writers.
+func (e *soEngine) queueDurable(ref *bucket.ObjectRef) {
 	if !e.splitHeads() {
-		return 0
+		return
 	}
 	after := e.lastReceipt()
-	var pos uint64
 	e.durable.bcast.HoldLock(func(_ func(), _ func() <-chan struct{}) {
 		e.durable.queued++
-		pos = e.durable.queued
-		e.durable.queue = append(e.durable.queue, durableInstall{pos: pos, after: after, ref: ref})
+		e.durable.last = &durableInstall{pos: e.durable.queued, after: after, ref: ref}
+		e.durable.queue = append(e.durable.queue, e.durable.last)
 	})
 	e.promoteDurable()
-	return pos
 }
 
-// durablePos returns the position of the last queued World.
-func (e *soEngine) durablePos() uint64 {
-	var pos uint64
+// lastDurable returns the last queued World, or nil when the engine has a
+// single head or queued none.
+func (e *soEngine) lastDurable() *durableInstall {
+	var last *durableInstall
 	e.durable.bcast.HoldLock(func(_ func(), _ func() <-chan struct{}) {
-		pos = e.durable.queued
+		last = e.durable.last
 	})
-	return pos
+	return last
 }
 
 // promoteDurable installs the queued Worlds whose receipts resolved, in
@@ -80,18 +85,18 @@ func (e *soEngine) promoteDurable() {
 	defer e.durable.promoteMtx.Unlock()
 	for {
 		// Take the oldest queued World.
-		var next durableInstall
-		var found bool
+		var next *durableInstall
 		e.durable.bcast.HoldLock(func(_ func(), _ func() <-chan struct{}) {
 			if len(e.durable.queue) != 0 {
-				next, found = e.durable.queue[0], true
+				next = e.durable.queue[0]
 			}
 		})
-		if !found {
+		if next == nil {
 			return
 		}
 
-		// Install it once its receipt succeeds, or drop it.
+		// Install it once its receipt succeeds, or drop it and record the
+		// seqno of the World readers keep.
 		if next.after != nil {
 			select {
 			case <-next.after.Done():
@@ -99,17 +104,27 @@ func (e *soEngine) promoteDurable() {
 				return
 			}
 		}
-		if next.after == nil || next.after.Err() == nil {
-			if !e.bengine.GetRootRef().EqualVT(next.ref) {
-				if err := e.bengine.SetRootRef(ctx, next.ref); err != nil {
-					if ctx.Err() == nil {
-						e.c.le.WithError(err).Warn("failed to install the durable World")
-					}
-					return
+		dropped := next.after != nil && next.after.Err() != nil
+		var seqno uint64
+		if dropped {
+			var err error
+			seqno, err = e.bengine.GetSeqno(ctx)
+			if err != nil {
+				if ctx.Err() == nil {
+					e.c.le.WithError(err).Warn("failed to read the durable World seqno")
 				}
+				return
+			}
+		} else if !e.bengine.GetRootRef().EqualVT(next.ref) {
+			if err := e.bengine.SetRootRef(ctx, next.ref); err != nil {
+				if ctx.Err() == nil {
+					e.c.le.WithError(err).Warn("failed to install the durable World")
+				}
+				return
 			}
 		}
 		e.durable.bcast.HoldLock(func(broadcast func(), _ func() <-chan struct{}) {
+			next.dropped, next.seqno = dropped, seqno
 			e.durable.queue = e.durable.queue[1:]
 			e.durable.done = next.pos
 			broadcast()
@@ -117,23 +132,31 @@ func (e *soEngine) promoteDurable() {
 	}
 }
 
-// waitDurable waits until the durable head installed or dropped the World at
-// pos.
-func (e *soEngine) waitDurable(ctx context.Context, pos uint64) error {
+// waitDurable waits until the durable head installed or dropped inst. A nil
+// inst has nothing to wait for. It reports whether inst was dropped and the
+// seqno of the World readers then kept.
+func (e *soEngine) waitDurable(ctx context.Context, inst *durableInstall) (bool, uint64, error) {
+	if inst == nil {
+		return false, 0, nil
+	}
 	e.promoteDurable()
 	for {
 		var wait <-chan struct{}
+		var dropped bool
+		var seqno uint64
 		e.durable.bcast.HoldLock(func(_ func(), getWaitCh func() <-chan struct{}) {
-			if e.durable.done < pos {
+			if e.durable.done < inst.pos {
 				wait = getWaitCh()
+			} else {
+				dropped, seqno = inst.dropped, inst.seqno
 			}
 		})
 		if wait == nil {
-			return nil
+			return dropped, seqno, nil
 		}
 		select {
 		case <-ctx.Done():
-			return context.Cause(ctx)
+			return false, 0, context.Cause(ctx)
 		case <-wait:
 		}
 	}

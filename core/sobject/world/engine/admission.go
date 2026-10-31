@@ -138,11 +138,10 @@ func (e *soEngine) pending() bool {
 }
 
 // reinstall settles the failed publication, installs the World from before
-// it and returns that World's seqno. The receipt's watcher calls it, and a
-// write whose receipt failed calls it before returning, so the next attempt,
-// which reruns at once, finds that World installed. A failure to reinstall is
-// logged; the watcher installs the World at the next state change. It ends
-// with the engine's lifetime, not the write's context.
+// it and returns that World's seqno. The receipt's watcher calls it; a write
+// opened before it ran settles the failure itself before it forks. A failure
+// to reinstall is logged; the watcher installs the World at the next state
+// change. It ends with the engine's lifetime.
 func (e *soEngine) reinstall(ctx context.Context) uint64 {
 	// Take the writer lock the failed write released.
 	ctx, cancel := e.detach(ctx)
@@ -219,9 +218,11 @@ type reinstallHook struct {
 
 // OnReinstall calls fn with the World seqno when failed writes are dropped,
 // before a later write is admitted, and when a new engine opens in this
-// controller. fn runs under the writer lock.
-func (e *soEngine) OnReinstall(fn func(seqno uint64)) func() {
-	return e.c.onReinstall(fn)
+// controller. fn runs under the writer lock, from settle on whichever
+// goroutine holds it, which may be a write's own, or from setWriter. A
+// goroutine waiting in WaitDurable never runs fn and never waits for it.
+func (e *soEngine) OnReinstall(_ context.Context, fn func(seqno uint64)) (func(), error) {
+	return e.c.onReinstall(fn), nil
 }
 
 // onReinstall registers fn until the returned func is called.

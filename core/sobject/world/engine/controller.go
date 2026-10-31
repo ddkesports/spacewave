@@ -406,8 +406,11 @@ func (c *Controller) withdraw(served *servedEngine) {
 	served.mtx.Unlock()
 }
 
-// setWriter sets the served engine under the writer lock. The engine it
-// replaces settles no further: its writes ended with it.
+// setWriter sets the served engine under the writer lock and calls the
+// reinstall hooks with the seqno of its head. executeWorld settled the
+// admissions of the engine it replaces before reading that head, and a
+// retired engine admits nothing, so no write of the replaced engine settles
+// after the hooks see the new head.
 func (c *Controller) setWriter(ctx context.Context, e *soEngine, seqno uint64) error {
 	// Swap the writer under the writer lock and report its World to the
 	// reinstall hooks, since writes of the engine before it may have failed.

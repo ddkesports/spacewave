@@ -87,7 +87,8 @@ func (s *gatedSharedObject) stop() {
 
 // hold holds the physical commit of the next publication a World write
 // admits. applying receives once the commit reaches the state head. release
-// lets it go on: it fails with failure when set, and applies otherwise.
+// lets it go on: it fails with failure when set, and applies otherwise. It
+// may be called more than once, so a test can defer it.
 func (s *gatedSharedObject) hold(failure error) (applying <-chan struct{}, release func()) {
 	// Gate the state head's replacement on release.
 	reached := make(chan struct{}, 1)
@@ -115,7 +116,8 @@ func (s *gatedSharedObject) hold(failure error) (applying <-chan struct{}, relea
 		}
 	}
 	s.mtx.Unlock()
-	return reached, func() { close(released) }
+	var once sync.Once
+	return reached, func() { once.Do(func() { close(released) }) }
 }
 
 // QueueOperation queues op, holding its publication when hold armed it.
