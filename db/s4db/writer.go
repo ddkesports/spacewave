@@ -744,15 +744,14 @@ const smallCommit = 64 << 10
 const smallLimit = 2
 
 // waitBuild waits while a background checkpoint runs and the published
-// overlay exceeds twice CheckpointMax, or the log after the checkpoint four
-// times, so a writer that outpaces checkpoints holds bounded memory and
+// overlay exceeds CommitWaitMax, or the log after the checkpoint twice it, so a writer that outpaces checkpoints holds bounded memory and
 // replay. A commit that wrote fewer than smallCommit bytes waits only past
 // smallLimit times those bounds. The caller does not hold the writer lock,
 // which the build needs.
 func (w *writer) waitBuild(ctx context.Context, wrote int64) error {
 	// Return at once while the state is within bounds.
 	db := w.db
-	limit := 2 * db.opts.CheckpointMax
+	limit := db.opts.CommitWaitMax
 	if wrote < smallCommit {
 		limit *= smallLimit
 	}

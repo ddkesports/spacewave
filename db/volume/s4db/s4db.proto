@@ -40,4 +40,11 @@ message Config {
   // while reads, collection and deletes continue. Zero selects the disk one
   // collection needs before it frees any; a negative value keeps no reserve.
   int64 reserve_bytes = 11;
+  // CommitWaitBytes is the overlay size past which a commit waits for the
+  // running checkpoint, which also holds commits once the log after the
+  // checkpoint passes twice it. Zero selects twice CheckpointMaxBytes. A
+  // larger bound keeps commits flowing through a slow checkpoint, such as the
+  // first after a start on a cold index, at the cost of overlay memory and
+  // log replay at open.
+  int64 commit_wait_bytes = 12;
 }

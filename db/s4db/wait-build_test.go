@@ -125,3 +125,59 @@ func TestSmallCommitSkipsBuildWait(t *testing.T) {
 		t.Fatalf("get small = %q %v %v", v, ok, err)
 	}
 }
+
+// TestCommitWaitMaxRaisesBound holds a background checkpoint and checks that
+// a bulk commit past twice CheckpointMax returns while a larger CommitWaitMax
+// still covers the overlay.
+func TestCommitWaitMaxRaisesBound(t *testing.T) {
+	// Open a file with small checkpoints, a large commit wait bound, and
+	// builds that wait for the gate.
+	ctx := context.Background()
+	opts := Options{CheckpointMin: 16 << 10, CheckpointMax: 64 << 10, CommitWaitMax: 8 << 20}
+	db := openTest(t, filepath.Join(t.TempDir(), "wait.s4wave"), opts)
+	defer db.Close()
+	started, gate := make(chan struct{}, 1), make(chan struct{})
+	defer close(gate)
+	db.w.beforeBuild = func() {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-gate
+	}
+
+	// Commit a bulk batch over twice CheckpointMax while the build holds.
+	tx, err := db.NewTransaction(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	val := make([]byte, 100)
+	for i := range 800 {
+		if err := tx.Set(ctx, fmt.Appendf(nil, "bulk/%06d", i), val); err != nil {
+			t.Fatal(err)
+		}
+	}
+	done := make(chan error, 1)
+	go func() { done <- tx.Commit(ctx) }()
+
+	// It returns without waiting for the build it started.
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the build did not start")
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("bulk commit waited for the build")
+	}
+	if got := db.cur.Load().overlayBytes; got <= 2*opts.CheckpointMax {
+		t.Fatalf("overlay holds %d bytes, want over %d", got, 2*opts.CheckpointMax)
+	}
+	if stats := db.Stats(); stats.BuildWaits != 0 {
+		t.Fatalf("build waits %d, want 0", stats.BuildWaits)
+	}
+}
