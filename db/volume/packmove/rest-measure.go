@@ -21,6 +21,10 @@ func MeasureRest(ctx context.Context, src kvtx.Store, keys *store_kvkey.KVKey, r
 	var total RestReport
 	var after []byte
 	for !total.Done {
+		// Stop when the pack ends, so its error is not held behind the count.
+		if err := ctx.Err(); err != nil {
+			return total, err
+		}
 		var chunk RestReport
 		var last []byte
 		err := readStable(ctx, src, func(tx kvtx.Tx) error {

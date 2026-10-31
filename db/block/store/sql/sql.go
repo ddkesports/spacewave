@@ -339,6 +339,74 @@ func (s *Store) GetBlockExistsBatch(ctx context.Context, refs []*block.BlockRef)
 	return exists, nil
 }
 
+// GetStoredBlockBatch returns each block the store holds with its refs, a
+// thousand per query, and nil for a block it does not hold. withData false
+// leaves Data out and reads only the refs. A NULL refs column leaves
+// RefsKnown false.
+func (s *Store) GetStoredBlockBatch(ctx context.Context, refs []*block.BlockRef, withData bool) ([]*block.StoredBlock, error) {
+	// Choose the columns to read.
+	columns := "hash, refs"
+	if withData {
+		columns = "hash, refs, data"
+	}
+
+	// Read the refs a chunk at a time.
+	stored := make([]*block.StoredBlock, len(refs))
+	for start := 0; start < len(refs); start += existsBatchSize {
+		// Name the chunk's hashes and map each back to its positions.
+		chunk := refs[start:min(start+existsBatchSize, len(refs))]
+		args := make([]any, 0, len(chunk)+1)
+		args = append(args, s.storeID)
+		at := make(map[string][]int, len(chunk))
+		for i, ref := range chunk {
+			key, err := hashKey(ref)
+			if err != nil {
+				return nil, err
+			}
+			if at[string(key)] == nil {
+				args = append(args, key)
+			}
+			at[string(key)] = append(at[string(key)], start+i)
+		}
+
+		// Read the rows the table holds.
+		query := "SELECT " + columns + " FROM " + s.table + " WHERE store_id = ? AND hash IN (" + // #nosec G202 -- NewStore quotes the table and values are placeholders.
+			strings.TrimSuffix(strings.Repeat("?,", len(args)-1), ",") + ")"
+		rows, err := s.db.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, errors.Wrap(err, "read blocks")
+		}
+		err = func() error {
+			defer rows.Close()
+			for rows.Next() {
+				var key, encRefs, data []byte
+				dest := []any{&key, &encRefs}
+				if withData {
+					dest = append(dest, &data)
+				}
+				if err := rows.Scan(dest...); err != nil {
+					return err
+				}
+				block := &block.StoredBlock{Data: data}
+				if encRefs != nil {
+					if block.Refs, err = decodeRefs(encRefs); err != nil {
+						return err
+					}
+					block.RefsKnown = true
+				}
+				for _, i := range at[string(key)] {
+					stored[i] = block
+				}
+			}
+			return rows.Err()
+		}()
+		if err != nil {
+			return nil, errors.Wrap(err, "read blocks")
+		}
+	}
+	return stored, nil
+}
+
 // StatBlock returns the block's metadata, or nil if the block is not found.
 func (s *Store) StatBlock(ctx context.Context, ref *block.BlockRef) (*block.BlockStat, error) {
 	// Read the stored length of the block's data.

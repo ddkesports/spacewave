@@ -38,6 +38,8 @@ type packArgs struct {
 	bytesPerSecond int64
 	// packMiB is the block data of one pack in MiB; zero uses the default.
 	packMiB int
+	// uploads is the number of packs uploading at once.
+	uploads int
 	// skipRest leaves out the count of keys outside the block range.
 	skipRest bool
 }
@@ -68,6 +70,7 @@ func newDebugVolumePackCommand() *cli.Command {
 			&cli.StringFlag{Name: "key-prefix", Usage: "the key prefix of the packs in the bucket", Value: "world/packs/", Destination: &args.keyPrefix},
 			&cli.Int64Flag{Name: "bytes-per-second", Usage: "limit the block data uploaded per second; zero does not limit", Destination: &args.bytesPerSecond},
 			&cli.IntFlag{Name: "pack-mib", Usage: "block data per pack in MiB; zero uses half the pack limit", Destination: &args.packMiB},
+			&cli.IntFlag{Name: "uploads", Usage: "packs uploading at once", Value: 8, Destination: &args.uploads},
 			&cli.BoolFlag{Name: "skip-rest", Usage: "do not count the keys outside the block range", Destination: &args.skipRest},
 		},
 		Action: func(c *cli.Context) error {
@@ -122,6 +125,7 @@ func packVolumeFile(ctx context.Context, path string, args *packArgs, w io.Write
 		PackBytes:      args.packMiB << 20,
 		BytesPerSecond: args.bytesPerSecond,
 		SkipRest:       args.skipRest,
+		Uploads:        args.uploads,
 		Progress: func(p packmove.PackProgress) {
 			if time.Since(last) < copyReportInterval {
 				return

@@ -78,11 +78,12 @@ func Pack(ctx context.Context, cfg PackConfig) (PackProgress, error) {
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		defer close(batches)
-		for {
+		for seq := uint64(0); ; seq++ {
 			batch, err := reader.next(gctx)
 			if err != nil || batch == nil {
 				return err
 			}
+			batch.seq = seq
 			select {
 			case batches <- batch:
 			case <-gctx.Done():
@@ -90,14 +91,16 @@ func Pack(ctx context.Context, cfg PackConfig) (PackProgress, error) {
 			}
 		}
 	})
-	g.Go(func() error {
-		for batch := range batches {
-			if err := run.upload(gctx, batch); err != nil {
-				return err
+	for range max(cfg.Uploads, 1) {
+		g.Go(func() error {
+			for batch := range batches {
+				if err := run.upload(gctx, batch); err != nil {
+					return err
+				}
 			}
-		}
-		return nil
-	})
+			return nil
+		})
+	}
 	if !cfg.SkipRest {
 		g.Go(func() error {
 			_, err := MeasureRest(gctx, cfg.Source, cfg.Keys, run.setRest)
@@ -119,7 +122,11 @@ type packRun struct {
 	// limiter paces the upload; nil does not limit.
 	limiter *rate.Limiter
 
-	// mtx guards progress, which the upload and the measure both update.
+	// order records the uploaded batches in the log in the order the reader
+	// read them.
+	order commitOrder
+
+	// mtx guards progress, which the uploads and the measure all update.
 	mtx sync.Mutex
 	// progress is the totals so far.
 	progress PackProgress
@@ -190,23 +197,30 @@ func (r *packRun) resolvePending(ctx context.Context) error {
 	return nil
 }
 
-// upload writes a batch as one pack, paced by the byte limit, between its
-// pending and commit frames. A batch with no packed block only advances the
-// log.
+// upload writes a batch as one pack, paced by the byte limit, then records
+// it in the log once every batch read before it is recorded, so the log stays
+// in key order while several uploads run. A batch with no packed block only
+// advances the log. A run killed between the upload and the record leaves a
+// pack the log does not name: a duplicate the next run writes again, which
+// KeepPacks tolerates and Switch never relies on.
 func (r *packRun) upload(ctx context.Context, batch *packBatch) error {
-	// Wait for the batch's share of the byte limit.
+	// Wait for the batch's share of the byte limit, then upload it.
 	if err := r.wait(ctx, batch.bytes); err != nil {
-		return err
-	}
-
-	// Record the batch, upload it, then commit the record.
-	if err := r.log.open(batch.frame); err != nil {
 		return err
 	}
 	if len(batch.puts) != 0 {
 		if _, err := r.cfg.Packer.PutBlockBatch(ctx, batch.puts); err != nil {
 			return errors.Wrap(err, "write pack")
 		}
+	}
+
+	// Record the batch in its turn.
+	if err := r.order.wait(ctx, batch.seq); err != nil {
+		return err
+	}
+	defer r.order.advance()
+	if err := r.log.open(batch.frame); err != nil {
+		return err
 	}
 	if err := r.log.commit(); err != nil {
 		return err

@@ -31,6 +31,9 @@ type PackConfig struct {
 	// BytesPerSecond limits the block data uploaded per second; zero or less
 	// does not limit.
 	BytesPerSecond int64
+	// Uploads is the number of packs uploading at once; zero or less uploads
+	// one at a time.
+	Uploads int
 	// SkipRest leaves out the measure of the keys outside the block range.
 	SkipRest bool
 	// Progress receives the totals after each committed pack and

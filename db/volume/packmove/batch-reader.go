@@ -29,6 +29,8 @@ type packBatch struct {
 	// outside counts the blocks the batch passed because they are outside the
 	// World.
 	outside uint64
+	// seq is the batch's place in the order the reader read the batches.
+	seq uint64
 }
 
 // batchReader reads the volume's blocks in key order, one batch per snapshot,
