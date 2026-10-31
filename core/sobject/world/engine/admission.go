@@ -169,14 +169,22 @@ func (e *soEngine) reinstall(ctx context.Context) uint64 {
 // order, and returns the error of a failed receipt it finds, without settling
 // it. A commit calls it in place of settle, so it never drops the World it
 // forked from or runs the reinstall hooks: the receipt's watcher or the next
-// write settles the failure. The caller holds the writer lock.
-func (e *soEngine) failedAdmission() error {
-	for _, adm := range e.admissions {
+// write settles the failure. The admissions before own are the commit's
+// predecessors: a failure among them returns ErrPublicationDependency with
+// its cause, since the commit's World followed it and the write may run again
+// on the reinstalled World. The caller holds the writer lock.
+func (e *soEngine) failedAdmission(own int) error {
+	for i, adm := range e.admissions {
 		select {
 		case <-adm.receipt.Done():
-			if err := adm.receipt.Err(); err != nil {
-				return errors.Wrap(err, "write admitted after a failed publication")
+			err := adm.receipt.Err()
+			if err == nil {
+				continue
 			}
+			if i < own && !errors.Is(err, block.ErrPublicationDependency) {
+				return block.NewPublicationDependencyError(err)
+			}
+			return err
 		default:
 		}
 	}

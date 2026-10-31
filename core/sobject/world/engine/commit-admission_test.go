@@ -120,8 +120,8 @@ func TestCommitReceiptFailure(t *testing.T) {
 	if seqno, err := first.WaitDurable(t.Context()); !errors.Is(err, injected) || seqno != durable {
 		t.Fatalf("first WaitDurable = %d, %v, want %d and the injected failure", seqno, err, durable)
 	}
-	if err := <-second; !errors.Is(err, injected) && !errors.Is(err, block.ErrPublicationDependency) {
-		t.Fatalf("second Commit: %v, want the injected failure or its dependency", err)
+	if err := <-second; !errors.Is(err, injected) || !errors.Is(err, block.ErrPublicationDependency) {
+		t.Fatalf("second Commit: %v, want the dependency on the injected failure", err)
 	}
 	if seqno := <-reinstalled; seqno != durable {
 		t.Fatalf("reinstall at %d, want %d", seqno, durable)
@@ -318,8 +318,8 @@ func TestCommitAfterFailedBase(t *testing.T) {
 	}()
 	select {
 	case err := <-committed:
-		if !errors.Is(err, injected) && !errors.Is(err, block.ErrPublicationDependency) {
-			t.Fatalf("B CommitAdmit: %v, want the injected failure or its dependency", err)
+		if !errors.Is(err, injected) || !errors.Is(err, block.ErrPublicationDependency) {
+			t.Fatalf("B CommitAdmit: %v, want the dependency on the injected failure", err)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("B's CommitAdmit waited for the reinstall hook")

@@ -694,7 +694,7 @@ func (e *soEngine) queueOperation(ctx context.Context, opData []byte, fork *repl
 	// follows that one and fails with it, so it is never replayed onto the
 	// reinstalled World. The failure is left to the receipt's watcher or the
 	// next write, which run the reinstall hooks outside any commit.
-	if err := e.failedAdmission(); err != nil {
+	if err := e.failedAdmission(admitted); err != nil {
 		return err
 	}
 
