@@ -23,6 +23,7 @@ type Transfer struct {
 	checkpoint     CheckpointStore
 	owner          crypto.PrivKey
 	filterSpaceIDs []string
+	copyIdentity   func(ctx context.Context) error
 
 	bcast broadcast.Broadcast
 	state *TransferState
@@ -52,6 +53,7 @@ func NewTransfer(
 		checkpoint:     opts.Checkpoint,
 		owner:          owner,
 		filterSpaceIDs: opts.FilterSpaceIDs,
+		copyIdentity:   opts.CopyIdentity,
 		state: &TransferState{
 			Mode:               mode,
 			Phase:              TransferPhase_TransferPhase_IDLE,
@@ -132,16 +134,24 @@ func (t *Transfer) Execute(ctx context.Context) error {
 		return e.GetMeta().GetAccountPrivate()
 	})
 
-	// If specific space IDs were requested, filter to only those.
+	// If specific space IDs were requested, filter to only those. Cleanup
+	// deletes the source volume with every Space in it, so a transfer that
+	// cleans up moves every Space or none.
+	deletesSource := t.cleanup != nil &&
+		(t.mode == TransferMode_TransferMode_MERGE || t.mode == TransferMode_TransferMode_MIGRATE)
 	if len(t.filterSpaceIDs) > 0 {
 		allowed := make(map[string]struct{}, len(t.filterSpaceIDs))
 		for _, id := range t.filterSpaceIDs {
 			allowed[id] = struct{}{}
 		}
+		scanned := len(entries)
 		entries = slices.DeleteFunc(entries, func(e *sobject.SharedObjectListEntry) bool {
 			_, ok := allowed[e.GetRef().GetProviderResourceRef().GetId()]
 			return !ok
 		})
+		if left := scanned - len(entries); deletesSource && left != 0 {
+			return t.fail(errors.Errorf("%s moves every space and deletes the source: %d spaces not selected", t.mode.String(), left))
+		}
 	}
 	t.le.WithField("count", len(entries)).Info("found shared objects to transfer")
 
@@ -236,8 +246,19 @@ func (t *Transfer) Execute(ctx context.Context) error {
 		le.Debug("SO merge complete for space")
 	}
 
-	// Phase: cleanup source (MERGE and MIGRATE modes).
-	if (t.mode == TransferMode_TransferMode_MERGE || t.mode == TransferMode_TransferMode_MIGRATE) && t.cleanup != nil {
+	// Give the target the identity its Spaces are signed with while the source
+	// still holds it.
+	if t.copyIdentity != nil {
+		if err := t.copyIdentity(ctx); err != nil {
+			return t.fail(errors.Wrap(err, "copy identity"))
+		}
+	}
+
+	// Phase: cleanup source (MERGE and MIGRATE modes). Every Space the source
+	// held, other than account-private ones, has reached the target and the
+	// target holds the identity that signs them, so deleting the volume loses
+	// only what the person chose to leave: account-private objects.
+	if deletesSource {
 		t.setPhase(TransferPhase_TransferPhase_CLEANUP)
 		t.le.Info("cleaning up source after transfer")
 

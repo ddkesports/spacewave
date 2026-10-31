@@ -590,8 +590,9 @@ func TestLocalMergeResume(t *testing.T) {
 	}
 }
 
-// TestLocalMergeCleanup verifies that after a merge, the source session's SOs
-// are deleted and the volume is removed.
+// TestLocalMergeCleanup verifies that Merge and Migrate keep the source when
+// they cannot move all of it, and that a Merge that moves every Space deletes
+// the source SOs and volume.
 func TestLocalMergeCleanup(t *testing.T) {
 	// Start a testbed with a local provider.
 	ctx := context.Background()
@@ -610,13 +611,46 @@ func TestLocalMergeCleanup(t *testing.T) {
 	tgtAcc, tgtAccountID, tgtRel := createAccount(ctx, t, prov)
 	defer tgtRel()
 
-	// Create an SO on source.
+	// Create two SOs on source.
 	createTestSpace(ctx, t, srcAcc, "merge-space")
+	createTestSpace(ctx, t, srcAcc, "kept-space")
 
 	// Build the source and target.
 	le := logrus.NewEntry(logrus.StandardLogger())
 	src := provider_transfer.NewLocalTransferSource(srcAcc, tb.Bus)
 	tgt := provider_transfer.NewLocalTransferTarget(tgtAcc, providerID, tgtAccountID, tb.Bus)
+	expectSourceSOs := func(want int) {
+		t.Helper()
+		srcList, err := src.GetSharedObjectList(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := len(srcList.GetSharedObjects()); got != want {
+			t.Fatalf("expected %d SOs on source, got %d", want, got)
+		}
+	}
+
+	// A Merge that leaves a Space out refuses before copying or deleting.
+	partial := provider_transfer.NewTransfer(le, provider_transfer.TransferMode_TransferMode_MERGE, src, tgt, ownerKey(ctx, t, tgtAcc), 1, 2, &provider_transfer.TransferOptions{
+		Cleanup:        src,
+		FilterSpaceIDs: []string{"merge-space"},
+	})
+	if err := partial.Execute(ctx); err == nil {
+		t.Fatal("expected a Merge that leaves a Space out to fail")
+	}
+	expectSourceSOs(3)
+
+	// A Migrate whose identity copy fails keeps the source.
+	migrate := provider_transfer.NewTransfer(le, provider_transfer.TransferMode_TransferMode_MIGRATE, src, tgt, ownerKey(ctx, t, srcAcc), 1, 2, &provider_transfer.TransferOptions{
+		Cleanup: src,
+		CopyIdentity: func(context.Context) error {
+			return errors.New("identity copy failed")
+		},
+	})
+	if err := migrate.Execute(ctx); err == nil {
+		t.Fatal("expected Migrate to fail when the identity copy fails")
+	}
+	expectSourceSOs(3)
 
 	// Run transfer WITH cleanup.
 	xfer := provider_transfer.NewTransfer(le, provider_transfer.TransferMode_TransferMode_MERGE, src, tgt, ownerKey(ctx, t, tgtAcc), 1, 2, &provider_transfer.TransferOptions{Cleanup: src})
@@ -639,15 +673,15 @@ func TestLocalMergeCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tgtList.GetSharedObjects()) != 2 {
-		t.Fatalf("expected 2 SOs on target (merge-space + account-settings), got %d", len(tgtList.GetSharedObjects()))
+	if len(tgtList.GetSharedObjects()) != 3 {
+		t.Fatalf("expected 3 SOs on target (two Spaces + account-settings), got %d", len(tgtList.GetSharedObjects()))
 	}
 	ids := make(map[string]bool)
 	for _, entry := range tgtList.GetSharedObjects() {
 		ids[entry.GetRef().GetProviderResourceRef().GetId()] = true
 	}
-	if !ids["merge-space"] {
-		t.Fatalf("expected merge-space on target, got %v", ids)
+	if !ids["merge-space"] || !ids["kept-space"] {
+		t.Fatalf("expected both Spaces on target, got %v", ids)
 	}
 }
 

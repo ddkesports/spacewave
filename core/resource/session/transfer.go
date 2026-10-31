@@ -188,6 +188,18 @@ func (r *SessionResource) StartTransfer(
 		return nil, errors.Wrap(err, "load transfer owner key")
 	}
 
+	// Migrate gives the target the source's identity before deleting the source.
+	var copyIdentity func(context.Context) error
+	if mode == provider_transfer.TransferMode_TransferMode_MIGRATE {
+		srcVol, tgtVol := getTransferSourceVolume(source), getTransferTargetVolume(target)
+		if srcVol == nil || tgtVol == nil {
+			return nil, errors.New("migrate needs source and target volumes")
+		}
+		copyIdentity = func(ctx context.Context) error {
+			return provider_transfer.TransferKeypair(ctx, srcVol, tgtVol)
+		}
+	}
+
 	// Build the transfer from the source, target, and checkpoint store.
 	xfer := provider_transfer.NewTransfer(
 		le,
@@ -201,6 +213,7 @@ func (r *SessionResource) StartTransfer(
 			Cleanup:        cleanup,
 			Checkpoint:     checkpoint,
 			FilterSpaceIDs: req.GetSpaceIds(),
+			CopyIdentity:   copyIdentity,
 		},
 	)
 
@@ -232,18 +245,6 @@ func (r *SessionResource) StartTransfer(
 		err := xfer.Execute(ctx)
 		if err != nil {
 			return err
-		}
-
-		// For MIGRATE mode, copy the source keypair to the target so it retains
-		// the same peer identity.
-		if mode == provider_transfer.TransferMode_TransferMode_MIGRATE {
-			srcVol := getTransferSourceVolume(source)
-			tgtVol := getTransferTargetVolume(target)
-			if srcVol != nil && tgtVol != nil {
-				if kerr := provider_transfer.TransferKeypair(ctx, srcVol, tgtVol); kerr != nil {
-					return xfer.Fail(errors.Wrap(kerr, "transfer keypair"))
-				}
-			}
 		}
 
 		// After merge or migrate, clean up linked-cloud ref and delete the source session.
