@@ -39,6 +39,19 @@ func (s ReplacementSteps) Original(ref *BlockRef) bool {
 	return false
 }
 
+// MarkOriginal replaces each entry that puts an original page with a counted
+// copy: the tree at the first root already holds the page, so its put adds no
+// holder.
+func (s ReplacementSteps) MarkOriginal(entries []*PutBatchEntry) {
+	for i, e := range entries {
+		if !e.Tombstone && !e.Counted && s.Original(e.Ref) {
+			counted := *e
+			counted.Counted = true
+			entries[i] = &counted
+		}
+	}
+}
+
 // Join joins the steps, at least one, into one step from the first root to
 // the last.
 //

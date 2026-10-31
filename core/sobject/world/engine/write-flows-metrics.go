@@ -41,6 +41,11 @@ var (
 		"Pending deadlist entries naming no record at open, forfeited or cut off by a restart, since the process started.",
 		nil, nil,
 	)
+	worldDeadlistsStalledDesc = prometheus.NewDesc(
+		"spacewave_world_deadlists_stalled_total",
+		"Pending deadlist entries orphaned while still waiting on their puts or encoding, since the process started.",
+		nil, nil,
+	)
 )
 
 // writeFlowsCollector reports GetWriteFlows.
@@ -56,6 +61,7 @@ func (writeFlowsCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- worldDeathsDesc
 	ch <- worldDeathForfeitsDesc
 	ch <- worldDeadlistsUnrecordedDesc
+	ch <- worldDeadlistsStalledDesc
 }
 
 // Collect sends the counters as of now.
@@ -71,11 +77,12 @@ func (writeFlowsCollector) Collect(ch chan<- prometheus.Metric) {
 		ch <- prometheus.MustNewConstMetric(worldCheckpointSkipsDesc, prometheus.CounterValue, float64(n), CheckpointSkip(s).String())
 	}
 
-	// Report the composed deaths, the forfeited intervals and the unrecorded
-	// entries.
+	// Report the composed deaths, the forfeited intervals, and the unrecorded
+	// and stalled entries.
 	ch <- prometheus.MustNewConstMetric(worldDeathsDesc, prometheus.CounterValue, float64(f.Deaths))
 	ch <- prometheus.MustNewConstMetric(worldDeathForfeitsDesc, prometheus.CounterValue, float64(f.DeathForfeits))
 	ch <- prometheus.MustNewConstMetric(worldDeadlistsUnrecordedDesc, prometheus.CounterValue, float64(f.Unrecorded))
+	ch <- prometheus.MustNewConstMetric(worldDeadlistsStalledDesc, prometheus.CounterValue, float64(f.Stalled))
 }
 
 // init registers the collector with the default registry, which the process

@@ -50,6 +50,10 @@ type VolumeFlows struct {
 	// DeadlistLivePages is the number of pages those records listed as dead
 	// that the mark reached.
 	DeadlistLivePages uint64
+	// RevivedPuts is the number of entries marked as already counted that a
+	// put found absent and stored afresh; any is an error in the writer's
+	// proof that its kept World holds them.
+	RevivedPuts uint64
 	// BuildWait is the time background commits waited for the storage's
 	// checkpoint build, zero when the storage does not count it.
 	BuildWait time.Duration

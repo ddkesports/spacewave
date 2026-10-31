@@ -599,7 +599,7 @@ func (w *publicationWriter) apply(
 	if req.existed, err = gc.PutBlockBatch(ctx, p.Entries); err != nil {
 		return err
 	}
-	if err := addExistedHolds(ctx, blocks, rg, p.Entries, req.existed); err != nil {
+	if err := w.volume.addExistedHolds(ctx, blocks, rg, p.Entries, req.existed); err != nil {
 		return err
 	}
 	if err := gc.FlushPending(ctx); err != nil {

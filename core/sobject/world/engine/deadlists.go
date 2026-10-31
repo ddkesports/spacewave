@@ -87,11 +87,15 @@ type deadlistLedger struct {
 // interval forfeited; the entry then names no record but keeps its place in
 // the chain.
 func (l *deadlistLedger) name(from, to *block.BlockRef, net *pendingNet) {
-	// Orphan the oldest pending record when the ledger is full.
+	// Orphan the oldest pending record when the ledger is full, counting it
+	// as stalled when it still waits on its puts.
 	entry := deadlistEntry{seq: max(l.next, 1), from: from, to: to, net: net}
 	l.next = entry.seq + 1
 	pending := l.pending()
 	if len(pending) >= maxPendingDeadlists {
+		if l.entries[pending[0]].net != nil {
+			writeFlows.stalled.Add(1)
+		}
 		l.move(pending[0], deadlistOrphan)
 	}
 	l.entries = append(l.entries, entry)

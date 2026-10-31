@@ -18,9 +18,11 @@ const maxWorldTransitions = 4096
 // created, which leaks.
 const maxWorldPuts = 1 << 16
 
-// worldTransition is one World commit: the root it made and what its writes
-// did.
+// worldTransition is one World commit: the roots it moved between and what
+// its writes did.
 type worldTransition struct {
+	// from is the root the commit started at.
+	from *block.BlockRef
 	// to is the root the commit made.
 	to *block.BlockRef
 	// step is what the commit's writes did, or nil when the commit forfeited
@@ -55,6 +57,11 @@ func newWorldPut(receipt *block.PublicationReceipt, entries, pages []*block.PutB
 // pendingNet is a named World's interval waiting for the puts that stored its
 // pages: their receipts report which pages the store already held, which the
 // record needs to net. It is used under the writer lock.
+//
+// A receipt that never completes keeps the interval pending, and the ledger
+// stops advancing at its record. The receipt carries no context to end the
+// wait, so the ledger orphans the record once maxPendingDeadlists later Worlds
+// are named, counting it as stalled; its deaths leak and nothing is freed.
 type pendingNet struct {
 	// steps are the steps from the last named World to this one, joined only
 	// when netting, off the writer lock.
@@ -153,20 +160,24 @@ func (n *pendingNet) net() *block.Replacements {
 //
 // A local write publishes its World before replay accepts it, and replay may
 // rebuild the World in another order, so a transition's record holds only if
-// its World is on the accepted chain. Composition follows roots from the last
-// named World, so a transition off the chain is never composed. A gap or a
-// forfeited record on the chain forfeits the interval: what died in it leaks
-// and is never reported. It is safe for concurrent use.
+// its World is on the accepted chain. Composition walks back from the named
+// World through the latest transition into each root, so a fork off the chain
+// is never composed, and a chain that returns to an earlier root, such as a
+// presence toggling A, B, A, keeps every step: the pages the loop created and
+// dropped die in the record. A local fork that itself returns to a root on the
+// chain is composed too; its pages were published and no accepted World names
+// them, so they die with it. A gap or a forfeited record on the chain forfeits
+// the interval: what died in it leaks and is never reported. It is safe for
+// concurrent use.
 type worldDeaths struct {
 	// mtx guards the fields below.
 	mtx sync.Mutex
 	// from is the root the next composition starts at, or nil when the
 	// interval is already forfeited.
 	from *block.BlockRef
-	// next holds the transitions by the root they start from.
-	next map[string][]worldTransition
-	// count is the number of transitions in next.
-	count int
+	// trs holds the transitions since the last named World, in the order
+	// their commits recorded them.
+	trs []worldTransition
 	// puts are the publications that put World pages since the last
 	// composition.
 	puts []worldPut
@@ -176,7 +187,7 @@ type worldDeaths struct {
 
 // newWorldDeaths starts gathering at the World root from.
 func newWorldDeaths(from *block.BlockRef) *worldDeaths {
-	return &worldDeaths{from: from.Clone(), next: make(map[string][]worldTransition)}
+	return &worldDeaths{from: from.Clone()}
 }
 
 // add records a commit's transition. It is the World block engines'
@@ -190,13 +201,11 @@ func (d *worldDeaths) add(from, to *block.BlockRef, step *block.ReplacementStep)
 	// Record it, or forfeit the interval when the table is full.
 	d.mtx.Lock()
 	defer d.mtx.Unlock()
-	if d.count >= maxWorldTransitions {
-		d.from, d.next, d.count = nil, make(map[string][]worldTransition), 0
+	if len(d.trs) >= maxWorldTransitions {
+		d.from, d.trs = nil, nil
 		return
 	}
-	key := from.MarshalString()
-	d.next[key] = append(d.next[key], worldTransition{to: to.Clone(), step: step})
-	d.count++
+	d.trs = append(d.trs, worldTransition{from: from.Clone(), to: to.Clone(), step: step})
 }
 
 // addPut records a publication that put World pages, dropping it when the
@@ -221,89 +230,79 @@ func (d *worldDeaths) addPut(put worldPut) {
 // with the puts since, and starts the next interval at root. net is nil when
 // no chain of recorded transitions reaches root or one on it forfeited; the
 // interval then leaks. from is nil when the interval forfeited before root was
-// named. Only the transitions root reaches stay.
+// named. Only the later transitions root reaches stay.
 func (d *worldDeaths) take(root *block.BlockRef) (from *block.BlockRef, net *pendingNet) {
-	// Find a path from the last named World to root and join it.
+	// Walk the chain back from root and join it.
 	d.mtx.Lock()
 	defer d.mtx.Unlock()
+	steps, last := d.compose(root)
 	from = d.from
-	if from != nil {
-		if steps := d.compose(d.from, root); steps != nil {
-			net = &pendingNet{steps: steps, puts: d.puts}
-		}
+	if from != nil && steps != nil {
+		net = &pendingNet{steps: steps, puts: d.puts}
 	}
 
-	// Keep the transitions root reaches and start there.
-	d.prune(root)
+	// Keep the later transitions root reaches and start there.
+	d.prune(root, last)
 	d.from = root.Clone()
-	d.puts, d.putKeys = nil, 0
+	d.puts = nil
+	d.putKeys = 0
 	return from, net
 }
 
-// compose finds a path of transitions from from to root, breadth first, and
-// returns their steps in order, or nil when none does. Assumes mtx is locked.
-func (d *worldDeaths) compose(from, root *block.BlockRef) block.ReplacementSteps {
-	// An unchanged World lost nothing.
-	if from.EqualsRef(root) {
-		return block.ReplacementSteps{{From: from, To: root}}
+// compose walks back from root through the latest earlier transition into
+// each root until none is left, and returns the steps in order, or nil when
+// the walk does not end at the last named World or crosses a forfeited
+// commit. last is the index after the latest transition into root, or zero
+// when none is recorded. Assumes mtx is locked.
+func (d *worldDeaths) compose(root *block.BlockRef) (steps block.ReplacementSteps, last int) {
+	// Index the transitions by the root they made, oldest first.
+	into := make(map[string][]int, len(d.trs))
+	for i, tr := range d.trs {
+		key := tr.to.MarshalString()
+		into[key] = append(into[key], i)
 	}
 
-	// Walk the roots from from, remembering the transition into each.
-	type step struct {
-		prev string
-		tr   worldTransition
-	}
-	start, goal := from.MarshalString(), root.MarshalString()
-	into := map[string]step{start: {}}
-	queue := []string{start}
-	for len(queue) != 0 {
-		key := queue[0]
-		queue = queue[1:]
-		if key == goal {
+	// Walk back from root, each time through the latest earlier transition
+	// into the root reached so far.
+	cur, end, forfeit := root, len(d.trs), false
+	for {
+		idx := into[cur.MarshalString()]
+		n, _ := slices.BinarySearch(idx, end)
+		if n == 0 {
 			break
 		}
-		for _, tr := range d.next[key] {
-			toKey := tr.to.MarshalString()
-			if _, seen := into[toKey]; !seen {
-				into[toKey] = step{prev: key, tr: tr}
-				queue = append(queue, toKey)
-			}
+		i := idx[n-1]
+		if last == 0 {
+			last = i + 1
 		}
-	}
-	if _, found := into[goal]; !found {
-		return nil
+		tr := d.trs[i]
+		forfeit = forfeit || tr.step == nil
+		steps = append(steps, tr.step)
+		cur, end = tr.from, i
 	}
 
-	// Collect the path back from root, then order it from the start.
-	var path block.ReplacementSteps
-	for key := goal; key != start; key = into[key].prev {
-		if into[key].tr.step == nil {
-			return nil
-		}
-		path = append(path, into[key].tr.step)
+	// Join only a whole chain from the last named World.
+	if forfeit || d.from == nil || !cur.EqualsRef(d.from) {
+		return nil, last
 	}
-	slices.Reverse(path)
-	return path
+	if len(steps) == 0 {
+		// An unchanged World lost nothing.
+		return block.ReplacementSteps{{From: d.from, To: root}}, last
+	}
+	slices.Reverse(steps)
+	return steps, last
 }
 
-// prune keeps the transitions root reaches. Assumes mtx is locked.
-func (d *worldDeaths) prune(root *block.BlockRef) {
-	// Walk the roots from root.
-	kept := make(map[string][]worldTransition)
-	count := 0
-	queue := []string{root.MarshalString()}
-	for len(queue) != 0 {
-		key := queue[0]
-		queue = queue[1:]
-		if _, done := kept[key]; done {
-			continue
-		}
-		trs := d.next[key]
-		kept[key] = trs
-		count += len(trs)
-		for _, tr := range trs {
-			queue = append(queue, tr.to.MarshalString())
+// prune keeps the transitions from index last on that root reaches, in order.
+// Assumes mtx is locked.
+func (d *worldDeaths) prune(root *block.BlockRef, last int) {
+	reached := map[string]struct{}{root.MarshalString(): {}}
+	var kept []worldTransition
+	for _, tr := range d.trs[last:] {
+		if _, ok := reached[tr.from.MarshalString()]; ok {
+			kept = append(kept, tr)
+			reached[tr.to.MarshalString()] = struct{}{}
 		}
 	}
-	d.next, d.count = kept, count
+	d.trs = kept
 }

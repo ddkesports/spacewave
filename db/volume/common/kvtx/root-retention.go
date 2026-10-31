@@ -269,7 +269,7 @@ func (v *Volume) SetBucketRoots(ctx context.Context, bucketID string, entries []
 			if existed, err = gc.PutBlockBatch(ctx, entries); err != nil {
 				return err
 			}
-			if err := addExistedHolds(ctx, blocks, rg, entries, existed); err != nil {
+			if err := v.addExistedHolds(ctx, blocks, rg, entries, existed); err != nil {
 				return err
 			}
 			if err := gc.FlushPending(ctx); err != nil {
@@ -378,12 +378,15 @@ func addDeadlistHolds(ctx context.Context, blocks block.StoreOps, rg *block_gc.R
 // the put stores it afresh and its edges to its children are new: no record
 // counts them, because its writer saw it stored. It counts as a new page of
 // the batch, and each other stored child gains one count too, unless the
-// batch wrote the child afresh, probing the children outside the batch.
+// batch wrote the child afresh, probing the children outside the batch. The
+// writer marks only pages its kept World holds, and the collector frees no
+// page a named World reaches, so this path should be unreachable; revivedPuts
+// counts each entry it takes, and any is an error in that proof.
 //
 // Every over-count leaks and never frees: a parent and child split across two
 // batches each count, and a payload or span block gains a count no record
 // takes, which the sweep deletes with the block.
-func addExistedHolds(ctx context.Context, blocks block.StoreOps, rg *block_gc.RefGraph, entries []*block.PutBatchEntry, existed []bool) error {
+func (v *Volume) addExistedHolds(ctx context.Context, blocks block.StoreOps, rg *block_gc.RefGraph, entries []*block.PutBatchEntry, existed []bool) error {
 	// Note which entries the batch found and which it stored afresh, setting
 	// aside marked entries. A page listed twice finds its own first copy, so
 	// its first entry decides.
@@ -437,6 +440,7 @@ func addExistedHolds(ctx context.Context, blocks block.StoreOps, rg *block_gc.Re
 
 	// Count the other stored children of each revived entry: marked entries
 	// at once, and children outside the batch after a probe.
+	v.revivedPuts.Add(uint64(len(revived)))
 	var probe []*block.BlockRef
 	for _, e := range revived {
 		named := make(map[string]struct{}, len(e.Refs))

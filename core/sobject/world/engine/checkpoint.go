@@ -217,7 +217,7 @@ func (e *soEngine) nameWorld(ctx context.Context, world *InnerState, n int, heig
 	// the original pages on copies, leaving the kept pages unchanged.
 	pages, save := r.pages.split(entries)
 	if net != nil {
-		markOriginal(entries, net.steps)
+		net.steps.MarkOriginal(entries)
 	}
 	receipt, err := r.pages.SubmitAtomic(ctx, &block.AtomicPublication{
 		Entries: entries,
@@ -236,18 +236,6 @@ func (e *soEngine) nameWorld(ctx context.Context, world *InnerState, n int, heig
 	e.admit(receipt, e.retained, seqno)
 	go receipt.Release()
 	return receipt, true, nil
-}
-
-// markOriginal replaces each entry that puts an original page of steps with a
-// counted copy.
-func markOriginal(entries []*block.PutBatchEntry, steps block.ReplacementSteps) {
-	for i, e := range entries {
-		if !e.Tombstone && !e.Counted && steps.Original(e.Ref) {
-			counted := *e
-			counted.Counted = true
-			entries[i] = &counted
-		}
-	}
 }
 
 // waitNamed waits for receipt, from nameWorld, and returns the publication's

@@ -141,6 +141,9 @@ type Volume struct {
 	// the collector checked and the listed pages its mark reached, for the
 	// flows.
 	deadlistsChecked, deadlistLivePages atomic.Uint64
+	// revivedPuts counts the marked entries puts found absent and stored
+	// afresh, for the flows.
+	revivedPuts atomic.Uint64
 	// le logs the first caller of each write path putting a block without
 	// its references, may be nil.
 	le *logrus.Entry

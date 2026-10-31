@@ -96,4 +96,25 @@ func TestWorldDeathsComposesAcceptedChain(t *testing.T) {
 		t.Fatalf("next interval: %v", net)
 	}
 
+	// A World that leaves its root and returns keeps the loop, as a presence
+	// toggling online and offline does: the page the loop created dies.
+	h, step := commit(g, "h")
+	d.add(g, h, step)
+	back, step := commit(h, "g")
+	d.add(h, back, step)
+	if _, net := d.take(g); net == nil || !slices.EqualFunc(dead(net), []*block.BlockRef{h}, (*block.BlockRef).EqualsRef) {
+		t.Fatalf("returned to its root: %v", net)
+	}
+
+	// A loop inside the chain is kept too, not cut short by the direct step.
+	k, step := commit(g, "k")
+	d.add(g, k, step)
+	back, step = commit(k, "g")
+	d.add(k, back, step)
+	m, step := commit(g, "m")
+	d.add(g, m, step)
+	_, net = d.take(m)
+	if got := dead(net); len(got) != 2 || !slices.ContainsFunc(got, g.EqualsRef) || !slices.ContainsFunc(got, k.EqualsRef) {
+		t.Fatalf("loop inside the chain: %v", got)
+	}
 }

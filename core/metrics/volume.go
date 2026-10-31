@@ -100,6 +100,11 @@ var (
 		"Pages a checked deadlist record listed as dead that the collector's mark reached, since the volume opened; any is a deadlist error.",
 		[]string{volumeLabel}, nil,
 	)
+	volumeRevivedPutsDesc = prometheus.NewDesc(
+		"spacewave_volume_revived_puts_total",
+		"Entries marked as already counted that a put found absent and stored afresh, since the volume opened; any is an error in the writer's proof.",
+		[]string{volumeLabel}, nil,
+	)
 	volumeBuildWaitSecondsDesc = prometheus.NewDesc(
 		"spacewave_volume_build_wait_seconds_total",
 		"Time the volume's background commits waited for its storage's checkpoint build, since it opened; user commits never wait.",
@@ -123,7 +128,7 @@ func (volumeCollector) Describe(ch chan<- *prometheus.Desc) {
 		volumePublicationPendingDesc, volumePublicationPendingBytesDesc, volumeWriteReserveDesc,
 		volumeReserveBytesDesc, volumePutBlocksDesc, volumePutBytesDesc, volumePutExistingDesc,
 		volumePutRefusedDesc, volumeValueWrittenBytesDesc, volumeValueFreedBytesDesc,
-		volumeDeadlistsCheckedDesc, volumeDeadlistLivePagesDesc, volumeBuildWaitSecondsDesc,
+		volumeDeadlistsCheckedDesc, volumeDeadlistLivePagesDesc, volumeRevivedPutsDesc, volumeBuildWaitSecondsDesc,
 	} {
 		ch <- d
 	}
@@ -162,6 +167,7 @@ func collectFlows(ch chan<- prometheus.Metric, f *volume.VolumeFlows) {
 	// Report the deadlist checks.
 	ch <- prometheus.MustNewConstMetric(volumeDeadlistsCheckedDesc, prometheus.CounterValue, float64(f.DeadlistsChecked), id)
 	ch <- prometheus.MustNewConstMetric(volumeDeadlistLivePagesDesc, prometheus.CounterValue, float64(f.DeadlistLivePages), id)
+	ch <- prometheus.MustNewConstMetric(volumeRevivedPutsDesc, prometheus.CounterValue, float64(f.RevivedPuts), id)
 
 	// Report the background commits' wait for a checkpoint.
 	ch <- prometheus.MustNewConstMetric(volumeBuildWaitSecondsDesc, prometheus.CounterValue, f.BuildWait.Seconds(), id)
