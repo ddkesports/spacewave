@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -46,7 +47,7 @@ func (s *hookSQLStore) setHook(hook func(ctx context.Context, entries []*block.P
 
 // has reports whether the backend holds ref.
 func (s *hookSQLStore) has(t *testing.T, ref *block.BlockRef) bool {
-	found, err := s.batchForwardTestStore.GetBlockExists(context.Background(), ref)
+	found, err := s.GetBlockExists(context.Background(), ref)
 	if err != nil {
 		t.Error(err)
 	}
@@ -317,5 +318,99 @@ func TestSQLPublishDependency(t *testing.T) {
 	pub3.Entries[0] = &block.PutBatchEntry{Ref: refs[0], Tombstone: true}
 	if _, err := p.submit(t.Context(), pub3); !errors.Is(err, block.ErrAtomicPublicationUnsupported) {
 		t.Fatalf("tombstone admission = %v", err)
+	}
+}
+
+// countingReads counts the block reads that reach the backend.
+type countingReads struct {
+	*hookSQLStore
+	reads atomic.Int32
+}
+
+func (s *countingReads) GetBlock(ctx context.Context, ref *block.BlockRef) ([]byte, bool, error) {
+	s.reads.Add(1)
+	return s.hookSQLStore.GetBlock(ctx, ref)
+}
+
+func (s *countingReads) GetStoredBlock(ctx context.Context, ref *block.BlockRef) (*block.StoredBlock, error) {
+	s.reads.Add(1)
+	return s.hookSQLStore.GetStoredBlock(ctx, ref)
+}
+
+// TestSQLPublishLanded checks that the pages of a landed head read from the
+// landed blocks without a row read, read one row each with the bound at zero,
+// and that a page evicted or removed after landing reads its row, with the
+// same bytes the landed block held.
+func TestSQLPublishLanded(t *testing.T) {
+	// publish lands a head of pages through a publisher bounded by bound and
+	// returns its reads, the backend's read count and the pages.
+	publish := func(bound int64, pages ...string) (*sqlPublishReads, *countingReads, []*block.BlockRef) {
+		// Start the publisher with the bound and count its backend reads.
+		t.Helper()
+		p, sql, _ := newSQLPublishTest(t)
+		p.landed = newSQLLanded(bound)
+		lower := &countingReads{hookSQLStore: sql}
+
+		// Publish the pages and wait for their rows and head.
+		pub, refs := sqlPublicationFor(t, 1, nil, nil, pages...)
+		receipt, err := p.submit(t.Context(), pub)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := receipt.Wait(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		return newSQLPublishReads(p, lower), lower, refs
+	}
+
+	// diff reads every page as the change watch does and checks its bytes.
+	diff := func(reads *sqlPublishReads, refs []*block.BlockRef, pages ...string) {
+		t.Helper()
+		for i, ref := range refs {
+			stored, err := reads.GetStoredBlock(t.Context(), ref)
+			if err != nil || stored == nil || string(stored.Data) != pages[i] {
+				t.Fatalf("page %d = %v, %v; want %q", i, stored, err, pages[i])
+			}
+		}
+	}
+
+	// A landed head reads no row; with the bound at zero each page reads one.
+	pages := []string{"root", "dir", "leaf-a", "leaf-b"}
+	reads, lower, refs := publish(defaultSQLLandedBytes, pages...)
+	diff(reads, refs, pages...)
+	if n := lower.reads.Load(); n != 0 {
+		t.Fatalf("landed head read %d rows, want 0", n)
+	}
+	if stats := reads.pub.getStats(); stats.LandedHits != 4 || stats.LandedMisses != 0 || stats.LandedBytes != 19 {
+		t.Fatalf("stats = %+v", stats)
+	}
+	reads, lower, refs = publish(0, pages...)
+	diff(reads, refs, pages...)
+	if n := lower.reads.Load(); n != 4 {
+		t.Fatalf("unbounded head read %d rows, want 4", n)
+	}
+
+	// A bound of one page keeps only the last to land: the evicted pages read
+	// their rows with the same bytes.
+	pages = []string{"page-1", "page-2", "page-3"}
+	reads, lower, refs = publish(6, pages...)
+	diff(reads, refs, pages...)
+	if n := lower.reads.Load(); n != 2 {
+		t.Fatalf("evicted pages read %d rows, want 2", n)
+	}
+
+	// A page removed after it landed misses the landed blocks and reads the
+	// backend, which no longer holds it.
+	pages = []string{"removed"}
+	reads, lower, refs = publish(defaultSQLLandedBytes, pages...)
+	block.InvalidateRemovedBlock(refs[0])
+	if err := lower.RmBlock(t.Context(), refs[0]); err != nil {
+		t.Fatal(err)
+	}
+	if stored, err := reads.GetStoredBlock(t.Context(), refs[0]); err != nil || stored != nil {
+		t.Fatalf("removed page = %v, %v; want none", stored, err)
+	}
+	if n := lower.reads.Load(); n != 1 {
+		t.Fatalf("removed page read %d rows, want 1", n)
 	}
 }

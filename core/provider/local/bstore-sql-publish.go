@@ -40,24 +40,41 @@ func SetSQLPublishChunkRows(n int) {
 
 // SQLPublishStats reports the publisher of an SQL-primary block store.
 type SQLPublishStats struct {
-	// Workers and ChunkRows are the drain's settings.
-	Workers, ChunkRows int
+	// Workers is the number of inserts the drain keeps in flight.
+	Workers int
+	// ChunkRows is the most rows one insert writes.
+	ChunkRows int
 	// Publications is the number admitted and not yet resolved.
 	Publications int
-	// Blocks and Bytes are the admitted blocks MariaDB does not hold yet.
+	// Blocks is the admitted blocks MariaDB does not hold yet.
 	Blocks int
-	Bytes  int64
-	// Admitted, Committed and Failed count publications since the mount.
-	Admitted, Committed, Failed uint64
-	// Drained counts the publications whose rows all landed, DrainWait sums
-	// their time from admission until then, and CommitWait their time from
-	// then until the receipt resolved.
-	Drained               uint64
-	DrainWait, CommitWait time.Duration
-	// Statements counts inserts, StatementFailures the failed ones, and
-	// StatementTime sums their time.
-	Statements, StatementFailures uint64
-	StatementTime                 time.Duration
+	// Bytes is the size of those blocks.
+	Bytes int64
+	// Admitted counts the publications admitted since the mount.
+	Admitted uint64
+	// Committed counts the publications whose heads committed.
+	Committed uint64
+	// Failed counts the publications whose receipts failed.
+	Failed uint64
+	// Drained counts the publications whose rows all landed.
+	Drained uint64
+	// DrainWait sums the drained publications' time from admission until
+	// their rows landed.
+	DrainWait time.Duration
+	// CommitWait sums their time from then until the receipt resolved.
+	CommitWait time.Duration
+	// Statements counts the inserts.
+	Statements uint64
+	// StatementFailures counts the failed inserts.
+	StatementFailures uint64
+	// StatementTime sums the inserts' time.
+	StatementTime time.Duration
+	// LandedHits counts the reads past the overlay the landed blocks answered.
+	LandedHits uint64
+	// LandedMisses counts the reads past the overlay that went to MariaDB.
+	LandedMisses uint64
+	// LandedBytes is the bytes the landed blocks hold.
+	LandedBytes int64
 }
 
 // sqlPublisher publishes the writes of a store whose SQL backend is primary.
@@ -90,6 +107,8 @@ type sqlPublisher struct {
 	chunks []*sqlChunk
 	// blocks holds the admitted blocks MariaDB does not hold yet, by ref.
 	blocks map[string]*block.PutBatchEntry
+	// landed keeps the newest blocks MariaDB holds after they leave blocks.
+	landed *sqlLanded
 	// pending counts the unresolved publications, pendingBytes their blocks.
 	pending      int
 	pendingBytes int64
@@ -129,6 +148,7 @@ type sqlChunk struct {
 // newSQLPublisher builds the publisher of an SQL-primary store with the
 // configured drain settings.
 func newSQLPublisher(le *logrus.Entry, sql block.StoreOps, local block.AtomicPublisher) *sqlPublisher {
+	// Read the settings, defaulting those unset.
 	workers := int(sqlPublishWorkers.Load())
 	if workers <= 0 {
 		workers = defaultSQLPublishWorkers
@@ -137,6 +157,8 @@ func newSQLPublisher(le *logrus.Entry, sql block.StoreOps, local block.AtomicPub
 	if chunkRows <= 0 {
 		chunkRows = defaultSQLPublishChunkRows
 	}
+
+	// Build the publisher.
 	p := &sqlPublisher{
 		le:        le,
 		sql:       sql,
@@ -144,6 +166,7 @@ func newSQLPublisher(le *logrus.Entry, sql block.StoreOps, local block.AtomicPub
 		workers:   workers,
 		chunkRows: chunkRows,
 		blocks:    make(map[string]*block.PutBatchEntry),
+		landed:    newSQLLanded(sqlLandedBytes.Load()),
 		locals:    make(map[*block.PublicationReceipt]*block.PublicationReceipt),
 	}
 	p.stats.Workers, p.stats.ChunkRows = workers, chunkRows
@@ -307,8 +330,11 @@ func (p *sqlPublisher) runWorker(ctx context.Context) {
 			continue
 		}
 
-		// Insert it until it lands.
+		// Insert it until it lands, taking the removal generation before the
+		// insert that lands it.
+		var gen uint64
 		for failures := 0; ; {
+			gen = block.DurableReadGeneration()
 			start := time.Now()
 			_, err := p.sql.PutBlockBatch(ctx, chunk.entries)
 			took := time.Since(start)
@@ -335,7 +361,10 @@ func (p *sqlPublisher) runWorker(ctx context.Context) {
 			}
 		}
 
-		// Drop the landed blocks from the overlay and count the chunk.
+		// Move the landed blocks from the overlay to the landed blocks and
+		// count the chunk. They enter the landed blocks first, so a reader
+		// that misses the overlay finds them there or in MariaDB.
+		p.landed.add(chunk.entries, gen)
 		p.bcast.HoldLock(func(broadcast func(), _ func() <-chan struct{}) {
 			for _, entry := range chunk.entries {
 				key := entry.Ref.MarshalString()
@@ -469,11 +498,15 @@ func (p *sqlPublisher) resolve(pub *sqlPublication, local *block.PublicationRece
 
 // getStats returns the publisher's counters.
 func (p *sqlPublisher) getStats() SQLPublishStats {
+	// Copy the guarded counters, then read the landed blocks' own.
 	var stats SQLPublishStats
 	p.bcast.HoldLock(func(_ func(), _ func() <-chan struct{}) {
 		stats = p.stats
 		stats.Publications = p.pending
 	})
+	stats.LandedHits = p.landed.hits.Load()
+	stats.LandedMisses = p.landed.misses.Load()
+	stats.LandedBytes = p.landed.held()
 	return stats
 }
 
@@ -491,9 +524,23 @@ func (p *sqlPublisher) getPending(ref *block.BlockRef) *block.PutBatchEntry {
 	return entry
 }
 
+// getLanded returns the landed block for ref, marking ctx's read durable at
+// its insert's removal generation, or nil.
+func (p *sqlPublisher) getLanded(ctx context.Context, ref *block.BlockRef) *block.PutBatchEntry {
+	if ref == nil {
+		return nil
+	}
+	entry, gen := p.landed.get(ref)
+	if entry != nil {
+		block.MarkDurableRead(ctx, ref, gen)
+	}
+	return entry
+}
+
 // sqlPublishReads serves the admitted blocks MariaDB does not hold yet ahead
 // of the store's read chain, so the next write reads the revision it forks
-// from.
+// from, and then the newest landed blocks, so the first reads of a new head
+// do not each read a row.
 type sqlPublishReads struct {
 	block.StoreOps
 	pub *sqlPublisher
@@ -513,17 +560,25 @@ func (r *sqlPublishReads) BeginReadOperation(ctx context.Context) (block.StoreOp
 	return newSQLPublishReads(r.pub, scoped), release, nil
 }
 
-// GetBlock reads a pending block, then the lower store.
+// GetBlock reads a pending block, then a landed block, then the lower store.
 func (r *sqlPublishReads) GetBlock(ctx context.Context, ref *block.BlockRef) ([]byte, bool, error) {
 	if entry := r.pub.getPending(ref); entry != nil {
+		return bytes.Clone(entry.Data), true, nil
+	}
+	if entry := r.pub.getLanded(ctx, ref); entry != nil {
 		return bytes.Clone(entry.Data), true, nil
 	}
 	return r.StoreOps.GetBlock(ctx, ref)
 }
 
-// GetStoredBlock reads a pending block with its refs, then the lower store.
+// GetStoredBlock reads a pending block with its refs, then a landed block,
+// then the lower store.
 func (r *sqlPublishReads) GetStoredBlock(ctx context.Context, ref *block.BlockRef) (*block.StoredBlock, error) {
-	if entry := r.pub.getPending(ref); entry != nil {
+	entry := r.pub.getPending(ref)
+	if entry == nil {
+		entry = r.pub.getLanded(ctx, ref)
+	}
+	if entry != nil {
 		return &block.StoredBlock{
 			Data:      bytes.Clone(entry.Data),
 			Refs:      block.CloneBlockRefs(entry.Refs),
