@@ -99,6 +99,17 @@ message FtpsLocation {
   // ConnsPerLogin is the most sessions open at once on one netrc login,
   // counting the spares dialed ahead of range reads, zero for 9.
   uint32 conns_per_login = 7;
+  // Sftp reads and writes the packfiles over SFTP, on the same host and the
+  // same netrc login, instead of FTPS. Port zero then means 22. The first
+  // netrc login is used, and MaxConns is the number of SSH connections the
+  // backend holds, zero for 4, each carrying many requests at once;
+  // ConnsPerLogin is ignored.
+  bool sftp = 8;
+  // HostKey pins the SFTP server's SSH host key, as the "SHA256:..."
+  // fingerprint ssh prints or an authorized_keys style public key line. Empty
+  // trusts the first key the server shows and requires the same one on every
+  // later connection of the backend while it runs.
+  string host_key = 9;
 }
 
 // SqlLocation locates a MySQL-compatible database that holds blocks. It only

@@ -205,6 +205,21 @@ export interface FtpsLocation {
    * counting the spares dialed ahead of range reads, zero for 9.
    */
   connsPerLogin?: number
+  /**
+   * Sftp reads and writes the packfiles over SFTP, on the same host and the
+   * same netrc login, instead of FTPS. Port zero then means 22. The first
+   * netrc login is used, and MaxConns is the number of SSH connections the
+   * backend holds, zero for 4, each carrying many requests at once;
+   * ConnsPerLogin is ignored.
+   */
+  sftp?: boolean
+  /**
+   * HostKey pins the SFTP server's SSH host key, as the "SHA256:..."
+   * fingerprint ssh prints or an authorized_keys style public key line. Empty
+   * trusts the first key the server shows and requires the same one on every
+   * later connection of the backend while it runs.
+   */
+  hostKey?: string
 }
 
 export const FtpsLocation: MessageType<FtpsLocation> =
@@ -218,6 +233,8 @@ export const FtpsLocation: MessageType<FtpsLocation> =
       [5, 'prefix', 9],
       [6, 'max_conns', 13],
       [7, 'conns_per_login', 13],
+      [8, 'sftp', 8],
+      [9, 'host_key', 9],
     ],
   )
 

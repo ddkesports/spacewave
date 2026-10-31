@@ -272,6 +272,17 @@ type FtpsLocation struct {
 	// ConnsPerLogin is the most sessions open at once on one netrc login,
 	// counting the spares dialed ahead of range reads, zero for 9.
 	ConnsPerLogin uint32 `protobuf:"varint,7,opt,name=conns_per_login,json=connsPerLogin,proto3" json:"connsPerLogin,omitempty"`
+	// Sftp reads and writes the packfiles over SFTP, on the same host and the
+	// same netrc login, instead of FTPS. Port zero then means 22. The first
+	// netrc login is used, and MaxConns is the number of SSH connections the
+	// backend holds, zero for 4, each carrying many requests at once;
+	// ConnsPerLogin is ignored.
+	Sftp bool `protobuf:"varint,8,opt,name=sftp,proto3" json:"sftp,omitempty"`
+	// HostKey pins the SFTP server's SSH host key, as the "SHA256:..."
+	// fingerprint ssh prints or an authorized_keys style public key line. Empty
+	// trusts the first key the server shows and requires the same one on every
+	// later connection of the backend while it runs.
+	HostKey string `protobuf:"bytes,9,opt,name=host_key,json=hostKey,proto3" json:"hostKey,omitempty"`
 }
 
 func (x *FtpsLocation) Reset() {
@@ -327,6 +338,20 @@ func (x *FtpsLocation) GetConnsPerLogin() uint32 {
 		return x.ConnsPerLogin
 	}
 	return 0
+}
+
+func (x *FtpsLocation) GetSftp() bool {
+	if x != nil {
+		return x.Sftp
+	}
+	return false
+}
+
+func (x *FtpsLocation) GetHostKey() string {
+	if x != nil {
+		return x.HostKey
+	}
+	return ""
 }
 
 // SqlLocation locates a MySQL-compatible database that holds blocks. It only
@@ -1391,6 +1416,8 @@ func (m *FtpsLocation) CloneVT() *FtpsLocation {
 	r.Prefix = m.Prefix
 	r.MaxConns = m.MaxConns
 	r.ConnsPerLogin = m.ConnsPerLogin
+	r.Sftp = m.Sftp
+	r.HostKey = m.HostKey
 	if len(m.unknownFields) > 0 {
 		r.unknownFields = slices.Clone(m.unknownFields)
 	}
@@ -2106,6 +2133,12 @@ func (this *FtpsLocation) EqualVT(that *FtpsLocation) bool {
 		return false
 	}
 	if this.ConnsPerLogin != that.ConnsPerLogin {
+		return false
+	}
+	if this.Sftp != that.Sftp {
+		return false
+	}
+	if this.HostKey != that.HostKey {
 		return false
 	}
 	return string(this.unknownFields) == string(that.unknownFields)
@@ -3423,6 +3456,16 @@ func (x *FtpsLocation) MarshalProtoJSON(s *json.MarshalState) {
 		s.WriteObjectField("connsPerLogin")
 		s.WriteUint32(x.ConnsPerLogin)
 	}
+	if x.Sftp || s.HasField("sftp") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("sftp")
+		s.WriteBool(x.Sftp)
+	}
+	if x.HostKey != "" || s.HasField("hostKey") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("hostKey")
+		s.WriteString(x.HostKey)
+	}
 	s.WriteObjectEnd()
 }
 
@@ -3461,6 +3504,12 @@ func (x *FtpsLocation) UnmarshalProtoJSON(s *json.UnmarshalState) {
 		case "conns_per_login", "connsPerLogin":
 			s.AddField("conns_per_login")
 			x.ConnsPerLogin = s.ReadUint32()
+		case "sftp":
+			s.AddField("sftp")
+			x.Sftp = s.ReadBool()
+		case "host_key", "hostKey":
+			s.AddField("host_key")
+			x.HostKey = s.ReadString()
 		}
 	})
 }
@@ -5059,6 +5108,16 @@ func (m *FtpsLocation) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	if m.unknownFields != nil {
 		i = protobuf_go_lite.EncodeRawBytes(dAtA, i, m.unknownFields)
 	}
+	if len(m.HostKey) > 0 {
+		i = protobuf_go_lite.EncodeString(dAtA, i, m.HostKey)
+		i--
+		dAtA[i] = 0x4a
+	}
+	if m.Sftp {
+		i = protobuf_go_lite.EncodeBool(dAtA, i, m.Sftp)
+		i--
+		dAtA[i] = 0x40
+	}
 	if m.ConnsPerLogin != 0 {
 		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(m.ConnsPerLogin))
 		i--
@@ -6556,6 +6615,8 @@ func (m *FtpsLocation) SizeVT() (n int) {
 	n += protobuf_go_lite.SizeStringNonEmpty(1, m.Prefix)
 	n += protobuf_go_lite.SizeVarintNonZero(1, m.MaxConns)
 	n += protobuf_go_lite.SizeVarintNonZero(1, m.ConnsPerLogin)
+	n += protobuf_go_lite.SizeBoolNonZero(1, m.Sftp)
+	n += protobuf_go_lite.SizeStringNonEmpty(1, m.HostKey)
 	n += len(m.unknownFields)
 	return n
 }
@@ -7318,6 +7379,14 @@ func (x *FtpsLocation) MarshalProtoText() string {
 	if x.ConnsPerLogin != 0 {
 		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "conns_per_login")
 		protobuf_go_lite.TextWriteUint(&sb, x.ConnsPerLogin)
+	}
+	if x.Sftp != false {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "sftp")
+		protobuf_go_lite.TextWriteBool(&sb, x.Sftp)
+	}
+	if x.HostKey != "" {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "host_key")
+		protobuf_go_lite.TextWriteString(&sb, x.HostKey)
 	}
 	return protobuf_go_lite.TextFinishMessage(&sb)
 }
@@ -8288,6 +8357,26 @@ func (m *FtpsLocation) UnmarshalVT(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
+		case 8:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Sftp", wireType)
+			}
+			var v bool
+			v, iNdEx, err = protobuf_go_lite.DecodeVarintBool(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			m.Sftp = bool(v)
+		case 9:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field HostKey", wireType)
+			}
+			var v string
+			v, iNdEx, err = protobuf_go_lite.DecodeString(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			m.HostKey = v
 		default:
 			iNdEx = preIndex
 			skippy, err := protobuf_go_lite.Skip(dAtA[iNdEx:])
