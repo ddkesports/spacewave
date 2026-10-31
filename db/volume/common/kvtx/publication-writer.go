@@ -610,7 +610,7 @@ func (w *publicationWriter) apply(
 	// bridges publication and consumer handoff, and can be reaped after a
 	// crash.
 	if p.RootName != "" {
-		if err := setBucketRoot(ctx, blocks, rg, p.BucketID, p.RootName, p.Root); err != nil {
+		if err := w.volume.setBucketRoot(ctx, blocks, rg, p.BucketID, p.RootName, p.Root); err != nil {
 			return err
 		}
 		if req.rootOwner != "" {
@@ -631,7 +631,7 @@ func (w *publicationWriter) apply(
 
 	// Set the further named roots.
 	for _, root := range p.Roots {
-		if err := setBucketRoot(ctx, blocks, rg, p.BucketID, root.Name, root.Ref); err != nil {
+		if err := w.volume.setBucketRoot(ctx, blocks, rg, p.BucketID, root.Name, root.Ref); err != nil {
 			return err
 		}
 	}

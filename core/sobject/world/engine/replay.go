@@ -995,7 +995,8 @@ func (r *replayer) transitions() []world_block.EngineOption {
 }
 
 // composeDeaths joins the interval from the last named World to the World at
-// root and, when the store holds named roots, adds its deadlist entry, whose
+// root and, when the store holds named roots and keeps shared counts, adds its
+// deadlist entry, whose
 // record a later save carries once the interval's puts resolve. It returns the
 // interval for the naming publication to seal, or nil when there is none to
 // record. A forfeited interval leaks.
@@ -1006,8 +1007,9 @@ func (r *replayer) composeDeaths(root *block.BlockRef) *pendingNet {
 	}
 	from, net := r.deaths.take(root)
 
-	// Record it where the store can name it.
-	if r.pages == nil || !r.pages.SupportsRootRetention() {
+	// Record it where the store can name it and keeps the shared counts its
+	// check reads.
+	if r.pages == nil || !r.pages.KeepsHoldCounts() {
 		return nil
 	}
 	r.changed = true

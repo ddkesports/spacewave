@@ -279,7 +279,7 @@ func (v *Volume) SetBucketRoots(ctx context.Context, bucketID string, entries []
 
 		// Move each named root.
 		for _, root := range roots {
-			if err := setBucketRoot(ctx, blocks, rg, bucketID, root.Name, root.Ref); err != nil {
+			if err := v.setBucketRoot(ctx, blocks, rg, bucketID, root.Name, root.Ref); err != nil {
 				return err
 			}
 		}
@@ -295,7 +295,7 @@ func (v *Volume) SetBucketRoots(ctx context.Context, bucketID string, entries []
 }
 
 // setBucketRoot requires a shared physical transaction for bytes and graph.
-func setBucketRoot(ctx context.Context, blocks block.StoreOps, rg *block_gc.RefGraph, bucketID, name string, ref *block.BlockRef) error {
+func (v *Volume) setBucketRoot(ctx context.Context, blocks block.StoreOps, rg *block_gc.RefGraph, bucketID, name string, ref *block.BlockRef) error {
 	// Read the root the owner node holds now.
 	owner := RootOwnerIRI(bucketID, name)
 	bucket := block_gc.BucketIRI(bucketID)
@@ -338,7 +338,7 @@ func setBucketRoot(ctx context.Context, blocks block.StoreOps, rg *block_gc.RefG
 	}
 
 	// Count the held pages of a deadlist record the first time it is named.
-	if ref.GetEmpty() || !strings.HasPrefix(name, block.DeadlistRootPrefix) || slices.Contains(old, next) {
+	if !v.holdCounts || ref.GetEmpty() || !strings.HasPrefix(name, block.DeadlistRootPrefix) || slices.Contains(old, next) {
 		return nil
 	}
 	return addDeadlistHolds(ctx, blocks, rg, ref)
@@ -383,10 +383,17 @@ func addDeadlistHolds(ctx context.Context, blocks block.StoreOps, rg *block_gc.R
 // page a named World reaches, so this path should be unreachable; revivedPuts
 // counts each entry it takes, and any is an error in that proof.
 //
+// It adds nothing on a Volume configured to keep no counts.
+//
 // Every over-count leaks and never frees: a parent and child split across two
 // batches each count, and a payload or span block gains a count no record
 // takes, which the sweep deletes with the block.
 func (v *Volume) addExistedHolds(ctx context.Context, blocks block.StoreOps, rg *block_gc.RefGraph, entries []*block.PutBatchEntry, existed []bool) error {
+	// A Volume that keeps no counts skips the graph reads and writes.
+	if !v.holdCounts {
+		return nil
+	}
+
 	// Note which entries the batch found and which it stored afresh, setting
 	// aside marked entries. A page listed twice finds its own first copy, so
 	// its first entry decides.

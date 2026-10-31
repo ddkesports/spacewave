@@ -304,6 +304,11 @@ func (w *worldPages) SupportsRootRetention() bool {
 	return block.SupportsRootRetention(w.inner)
 }
 
+// KeepsHoldCounts reports whether the store keeps shared counts.
+func (w *worldPages) KeepsHoldCounts() bool {
+	return block.KeepsHoldCounts(w.inner)
+}
+
 // SetRetainedRoots forwards named roots to the store.
 func (w *worldPages) SetRetainedRoots(ctx context.Context, entries []*block.PutBatchEntry, roots []block.NamedRoot) error {
 	return block.SetRetainedRoots(ctx, w.inner, entries, roots)
