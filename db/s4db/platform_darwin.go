@@ -36,6 +36,12 @@ func (f *osFile) flushBarrier() (bool, error) {
 	return false, f.flushOrdered()
 }
 
+// writeBack does nothing: the platform has no call that writes a range back
+// without a flush.
+func (*osFile) writeBack(_, _, _, _ int64) error {
+	return nil
+}
+
 // punch deallocates n bytes at off, keeping the file length. struct
 // fpunchhole shares its layout with the leading fields of struct fstore,
 // flags, a reserved word, offset and length, so the fstore wrapper passes it.

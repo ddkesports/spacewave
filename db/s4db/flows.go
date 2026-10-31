@@ -36,7 +36,7 @@ func (db *DB) Flows() []Flow {
 // BuildWait returns the time this handle's background commits waited for a
 // checkpoint build, since the database opened.
 func (db *DB) BuildWait() time.Duration {
-	return time.Duration(db.w.buildWait.Load())
+	return time.Duration(db.w.stats.buildWaitNanos.Load())
 }
 
 // family returns the index in flows of the family key starts with.

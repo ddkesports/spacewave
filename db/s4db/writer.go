@@ -56,9 +56,8 @@ type writer struct {
 	building atomic.Bool
 	// builds counts running background checkpoints, so Close can wait.
 	builds sync.WaitGroup
-	// buildWait is the time background commits waited for a build, in
-	// nanoseconds.
-	buildWait atomic.Int64
+	// stats counts the checkpoint work and the writers' waits for it.
+	stats writerStats
 	// beforeBuild, when set by a test, runs as a background checkpoint
 	// starts building its tree.
 	beforeBuild func()
@@ -736,16 +735,16 @@ func (w *writer) endBuild() {
 }
 
 // waitBuild waits while a background checkpoint runs and the published
-// overlay exceeds twice CheckpointMax, or the log after the checkpoint four
-// times, so background writers that outpace checkpoints stop until the build
-// catches up. Only a commit whose context is marked with block.WithBackground
-// waits: a user commit may hold a lock other users wait on, such as a World's
-// writer lock, so it never waits for a build. The caller does not hold the
-// writer lock, which the build needs.
+// overlay exceeds CommitWaitMax, or the log after the checkpoint twice it,
+// so background writers that outpace checkpoints stop until the build catches
+// up. Only a commit whose context is marked with block.WithBackground waits: a
+// user commit may hold a lock other users wait on, such as a World's writer
+// lock, so it never waits for a build. The caller does not hold the writer
+// lock, which the build needs.
 func (w *writer) waitBuild(ctx context.Context) error {
 	// Return at once while the state is within bounds.
 	db := w.db
-	limit := 2 * db.opts.CheckpointMax
+	limit := db.opts.CommitWaitMax
 	within := func() bool {
 		st := db.cur.Load()
 		return st.overlayBytes <= limit && st.logBytes <= 2*limit
@@ -756,16 +755,25 @@ func (w *writer) waitBuild(ctx context.Context) error {
 
 	// Wait for the build to end or the state to come back within bounds.
 	start := time.Now()
-	defer func() { w.buildWait.Add(int64(time.Since(start))) }()
-	return db.bcast.Wait(ctx, func(_ func(), _ func() <-chan struct{}) (bool, error) {
+	err := db.bcast.Wait(ctx, func(_ func(), _ func() <-chan struct{}) (bool, error) {
 		return !w.building.Load() || within(), nil
 	})
+	w.stats.buildWaits.Add(1)
+	w.stats.buildWaitNanos.Add(int64(time.Since(start)))
+	return err
 }
 
 // runCheckpoint builds the tree of st, which the snapshot in stripe keeps,
 // and writes its pages, holding the writer lock only to reserve pages, to
 // write them to a shared file, and to save the tree. The next commit reports a failure.
 func (w *writer) runCheckpoint(st *state, stripe int) {
+	// Count the checkpoint's time once it ends.
+	start := time.Now()
+	defer func() {
+		w.stats.checkpoints.Add(1)
+		w.stats.checkpointNanos.Add(int64(time.Since(start)))
+	}()
+
 	// Reserve the tree's pages under the writer lock as it builds.
 	ctx := context.Background()
 	t := w.newTree(st)
@@ -804,6 +812,7 @@ func (w *writer) runCheckpoint(st *state, stripe int) {
 		if t.sp != w.sp || w.closing.Load() {
 			return errDropped
 		}
+		w.stats.checkpointBytes.Add(uint64(len(buf)))
 		return write(buf, page)
 	}
 
@@ -920,9 +929,24 @@ var errDropped = errors.New("checkpoint space reloaded")
 
 // newTree returns the tree of st, writing its pages through the database
 // file and cache. The caller sets the writer's reserve function.
+//
+// Commits flush the whole file, so pages the checkpoint left queued would hold
+// up their flushes. Each batch waits out a running flush, then starts to the
+// drive at once while the batch before it finishes, so at most two batches
+// queue ahead of a commit's flush.
 func (w *writer) newTree(st *state) *tree {
+	var doneOff, doneN int64
 	out := &pageWriter{cache: w.db.p.cache, write: func(buf []byte, page uint64) error {
-		_, err := w.db.s.WriteAt(buf, pageOff(page))
+		// Write the batch behind any running flush.
+		w.db.flush.yield()
+		off, n := pageOff(page), int64(len(buf))
+		if _, err := w.db.s.WriteAt(buf, off); err != nil {
+			return err
+		}
+
+		// Start it to the drive and wait for the last one.
+		err := w.db.s.writeBack(off, n, doneOff, doneN)
+		doneOff, doneN = off, n
 		return err
 	}}
 	return &tree{st: st, b: &builder{p: w.db.p, out: out}}

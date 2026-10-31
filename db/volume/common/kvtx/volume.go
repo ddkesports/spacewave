@@ -377,9 +377,12 @@ func (v *Volume) GetRefGraph() block_gc.RefGraphOps {
 // block.ErrRefsUnknown for a new block written without its references.
 func (v *Volume) PutBlockBatch(ctx context.Context, entries []*block.PutBatchEntry) ([]bool, error) {
 	// Refuse new data below the disk reserve, and new blocks without their
-	// references, then write the batch.
-	if err := v.checkReserve(ctx, batchBytes(entries)); err != nil {
-		return nil, err
+	// references, then write the batch. A batch of tombstones only frees
+	// space, so it runs below the reserve too.
+	if !onlyTombstones(entries) {
+		if err := v.checkReserve(ctx, batchBytes(entries)); err != nil {
+			return nil, err
+		}
 	}
 	v.noteUnknownRefsBatch(putDirect, entries)
 	if err := requireRefsKnown(ctx, v.reader(), entries); err != nil {

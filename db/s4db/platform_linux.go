@@ -34,6 +34,19 @@ func (f *osFile) flushBarrier() (bool, error) {
 	return true, f.flushDurable()
 }
 
+// writeBack starts writing n bytes at off and waits for the range at doneOff
+// to reach the drive. It only shortens the drive's queue, so a file system
+// without sync_file_range loses nothing but that, and a write error surfaces
+// at the next flush.
+func (f *osFile) writeBack(off, n, doneOff, doneN int64) error {
+	fd := int(f.Fd())
+	if doneN > 0 {
+		_ = unix.SyncFileRange(fd, doneOff, doneN, unix.SYNC_FILE_RANGE_WAIT_BEFORE|unix.SYNC_FILE_RANGE_WRITE|unix.SYNC_FILE_RANGE_WAIT_AFTER)
+	}
+	_ = unix.SyncFileRange(fd, off, n, unix.SYNC_FILE_RANGE_WRITE)
+	return nil
+}
+
 // punch deallocates n bytes at off, keeping the file length.
 func (f *osFile) punch(off, n int64) error {
 	return unix.Fallocate(int(f.Fd()), unix.FALLOC_FL_PUNCH_HOLE|unix.FALLOC_FL_KEEP_SIZE, off, n)

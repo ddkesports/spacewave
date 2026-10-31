@@ -60,6 +60,11 @@ func (f deviceFile) flushBarrier() (bool, error) {
 	return true, f.flushDurable()
 }
 
+// writeBack does nothing: a device issues its writes at the next flush.
+func (deviceFile) writeBack(_, _, _, _ int64) error {
+	return nil
+}
+
 // punch does nothing: a device cannot deallocate within a file, so space
 // returns only when the file's tail is truncated.
 func (deviceFile) punch(_, _ int64) error {

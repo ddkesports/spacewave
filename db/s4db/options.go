@@ -15,9 +15,15 @@ type Options struct {
 	// CheckpointMax is the overlay memory that always starts a checkpoint,
 	// bounding the memory and the log replay at open. A log after the checkpoint of twice
 	// the limit also starts one, so rewrites of the same keys stay bounded.
-	// A commit waits for the running checkpoint while the overlay exceeds
-	// twice this or the log four times. Zero selects 64 MiB.
+	// Zero selects 64 MiB.
 	CheckpointMax int64
+	// CommitWaitMax is the overlay memory past which a background commit
+	// waits for the running checkpoint; a log after the checkpoint of twice
+	// it also holds them. Zero selects twice CheckpointMax. A larger bound
+	// keeps background commits flowing through a slow build, such as the
+	// first after open on a cold index, at the cost of memory and log replay
+	// at open.
+	CommitWaitMax int64
 	// RelocateBudget, when negative, disables compaction in the background.
 	// Zero selects 4 MiB; other values enable it.
 	RelocateBudget int64
@@ -49,6 +55,9 @@ func (o Options) withDefaults() Options {
 	}
 	if o.CheckpointMax == 0 {
 		o.CheckpointMax = 64 << 20
+	}
+	if o.CommitWaitMax == 0 {
+		o.CommitWaitMax = 2 * o.CheckpointMax
 	}
 	if o.RelocateBudget == 0 {
 		o.RelocateBudget = 4 << 20

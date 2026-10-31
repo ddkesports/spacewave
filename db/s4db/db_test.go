@@ -197,11 +197,12 @@ func TestStaleRecord(t *testing.T) {
 }
 
 // TestBulkOverlay commits large batches back to back, as a bulk import
-// does, and checks that the overlay stays bounded while background
-// checkpoints run behind the writer.
+// does in the background, and checks that the overlay stays bounded while
+// background checkpoints run behind the writer.
 func TestBulkOverlay(t *testing.T) {
-	// Open a file with small checkpoints.
-	ctx := context.Background()
+	// Open a file with small checkpoints. Only background commits wait for
+	// a build.
+	ctx := block.WithBackground(context.Background())
 	opts := Options{CheckpointMin: 16 << 10, CheckpointMax: 64 << 10}
 	db := openTest(t, filepath.Join(t.TempDir(), "bulk.s4wave"), opts)
 	defer db.Close()

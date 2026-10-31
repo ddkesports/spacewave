@@ -375,13 +375,16 @@ func (r *replayer) readable(n int) bool {
 }
 
 // liveRoots returns the roots of the Worlds whose pages the page view keeps:
-// the named Worlds, the readable positions and head.
-func (r *replayer) liveRoots(head *block.BlockRef) []*block.BlockRef {
+// the named Worlds, the readable positions and heads. The view drops a page
+// only when no base root, written position, admitted head, durable head or
+// queued durable ref reaches it, so the engine passes the last three as heads
+// and a new head joins them.
+func (r *replayer) liveRoots(heads ...*block.BlockRef) []*block.BlockRef {
 	live := slices.Clone(r.baseRoots)
 	for _, pos := range r.positions[max(r.written-1, 0):] {
 		live = append(live, pos.state.GetHeadRef().GetRootRef())
 	}
-	return append(live, head)
+	return append(live, heads...)
 }
 
 // positionsAbove returns the positions after the last one whose World is

@@ -88,6 +88,17 @@ func TestUserCommitSkipsBuildWait(t *testing.T) {
 		t.Fatalf("build wait %v, want the background commit's wait", db.BuildWait())
 	}
 
+	// The stats count the wait and, once it ends, the checkpoint it waited
+	// for. The user commit did not wait.
+	db.w.builds.Wait()
+	stats := db.Stats()
+	if stats.BuildWaits != 1 || stats.BuildWaitTime != db.BuildWait() {
+		t.Fatalf("build waits %d for %v, want 1 for %v", stats.BuildWaits, stats.BuildWaitTime, db.BuildWait())
+	}
+	if stats.Checkpoints < 1 || stats.CheckpointBytes == 0 || stats.CheckpointTime < 100*time.Millisecond {
+		t.Fatalf("checkpoints %d of %d bytes in %v", stats.Checkpoints, stats.CheckpointBytes, stats.CheckpointTime)
+	}
+
 	// Both commits' keys read back.
 	rtx, err := db.NewTransaction(ctx, false)
 	if err != nil {
@@ -98,6 +109,55 @@ func TestUserCommitSkipsBuildWait(t *testing.T) {
 		if _, ok, err := rtx.Get(ctx, []byte(key)); err != nil || !ok {
 			t.Fatalf("get %s = %v %v", key, ok, err)
 		}
+	}
+}
+
+// TestCommitWaitMaxRaisesBound holds a background checkpoint and checks that
+// a background bulk commit past twice CheckpointMax returns while a larger
+// CommitWaitMax still covers the overlay.
+func TestCommitWaitMaxRaisesBound(t *testing.T) {
+	// Open a file with small checkpoints, a large commit wait bound, and
+	// builds that wait for the gate.
+	ctx := context.Background()
+	opts := Options{CheckpointMin: 16 << 10, CheckpointMax: 64 << 10, CommitWaitMax: 8 << 20}
+	db := openTest(t, filepath.Join(t.TempDir(), "wait.s4wave"), opts)
+	defer db.Close()
+	started, gate := make(chan struct{}, 1), make(chan struct{})
+	defer close(gate)
+	db.w.beforeBuild = func() {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-gate
+	}
+
+	// Commit a background batch over twice CheckpointMax while the build
+	// holds.
+	done := make(chan error, 1)
+	go func() {
+		done <- commitBulk(block.WithBackground(ctx), db, "bulk")
+	}()
+
+	// It returns without waiting for the build it started.
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the build did not start")
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("bulk commit waited for the build")
+	}
+	if got := db.cur.Load().overlayBytes; got <= 2*opts.CheckpointMax {
+		t.Fatalf("overlay holds %d bytes, want over %d", got, 2*opts.CheckpointMax)
+	}
+	if stats := db.Stats(); stats.BuildWaits != 0 {
+		t.Fatalf("build waits %d, want 0", stats.BuildWaits)
 	}
 }
 

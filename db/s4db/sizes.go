@@ -35,8 +35,8 @@ func (db *DB) Sizes(ctx context.Context) (Sizes, error) {
 	treePages := db.cur.Load().sb.treePages
 	db.w.unlock(nil)
 
-	// A commit waits for the checkpoint once the log passes four times the
-	// largest checkpoint limit.
-	s.CollectBytes = pageOff(treePages) + 4*db.opts.CheckpointMax + collectSlackBytes
+	// A commit waits for the checkpoint once the log passes twice the
+	// commit wait bound.
+	s.CollectBytes = pageOff(treePages) + 2*db.opts.CommitWaitMax + collectSlackBytes
 	return s, nil
 }

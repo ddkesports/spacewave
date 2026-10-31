@@ -23,6 +23,7 @@ import (
 	"github.com/s4wave/spacewave/db/bucket"
 	bucket_lookup "github.com/s4wave/spacewave/db/bucket/lookup"
 	"github.com/s4wave/spacewave/db/s4db"
+	"github.com/s4wave/spacewave/db/volume"
 	kvtx_volume "github.com/s4wave/spacewave/db/volume/common/kvtx"
 	volume_s4db "github.com/s4wave/spacewave/db/volume/s4db"
 	"github.com/s4wave/spacewave/db/world"
@@ -44,6 +45,8 @@ type localWorld struct {
 	acc *provider_local.ProviderAccount
 	// db is the account volume's database.
 	db *s4db.DB
+	// vol is the account volume.
+	vol volume.Volume
 	// soRef identifies the SharedObject.
 	soRef *sobject.SharedObjectRef
 }
@@ -122,14 +125,15 @@ func openLocalAccount(t *testing.T, dir string, soRef *sobject.SharedObjectRef) 
 // newLocalWorld returns the World eng of the SharedObject soRef in the local
 // account acc on tb.
 func newLocalWorld(t *testing.T, tb *testbed.Testbed, acc provider.ProviderAccount, eng sobject_world_engine.Engine, soRef *sobject.SharedObjectRef) *localWorld {
-	// Find the account database.
+	// Find the account volume and its database.
 	t.Helper()
 	local := acc.(*provider_local.ProviderAccount)
-	db := volume_s4db.GetDB(local.GetVolume())
+	vol := local.GetVolume()
+	db := volume_s4db.GetDB(vol)
 	if db == nil {
 		t.Fatal("account volume is not s4db")
 	}
-	return &localWorld{bus: tb.Bus, le: tb.Logger, eng: eng, acc: local, db: db, soRef: soRef}
+	return &localWorld{bus: tb.Bus, le: tb.Logger, eng: eng, acc: local, db: db, vol: vol, soRef: soRef}
 }
 
 // create commits a World write that creates the object key.
