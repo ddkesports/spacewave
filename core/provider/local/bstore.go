@@ -455,6 +455,9 @@ func (t *bstoreTracker) executeBlockStoreTracker(rctx context.Context) error {
 	placement := &placementState{wb: wb, local: localBucket, remote: &t.remote, evictGate: &t.evictGate, evictAdmit: &t.a.evictAdmit}
 	placement.tracker, _ = t.a.vol.GetRefGraph().(block_gc.BlockTracker)
 	placement.backend.Store(backend)
+	if err := placement.reads.load(ctx, wb); err != nil {
+		le.WithError(err).Warn("unable to load the saved block reads, eviction keeps only new reads")
+	}
 	placement.setPolicy(placed.GetCache())
 
 	// Upload the recorded writes to the current backend until the store
