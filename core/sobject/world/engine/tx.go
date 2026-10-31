@@ -246,7 +246,9 @@ func (t *soEngineWriteTx) writeBlocks(ctx context.Context) error {
 // under the accepted World root, and the replay save the last write deferred
 // with the span holding the operation's payloads, in one physical
 // transaction after the publications of the writes admitted before it, and
-// returns its receipt once the store admits it. The engine records the
+// returns its receipt once the store admits it. With the page view the World
+// pages stay kept instead, and the publication names no World: a checkpoint
+// or a stall base writes the Worlds a restart reads. The engine records the
 // admission, and the write keeps the receipt until Discard. When head is nil
 // or the store cannot publish, it writes the blocks and returns a nil receipt;
 // the SharedObject then commits its state itself.
@@ -264,26 +266,35 @@ func (t *soEngineWriteTx) publish(ctx context.Context, publisher sobject.StatePu
 	if err != nil {
 		return nil, err
 	}
-	saveEntries, roots, cursor, err := t.eng.replay.pendingSave(publisher, t.fork.payloads)
+	saveEntries, roots, cursor, err := t.eng.replay.pendingSave(ctx, publisher, t.fork.payloads)
 	if err != nil {
 		batch.Complete(err)
 		return nil, err
 	}
-	heads := []*block.AtomicHeadUpdate{countHead(head, WriteKindState)}
-	if cursor != nil {
-		heads = append(heads, countHead(cursor, WriteKindReplay))
-	}
 
-	// Submit them, writing the blocks alone when the store declines.
-	receipt, err := store.SubmitAtomic(ctx, &block.AtomicPublication{
-		Entries:  slices.Concat(batch.Entries, saveEntries),
-		Heads:    heads,
+	// Keep the World pages, which a reader of the new head finds in the page
+	// view, and publish the payloads with the pages past its bound.
+	payload, pages := splitPayloads(batch.Entries, t.fork.payloads)
+	pub := &block.AtomicPublication{
 		RootName: acceptedWorldRootName,
 		Root:     root,
 		Roots:    roots,
 		After:    t.eng.lastReceipt(),
 		Ordered:  world.OrderedCommit(ctx),
-	})
+	}
+	if kept := t.eng.replay.pages; kept != nil {
+		pages = kept.keep(pages)
+		pub.RootName, pub.Root = "", nil
+	}
+	pub.Entries = slices.Concat(payload, pages, saveEntries)
+	named, save := t.eng.replay.pages.split(saveEntries)
+	pub.Heads = []*block.AtomicHeadUpdate{countHead(head, WriteKindState)}
+	if cursor != nil {
+		pub.Heads = append(pub.Heads, countHead(cursor, WriteKindReplay))
+	}
+
+	// Submit them, writing the blocks alone when the store declines.
+	receipt, err := store.SubmitAtomic(ctx, pub)
 	if errors.Is(err, block.ErrAtomicPublicationUnsupported) || errors.Is(err, block.ErrPublicationTooLarge) {
 		batch.Complete(err)
 		return nil, t.writeBlocks(ctx)
@@ -293,7 +304,7 @@ func (t *soEngineWriteTx) publish(ctx context.Context, publisher sobject.StatePu
 		return nil, err
 	}
 	t.clock.end(stagePublicationAdmission)
-	countPublication(batch.Entries, saveEntries, t.fork.payloads)
+	countPublication(payload, slices.Concat(pages, named), save)
 
 	// The publication holds the candidate under the accepted World root and
 	// carries the replay save once its receipt succeeds.

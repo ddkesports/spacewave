@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
@@ -72,12 +73,12 @@ func (uncachedStore) GetDecodedBlockCache() *block.DecodedBlockCache {
 // newSpaceWorld starts a World engine on a new local Space SharedObject.
 func newSpaceWorld(ctx context.Context, t *testing.T) *spaceWorld {
 	t.Helper()
-	return newSpaceWorldWithInit(ctx, t, &sobject_world_engine.InitWorldOp{})
+	return newSpaceWorldWithConf(ctx, t, nil)
 }
 
-// newSpaceWorldWithInit starts a World engine on a new local Space
-// SharedObject, initializing the World with initOp and no changelog.
-func newSpaceWorldWithInit(ctx context.Context, t *testing.T, initOp *sobject_world_engine.InitWorldOp) *spaceWorld {
+// newSpaceWorldWithConf starts a World engine on a new local Space
+// SharedObject with no changelog, after edit adjusts its Config.
+func newSpaceWorldWithConf(ctx context.Context, t *testing.T, edit func(*sobject_world_engine.Config)) *spaceWorld {
 	// Start a testbed.
 	t.Helper()
 	tb, err := testbed.Default(ctx)
@@ -128,7 +129,10 @@ func newSpaceWorldWithInit(ctx context.Context, t *testing.T, initOp *sobject_wo
 	// Start the World engine on the SharedObject without a changelog, as a
 	// Space does, so replaced roots are unreachable from the head.
 	conf := sobject_world_engine.NewConfig(engineID, soRef)
-	conf.InitWorldOp = initOp.CloneVT()
+	conf.InitWorldOp = &sobject_world_engine.InitWorldOp{}
+	if edit != nil {
+		edit(conf)
+	}
 	conf.InitWorldOp.LastChangeDisable = true
 	eng, engRef, err := world.StartEngine(ctx, tb.Bus, conf, nil)
 	if err != nil {
@@ -152,6 +156,22 @@ func newSpaceWorldWithInit(ctx context.Context, t *testing.T, initOp *sobject_wo
 		rg:       vol.(kvtx_volume.KvtxVolume).GetRefGraph(),
 		bucket:   block_gc.BucketIRI(provider_local.BlockStoreBucketID(providerID, accountID, provider_local.SobjectBlockStoreID(sobjectID))),
 	}
+}
+
+// engineHead returns the root of the World eng installed.
+func engineHead(ctx context.Context, t *testing.T, eng world.Engine) *block.BlockRef {
+	// Ask the engine for its head.
+	t.Helper()
+	var root *block.BlockRef
+	err := world.AccessEngine(ctx, eng, func(ctx context.Context, eng world.Engine) error {
+		var err error
+		root, _, err = eng.(sobject_world_engine.BackfillEngine).GetHead(ctx)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return root
 }
 
 // bucketOnlyBlocks lists the bucket's block children without another parent.
@@ -499,7 +519,8 @@ func TestWorldEngineKeepsReplacedObjectRoots(t *testing.T) {
 // released, never left owned directly by the Space bucket, and that every
 // committed object survives a sweep afterwards. It covers chunked file
 // objects, abandoned transactions and an object updated several times within
-// one transaction.
+// one transaction. The engine keeps each commit's World pages out of the
+// volume until a checkpoint or stall base stores a World.
 func TestWorldEngineObjectBlocksHaveParents(t *testing.T) {
 	// Start the Space World.
 	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
@@ -557,6 +578,29 @@ func TestWorldEngineObjectBlocksHaveParents(t *testing.T) {
 		}
 	}
 
+	// Commit past a checkpoint. The commits leave their World pages out of
+	// the volume, and the checkpoint or stall base stores one of their Worlds.
+	var heads []*block.BlockRef
+	for i := range 40 {
+		err := world.ExecTransaction(ctx, w.eng, true, func(ctx context.Context, ws world.WorldState) error {
+			return writeExample(ctx, ws, "stall", "stall write "+strconv.Itoa(i))
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		heads = append(heads, engineHead(ctx, t, w.eng))
+	}
+	stored, err := w.vol.GetBlockExistsBatch(ctx, heads)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored[0] || stored[len(stored)-1] {
+		t.Fatalf("a commit stored its World root: %v", stored)
+	}
+	if !slices.Contains(stored, true) {
+		t.Fatal("no checkpoint or stall base stored a World")
+	}
+
 	// No block may be owned by the bucket alone.
 	if orphans := w.bucketOnlyBlocks(ctx, t); len(orphans) != 0 {
 		t.Fatalf("%d blocks are owned only by the bucket: %v", len(orphans), orphans)
@@ -583,7 +627,7 @@ func TestWorldEngineObjectBlocksHaveParents(t *testing.T) {
 				return err
 			}
 		}
-		return nil
+		return checkExample(ctx, ws, "stall", "stall write 39")
 	})
 	if err != nil {
 		t.Fatal(err)

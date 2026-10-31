@@ -193,4 +193,28 @@ func TestWorldPagesKeepsUntilStored(t *testing.T) {
 	if got := inner.pins[mid.Ref.MarshalString()]; got != 0 {
 		t.Fatalf("store pins after release: %d want 0", got)
 	}
+
+	// A page a later World writes again stays readable after the first World
+	// that reached it leaves memory, whether that World was dropped unstored
+	// or stored.
+	again := testPage(t, "again")
+	first := testPage(t, "first", again.Ref)
+	pages.keep([]*block.PutBatchEntry{first, again})
+	pages.sweep(nil)
+
+	// A second World writes it again with the stored leaf.
+	second := testPage(t, "second", again.Ref, leaf.Ref)
+	pages.keep([]*block.PutBatchEntry{second, again, leaf})
+	pages.sweep([]*block.BlockRef{second.Ref})
+	for _, page := range []*block.PutBatchEntry{again, leaf} {
+		if data, found, err := pages.GetBlock(ctx, page.Ref); err != nil || !found || string(data) != string(page.Data) {
+			t.Fatalf("rewritten page %q: %q found=%v err=%v", page.Data, data, found, err)
+		}
+	}
+
+	// The stored leaf stays readable once the rewrite leaves memory.
+	pages.sweep(nil)
+	if data, found, err := pages.GetBlock(ctx, leaf.Ref); err != nil || !found || string(data) != "leaf" {
+		t.Fatalf("stored leaf after its rewrite left: %q found=%v err=%v", data, found, err)
+	}
 }

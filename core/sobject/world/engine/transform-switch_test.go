@@ -23,13 +23,17 @@ var gzipMagic = []byte{0x1f, 0x8b, 0x08}
 
 // TestSetTransformConfSwitchesLiveWorld checks that a Space World written with
 // gzip switches to s2 through its engine: later commits store s2 blocks, the
-// World still reads the gzip blocks, and an invalid successor is refused.
+// World still reads the gzip blocks, and an invalid successor is refused. The
+// engine stores every World so each commit's blocks reach the volume.
 func TestSetTransformConfSwitchesLiveWorld(t *testing.T) {
 	// Start a World on gzip and write an object.
 	ctx := t.Context()
 	enc := &transform_blockenc.Config{BlockEnc: blockenc.DefaultBlockEnc, Key: bytes.Repeat([]byte{3}, 32)}
 	gzipConf := newSwitchTestConf(t, &transform_gzip.Config{}, enc)
-	sw := newSpaceWorldWithInit(ctx, t, &sobject_world_engine.InitWorldOp{TransformConf: gzipConf})
+	sw := newSpaceWorldWithConf(ctx, t, func(conf *sobject_world_engine.Config) {
+		conf.InitWorldOp.TransformConf = gzipConf
+		conf.StoreEveryWorld = true
+	})
 	commitSwitchTestObject(ctx, t, sw.eng, "before")
 	before := sw.worldBlocks(ctx, t, enc)
 	if len(before) == 0 || !allGzip(before) {

@@ -11,23 +11,34 @@ import (
 	"github.com/s4wave/spacewave/db/block"
 )
 
-// worldPagesMaxBytes bounds the length of the pages a worldPages keeps. A page
-// offered past it is left for the caller to store.
-const worldPagesMaxBytes = 128 << 20
+// worldPagesMaxBytes and worldPagesMaxCount bound the length and number of the
+// pages a worldPages keeps. A page offered past either is left for the caller
+// to store. Both sit under the volume's publication bound, so the publication
+// naming a World fits its kept pages.
+const (
+	worldPagesMaxBytes = 16 << 20
+	worldPagesMaxCount = 16384
+)
 
 // worldPages is the SharedObject's block store with the World pages the engine
 // computed and has not stored in front of it. Every World reader the engine
 // builds reads through it, so a page is readable from the moment it is kept.
+// It also tracks each page written through it above a kept page, such as a
+// page replay or an early buffer drain stored, so a walk from a root finds
+// every kept page below it.
 //
 // Invariants:
-//   - A kept page carries its complete child list, so a walk through kept
-//     pages never reads the store to find a child.
-//   - A page leaves only once the store holds it durably (stored) or no live
-//     root and no reader pin reaches it (sweep). A reader that finds a page
-//     missing here finds it in the store, or holds nothing that reaches it.
+//   - A tracked page carries its complete child list, so a walk through
+//     tracked pages never reads the store to find a child.
+//   - A stored page whose graph reaches a kept page is tracked: a walk that
+//     stops at an untracked page leaves nothing unwritten below it.
+//   - A page leaves only once the store holds the graph below it durably
+//     (stored) or no live root and no reader pin reaches it (sweep). A reader
+//     that finds a page missing here finds it in the store, or holds nothing
+//     that reaches it.
 //   - A reader pin on a kept page becomes a pin in the store before the page
 //     leaves for the store, so the collector never sees the page unpinned.
-//   - No completion proof names a kept root: its graph is not stored.
+//   - No completion proof names a tracked root: its graph is not stored.
 type worldPages struct {
 	// pageView serves kept pages and forwards the rest to the store.
 	pageView
@@ -37,29 +48,140 @@ type worldPages struct {
 
 // newWorldPages wraps the SharedObject's block store with an empty page set.
 func newWorldPages(inner bstore.BlockStore) *worldPages {
-	set := &pageSet{pages: make(map[string]*keptPage)}
+	set := &pageSet{pages: make(map[string]*trackedPage)}
 	return &worldPages{pageView: pageView{StoreOps: inner, set: set}, inner: inner}
 }
 
 // newWorldPages returns the page view of so's block store, or nil when the
-// engine stores every page as it computes it: when the Config asks it to, and
-// for an object whose publications copy the World into another store, which
-// reads the pages from so's block store.
+// engine stores every page as it computes it: when the Config asks it to, for
+// an object whose publications copy the World into another store, which reads
+// the pages from so's block store, and for an object whose state cannot join a
+// block publication, since a World is written only in the publication that
+// names it.
 func (c *Controller) newWorldPages(so sobject.SharedObject) *worldPages {
+	// Keep nothing where the Config, the publications or the store rule it
+	// out.
 	if c.conf.GetStoreEveryWorld() {
 		return nil
 	}
 	if _, ok := so.(sobject.PublicationRetention); ok {
 		return nil
 	}
-	return newWorldPages(so.GetBlockStore())
+	if _, ok := so.(sobject.StatePublisher); !ok {
+		return nil
+	}
+	store := so.GetBlockStore()
+	if p, ok := store.(block.AtomicPublisher); !ok || !p.SupportsAtomicPublication() {
+		return nil
+	}
+	return newWorldPages(store)
 }
 
 // keep adds the World pages among entries and returns the entries it did not
 // keep, which the caller stores: tombstones, blocks without a complete child
-// list, and pages past the length bound.
+// list, and pages past the length bound, which it tracks.
 func (w *worldPages) keep(entries []*block.PutBatchEntry) []*block.PutBatchEntry {
 	return w.set.keep(entries)
+}
+
+// pagesOf returns the kept pages the roots reach, which a publication naming
+// the roots must carry. It reads nothing from the store.
+func (w *worldPages) pagesOf(roots ...*block.BlockRef) []*block.PutBatchEntry {
+	// A nil view keeps nothing.
+	if w == nil {
+		return nil
+	}
+	w.set.mu.RLock()
+	defer w.set.mu.RUnlock()
+	var entries []*block.PutBatchEntry
+	for key := range w.set.reach(roots) {
+		if e := w.set.pages[key].entry; e != nil {
+			entries = append(entries, e)
+		}
+	}
+	return entries
+}
+
+// split separates the kept pages among entries, which a publication naming
+// their World carries, from the rest.
+func (w *worldPages) split(entries []*block.PutBatchEntry) (pages, rest []*block.PutBatchEntry) {
+	// A nil view keeps nothing.
+	if w == nil {
+		return nil, entries
+	}
+	for _, e := range entries {
+		if w.set.get(e.Ref) == e {
+			pages = append(pages, e)
+		} else {
+			rest = append(rest, e)
+		}
+	}
+	return pages, rest
+}
+
+// write runs fn on a buffer over the view and keeps the World pages it
+// writes, as a commit keeps its pages: they are stored with the first World
+// a checkpoint or stall base names that reaches them. A page past the bound,
+// or a block without its child list, is stored through the view.
+func (w *worldPages) write(ctx context.Context, fn func(block.StoreOps) error) error {
+	// Buffer fn's writes.
+	buf := block.NewBufferedStore(ctx, w)
+	if err := fn(buf); err != nil {
+		return err
+	}
+	batch, err := buf.TakePending(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Keep the pages and store the rest.
+	if rest := w.keep(batch.Entries); len(rest) != 0 {
+		_, err = w.PutBlockBatch(ctx, rest)
+	}
+	batch.Complete(err)
+	return err
+}
+
+// frontier returns the roots of the stored graph below roots: each root not
+// tracked, and each untracked child of a tracked page the roots reach. A copy
+// of the frontier holds every block of the roots' graphs the view does not.
+func (w *worldPages) frontier(roots []*block.BlockRef) []*block.BlockRef {
+	// Without a view, the store holds the whole graph.
+	if w == nil {
+		return roots
+	}
+
+	// Collect each untracked ref once.
+	w.set.mu.RLock()
+	defer w.set.mu.RUnlock()
+	seen := make(map[string]struct{})
+	var out []*block.BlockRef
+	add := func(refs []*block.BlockRef) {
+		for _, ref := range refs {
+			if ref.GetEmpty() {
+				continue
+			}
+			key := ref.MarshalString()
+			if _, ok := seen[key]; ok || w.set.pages[key] != nil {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, ref)
+		}
+	}
+	add(roots)
+	for key := range w.set.reach(roots) {
+		add(w.set.pages[key].refs)
+	}
+	return out
+}
+
+// full reports whether the kept pages reached half of either bound, when the
+// engine names the head World so the next pages fit.
+func (w *worldPages) full() bool {
+	w.set.mu.RLock()
+	defer w.set.mu.RUnlock()
+	return w.set.bytes >= worldPagesMaxBytes/2 || w.set.count >= worldPagesMaxCount/2
 }
 
 // stored drops the kept pages the roots reach once a durable write put them in
@@ -68,7 +190,7 @@ func (w *worldPages) keep(entries []*block.PutBatchEntry) []*block.PutBatchEntry
 func (w *worldPages) stored(ctx context.Context, roots []*block.BlockRef) error {
 	// Take the pages and the pins on them.
 	w.set.mu.Lock()
-	taken := make(map[string]*keptPage)
+	taken := make(map[string]*trackedPage)
 	var pins []*pagePin
 	var pinned []*block.BlockRef
 	for key := range w.set.reach(roots) {
@@ -194,8 +316,10 @@ func (w *worldPages) PinRoot(ctx context.Context, ref *block.BlockRef) (func(), 
 	pin := &pagePin{}
 	w.set.mu.Lock()
 	page := w.set.pages[key]
-	if page != nil {
+	if page != nil && page.entry != nil {
 		page.pins = append(page.pins, pin)
+	} else {
+		page = nil
 	}
 	w.set.mu.Unlock()
 	if page != nil {
@@ -207,13 +331,13 @@ func (w *worldPages) PinRoot(ctx context.Context, ref *block.BlockRef) (func(), 
 }
 
 // OpenStage opens a stage on the store. Reads see the kept pages; writes go
-// to the stage.
+// to the stage and are tracked like writes through the view.
 func (w *worldPages) OpenStage(ctx context.Context) (block.StoreOps, func(), error) {
 	stage, release, err := block.OpenStage(ctx, w.inner)
 	if err != nil {
 		return nil, nil, err
 	}
-	return block.NewStoreRW(&pageView{StoreOps: w.inner, set: w.set}, stage), release, nil
+	return block.NewStoreRW(&pageView{StoreOps: w.inner, set: w.set}, &pageView{StoreOps: stage, set: w.set}), release, nil
 }
 
 // ReleaseRoots drops the staging ownership of roots in the store.
@@ -222,15 +346,15 @@ func (w *worldPages) ReleaseRoots(ctx context.Context, refs []*block.BlockRef) e
 }
 
 // MarkRootsComplete records the completion proofs of the roots the store
-// holds. A kept root's graph is not stored, so it gets no proof.
+// holds. A tracked root's graph is not stored, so it gets no proof.
 func (w *worldPages) MarkRootsComplete(ctx context.Context, roots []*block.BlockRef) error {
 	return block.MarkRootsComplete(ctx, w.inner, w.set.unkept(roots))
 }
 
-// RootsComplete reports the completion proof of each root. A kept root has
-// none.
+// RootsComplete reports the completion proof of each root. A tracked root
+// has none.
 func (w *worldPages) RootsComplete(ctx context.Context, refs []*block.BlockRef) ([]bool, error) {
-	// Ask the store, then clear the proof of each kept root.
+	// Ask the store, then clear the proof of each tracked root.
 	complete, err := block.RootsComplete(ctx, w.inner, refs)
 	if err != nil {
 		return nil, err
@@ -335,6 +459,31 @@ func (v *pageView) GetBlockExistsBatch(ctx context.Context, refs []*block.BlockR
 	return out, nil
 }
 
+// PutBlock writes a block to the store and tracks it when its graph reaches a
+// kept page.
+func (v *pageView) PutBlock(ctx context.Context, data []byte, opts *block.PutOpts) (*block.BlockRef, bool, error) {
+	ref, existed, err := v.StoreOps.PutBlock(ctx, data, opts)
+	if err == nil && opts.GetRefsKnown() {
+		v.set.track(ref, opts.GetRefs())
+	}
+	return ref, existed, err
+}
+
+// PutBlockBatch writes blocks to the store and tracks each whose graph reaches
+// a kept page.
+func (v *pageView) PutBlockBatch(ctx context.Context, entries []*block.PutBatchEntry) ([]bool, error) {
+	existed, err := v.StoreOps.PutBlockBatch(ctx, entries)
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range entries {
+		if !e.Tombstone && e.RefsKnown {
+			v.set.track(e.Ref, e.Refs)
+		}
+	}
+	return existed, nil
+}
+
 // StatBlock reports a kept page or asks the store.
 func (v *pageView) StatBlock(ctx context.Context, ref *block.BlockRef) (*block.BlockStat, error) {
 	if e := v.set.get(ref); e != nil {
@@ -343,20 +492,25 @@ func (v *pageView) StatBlock(ctx context.Context, ref *block.BlockRef) (*block.B
 	return v.StoreOps.StatBlock(ctx, ref)
 }
 
-// pageSet holds kept World pages by reference.
+// pageSet holds the tracked World pages by reference: the kept pages, and the
+// stored pages whose graph reaches one.
 type pageSet struct {
 	// mu guards the fields below.
 	mu sync.RWMutex
-	// pages are the kept pages by marshaled reference.
-	pages map[string]*keptPage
-	// bytes is the length of the kept pages.
-	bytes int
+	// pages are the tracked pages by marshaled reference.
+	pages map[string]*trackedPage
+	// bytes and count are the length and number of the kept pages.
+	bytes, count int
 }
 
-// keptPage is a World page and the reader pins on it.
-type keptPage struct {
-	// entry is the page with its complete child list.
+// trackedPage is a tracked World page: a kept page with its data and the
+// reader pins on it, or a stored page with its child list.
+type trackedPage struct {
+	// entry is the kept page with its complete child list, or nil for a
+	// stored page.
 	entry *block.PutBatchEntry
+	// refs is the complete child list.
+	refs []*block.BlockRef
 	// pins are the reader pins taken while the page was kept.
 	pins []*pagePin
 }
@@ -370,14 +524,16 @@ type pagePin struct {
 	released bool
 }
 
-// keep adds the World pages among entries and returns the rest.
+// keep adds the World pages among entries and returns the rest. A page
+// already tracked is skipped: it is kept, or stored. A page past the bound is
+// returned and tracked, since the caller stores it.
 func (s *pageSet) keep(entries []*block.PutBatchEntry) []*block.PutBatchEntry {
 	// Add each page within the bound once.
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var rest []*block.PutBatchEntry
 	for _, e := range entries {
-		if e.Tombstone || !e.RefsKnown || s.bytes+len(e.Data) > worldPagesMaxBytes {
+		if e.Tombstone || !e.RefsKnown {
 			rest = append(rest, e)
 			continue
 		}
@@ -385,10 +541,41 @@ func (s *pageSet) keep(entries []*block.PutBatchEntry) []*block.PutBatchEntry {
 		if s.pages[key] != nil {
 			continue
 		}
-		s.pages[key] = &keptPage{entry: e}
+		if s.bytes+len(e.Data) > worldPagesMaxBytes || s.count >= worldPagesMaxCount {
+			rest = append(rest, e)
+			s.trackLocked(key, e.Refs)
+			continue
+		}
+		s.pages[key] = &trackedPage{entry: e, refs: e.Refs}
 		s.bytes += len(e.Data)
+		s.count++
 	}
 	return rest
+}
+
+// track records the child list of a page stored under ref when a child is
+// tracked. A stored page whose children are all untracked has its graph
+// stored, so it needs no record.
+func (s *pageSet) track(ref *block.BlockRef, refs []*block.BlockRef) {
+	// Check the children under the read lock first, since most writes reach
+	// no tracked page.
+	s.mu.RLock()
+	reaches := slices.ContainsFunc(refs, func(r *block.BlockRef) bool { return s.pages[r.MarshalString()] != nil })
+	s.mu.RUnlock()
+	if !reaches {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.trackLocked(ref.MarshalString(), refs)
+}
+
+// trackLocked records the stored page under key with its child list, unless
+// it is kept. Caller holds mu.
+func (s *pageSet) trackLocked(key string, refs []*block.BlockRef) {
+	if s.pages[key] == nil {
+		s.pages[key] = &trackedPage{refs: refs}
+	}
 }
 
 // get returns the kept page ref names, or nil.
@@ -401,7 +588,7 @@ func (s *pageSet) get(ref *block.BlockRef) *block.PutBatchEntry {
 	return nil
 }
 
-// reach returns the keys of the kept pages the roots reach through kept
+// reach returns the keys of the tracked pages the roots reach through tracked
 // pages. Caller holds mu.
 func (s *pageSet) reach(roots []*block.BlockRef) map[string]struct{} {
 	reached := make(map[string]struct{})
@@ -421,30 +608,38 @@ func (s *pageSet) reach(roots []*block.BlockRef) map[string]struct{} {
 			continue
 		}
 		reached[key] = struct{}{}
-		stack = append(stack, page.entry.Refs...)
+		stack = append(stack, page.refs...)
 	}
 	return reached
 }
 
-// remove drops the kept page under key. Caller holds mu.
+// remove drops the tracked page under key. Caller holds mu.
 func (s *pageSet) remove(key string) {
-	s.bytes -= len(s.pages[key].entry.Data)
+	if e := s.pages[key].entry; e != nil {
+		s.bytes -= len(e.Data)
+		s.count--
+	}
 	delete(s.pages, key)
 }
 
 // restore puts taken pages back with the pins still waiting on them, except a
-// page kept again since, whose waiting pins join the kept copy.
-func (s *pageSet) restore(taken map[string]*keptPage) {
+// page kept again since, whose waiting pins join the kept copy. A taken page
+// replaces a stored record written since, since it carries the data the pins
+// need.
+func (s *pageSet) restore(taken map[string]*trackedPage) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for key, page := range taken {
 		page.pins = slices.DeleteFunc(page.pins, func(p *pagePin) bool { return p.release != nil || p.released })
-		if cur := s.pages[key]; cur != nil {
+		if cur := s.pages[key]; cur != nil && (cur.entry != nil || page.entry == nil) {
 			cur.pins = append(cur.pins, page.pins...)
 			continue
 		}
 		s.pages[key] = page
-		s.bytes += len(page.entry.Data)
+		if page.entry != nil {
+			s.bytes += len(page.entry.Data)
+			s.count++
+		}
 	}
 }
 
@@ -466,7 +661,7 @@ func (s *pageSet) unpin(key string, pin *pagePin) {
 	}
 }
 
-// unkept returns the refs that name no kept page.
+// unkept returns the refs that name no tracked page.
 func (s *pageSet) unkept(refs []*block.BlockRef) []*block.BlockRef {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

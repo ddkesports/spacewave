@@ -234,6 +234,10 @@ type soEngine struct {
 	// the checkpoint routine has not taken, and stableWake wakes the routine.
 	stableNext atomic.Pointer[stableCheckpoint]
 	stableWake chan struct{}
+	// stableBusy is set with the page view from when a checkpoint names its
+	// World until the routine adopts or drops it, so one World is named at a
+	// time.
+	stableBusy atomic.Bool
 }
 
 // newSoEngine constructs the shared object engine. lifetime bounds the commits
@@ -731,15 +735,21 @@ func (e *soEngine) updateEngineState(ctx context.Context, state *InnerState) err
 		e.c.notifyWrite()
 	}
 
+	// Drop the kept pages no live World reaches.
+	if pages := e.replay.pages; pages != nil {
+		pages.sweep(e.replay.liveRoots(ref.GetRootRef()))
+	}
+
 	// Hold nothing while the pending publications hold the World.
 	if e.pending() {
 		return nil
 	}
 
 	// Hold a changed head once; an admitted write already holds its World.
+	// With pages the base hold names the Worlds a restart reads instead.
 	hold := newRootHold(e.so.GetBlockStore())
 	headChanged := !e.retained.EqualVT(ref)
-	if headChanged {
+	if headChanged && e.replay.pages == nil {
 		if err := hold.world(ctx, acceptedWorldRootName, ref.GetRootRef()); err != nil {
 			return err
 		}
@@ -752,7 +762,7 @@ func (e *soEngine) updateEngineState(ctx context.Context, state *InnerState) err
 			return err
 		}
 	}
-	if err := e.replay.holdSpan(hold); err != nil {
+	if err := e.replay.holdSpan(ctx, hold); err != nil {
 		return err
 	}
 	if err := e.applyHold(ctx, hold); err != nil {
@@ -785,14 +795,18 @@ func (e *soEngine) applyHold(ctx context.Context, hold *rootHold) error {
 		return e.holdThenSave(ctx, hold)
 	}
 
-	// Submit the held blocks and roots with the replay cursor.
+	// Submit the held blocks and roots with the replay cursor, splitting the
+	// kept pages a stall base names from the rest first: a receipt may store
+	// and drop them meanwhile.
 	cursor, err := e.replay.encodeCursor()
 	if err != nil {
 		return err
 	}
+	pages, save := e.replay.pages.split(hold.entries)
+	head := publisher.LocalStateHead(replayCursorStoreID, replayCursorKey, cursor)
 	receipt, err := store.SubmitAtomic(ctx, &block.AtomicPublication{
 		Entries: hold.entries,
-		Heads:   []*block.AtomicHeadUpdate{publisher.LocalStateHead(replayCursorStoreID, replayCursorKey, cursor)},
+		Heads:   []*block.AtomicHeadUpdate{countHead(head, WriteKindReplay)},
 		Roots:   hold.roots,
 	})
 	if errors.Is(err, block.ErrAtomicPublicationUnsupported) || errors.Is(err, block.ErrPublicationTooLarge) {
@@ -802,19 +816,37 @@ func (e *soEngine) applyHold(ctx context.Context, hold *rootHold) error {
 		return err
 	}
 
-	// Admit it; the caller records what it holds.
+	// Count and admit it; the caller records what it holds.
+	countPublication(nil, pages, save)
 	e.admit(receipt, e.retained)
 	go receipt.Release()
 	return nil
 }
 
 // holdThenSave applies hold, then saves the replay now that its World is
-// held.
+// held, and drops the kept pages the hold stored.
 func (e *soEngine) holdThenSave(ctx context.Context, hold *rootHold) error {
+	// Apply and save, noting the Worlds the hold names first.
+	named := e.replay.unheldRoots()
 	if err := hold.apply(ctx); err != nil {
 		return err
 	}
-	return e.replay.save(ctx)
+	if err := e.replay.save(ctx); err != nil {
+		return err
+	}
+	e.storedPages(ctx, named)
+	return nil
+}
+
+// storedPages drops the kept pages under named, the Worlds a durable save
+// just named, which the store now holds.
+func (e *soEngine) storedPages(ctx context.Context, named []*block.BlockRef) {
+	if len(named) == 0 {
+		return
+	}
+	if err := e.replay.pages.stored(ctx, named); err != nil {
+		e.c.le.WithError(err).Warn("unable to move reader pins to the stored World pages")
+	}
 }
 
 // acceptedWorldRootName names the local root that holds the installed World.

@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"testing"
 	"time"
 
@@ -18,15 +19,18 @@ import (
 // TestLocalWorldCommitCrash cuts the process at each point of a local World
 // commit and checks the World a restarted engine reads: before the physical
 // commit, after it with the replay save it defers, and after the next commit
-// carries that save. A restarted engine replays from its saved cursor, reads
-// every committed object and commits again.
+// carries that save, after a stall base stored a World the later commits keep
+// in memory, and right after the commit that starts a checkpoint, which may be
+// admitted without its receipt. A restarted engine replays from its saved
+// cursor to the head root it had before the cut, reads every committed object
+// and commits again.
 func TestLocalWorldCommitCrash(t *testing.T) {
 	const roleEnv = "SPACEWAVE_WORLD_COMMIT_CRASH_ROLE"
 	if role := os.Getenv(roleEnv); role != "" {
 		worldCommitCrashWorker(t, role, os.Getenv("SPACEWAVE_WORLD_COMMIT_CRASH_DIR"))
 		return
 	}
-	for _, cut := range []string{"before", "after", "derived"} {
+	for _, cut := range []string{"before", "after", "derived", "stall", "checkpoint"} {
 		t.Run(cut, func(t *testing.T) {
 			dir := t.TempDir()
 			for _, step := range []struct {
@@ -45,6 +49,10 @@ func TestLocalWorldCommitCrash(t *testing.T) {
 		})
 	}
 }
+
+// stallCommits is how many commits the stall cut makes: past the stall base,
+// with commits after it.
+const stallCommits = 40
 
 // worldCommitCrashWorker runs one step of the crash test on the s4db storage
 // under dir.
@@ -67,6 +75,7 @@ func worldCommitCrashWorker(t *testing.T, role, dir string) {
 		t.Fatal(err)
 	}
 	w := startLocalWorld(t, storage, soRef)
+	headPath := filepath.Join(dir, "head")
 
 	// Seed two committed objects and save the SharedObject.
 	switch role {
@@ -84,30 +93,64 @@ func worldCommitCrashWorker(t *testing.T, role, dir string) {
 
 	// Cut before the physical commit of crash/2.
 	case "before":
+		w.writeHead(t, headPath)
 		_ = w.newWrite(t, "crash/2")
 		os.Exit(74)
 
 	// Cut after it, with its replay save deferred.
 	case "after":
 		w.create(t, "crash/2")
+		w.writeHead(t, headPath)
 		os.Exit(74)
 
 	// Cut after crash/3 published the replay save of crash/2.
 	case "derived":
 		w.create(t, "crash/2")
 		w.create(t, "crash/3")
+		w.writeHead(t, headPath)
 		os.Exit(74)
+
+	// Cut after a stall base, with later commits kept in memory.
+	case "stall":
+		w.create(t, "crash/2")
+		for i := range stallCommits {
+			w.create(t, "stall/"+strconv.Itoa(i))
+		}
+		w.writeHead(t, headPath)
+		os.Exit(74)
+
+	// Cut right after the commit that reaches a checkpoint.
+	case "checkpoint":
+		w.create(t, "crash/2")
+		for i := range sobject.MinCheckpointOperations {
+			w.create(t, "stall/"+strconv.Itoa(i))
+		}
+		w.writeHead(t, headPath)
+		os.Exit(74)
+	}
+
+	// The restarted engine reaches the head it had before the cut.
+	data, err := os.ReadFile(headPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if head := engineHead(t.Context(), t, w.eng); head.MarshalString() != string(data) {
+		t.Fatalf("head root %s after restart, want %s", head.MarshalString(), data)
 	}
 
 	// Read the objects the cut committed, then commit again.
 	want := map[string][]string{
-		"verify-before":  {"crash/0", "crash/1"},
-		"verify-after":   {"crash/0", "crash/1", "crash/2"},
-		"verify-derived": {"crash/0", "crash/1", "crash/2", "crash/3"},
+		"verify-before":     {"crash/0", "crash/1"},
+		"verify-after":      {"crash/0", "crash/1", "crash/2"},
+		"verify-derived":    {"crash/0", "crash/1", "crash/2", "crash/3"},
+		"verify-stall":      {"crash/0", "crash/1", "crash/2"},
+		"verify-checkpoint": {"crash/0", "crash/1", "crash/2"},
 	}[role]
 	if want == nil {
 		t.Fatalf("unknown role %q", role)
 	}
+
+	// Read each crash object, which is found only when committed.
 	tx, err := w.eng.NewTransaction(t.Context(), false)
 	if err != nil {
 		t.Fatal(err)
@@ -128,6 +171,25 @@ func worldCommitCrashWorker(t *testing.T, role, dir string) {
 			t.Fatalf("%s: found = %v, want %v", key, found, committed)
 		}
 	}
+	stalls := map[string]int{"verify-stall": stallCommits, "verify-checkpoint": sobject.MinCheckpointOperations}[role]
+	if stalls != 0 {
+		for i := range stalls {
+			obj, found, err := tx.GetObject(t.Context(), "stall/"+strconv.Itoa(i))
+			world.ReleaseObjectState(obj)
+			if err != nil || !found {
+				t.Fatalf("stall/%d: found = %v, %v", i, found, err)
+			}
+		}
+	}
 	tx.Discard()
 	w.create(t, "crash/next")
+}
+
+// writeHead writes the engine's head root to path, for the step after a cut to
+// compare.
+func (w *localWorld) writeHead(t *testing.T, path string) {
+	head := engineHead(t.Context(), t, w.eng)
+	if err := os.WriteFile(path, []byte(head.MarshalString()), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }

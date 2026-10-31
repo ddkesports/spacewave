@@ -22,7 +22,7 @@ func TestGraphSettingsStepOpReplays(t *testing.T) {
 	ctx := context.Background()
 	pid := newProcessTestPeerID(t)
 	c, so, base := newProcessTestWorld(t, ctx)
-	w1, w2 := newReplayWorld(c, so, so.GetBlockStore()), newReplayWorld(c, so, so.GetBlockStore())
+	w1, w2 := newReplayWorld(c, so.GetBlockStore()), newReplayWorld(c, so.GetBlockStore())
 
 	// Create ten objects, each linked to every earlier one.
 	var ops []*SOWorldOp
@@ -98,7 +98,7 @@ func TestGraphSettingsStepOpRejects(t *testing.T) {
 	ctx := context.Background()
 	pid := newProcessTestPeerID(t)
 	c, so, headState := newProcessTestWorld(t, ctx)
-	w := newReplayWorld(c, so, so.GetBlockStore())
+	w := newReplayWorld(c, so.GetBlockStore())
 	defer w.close(ctx)
 
 	// Build a valid target and one with an index still building.

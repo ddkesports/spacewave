@@ -105,7 +105,7 @@ func TestProcessInitWorldOpWritesDisabledChangelogRoot(t *testing.T) {
 	nextState, res, err := c.processOp(
 		ctx,
 		tb.Logger,
-		newReplayWorld(c, &testSharedObject{blockStore: store}, store),
+		newReplayWorld(c, store),
 		opData,
 		"test-op",
 		pid,
@@ -159,7 +159,7 @@ func TestProcessOpAppliesOrdinaryTx(t *testing.T) {
 	}
 
 	// Process the transaction and check it produced a new head.
-	w := newReplayWorld(c, so, so.GetBlockStore())
+	w := newReplayWorld(c, so.GetBlockStore())
 	nextState, res, err := c.processOp(
 		ctx,
 		logrus.NewEntry(logrus.New()),
@@ -307,7 +307,7 @@ func TestProcessInitWorldOpWritesGraphSettingsRoot(t *testing.T) {
 		nextState, res, err := c.processOp(
 			ctx,
 			tb.Logger,
-			newReplayWorld(c, &testSharedObject{blockStore: store}, store),
+			newReplayWorld(c, store),
 			opData,
 			"test-op",
 			pid,

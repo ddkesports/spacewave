@@ -35,6 +35,11 @@ var replayCursorKey = []byte("cursor")
 // replayProgressInterval is how often a long replay logs its progress.
 const replayProgressInterval = 30 * time.Second
 
+// replayStallOperations is how many positions the saved replay may fall behind
+// the head before the engine names the head World, which bounds what a restart
+// replays while no checkpoint lands.
+const replayStallOperations = 32
+
 // replayOutcome is the deterministic outcome of one replayed operation.
 type replayOutcome struct {
 	// hash identifies the operation.
@@ -153,11 +158,31 @@ type replayer struct {
 	// baseUnheld is set while no durable save carried baseHold. Each save
 	// carries it with the replay that starts from base.
 	baseUnheld bool
+	// written is the number of positions the saved replay records when pages
+	// is set. baseHold names the World after them with base and the
+	// pendingWorlds, so each is readable from the store. A World below them
+	// may have lost kept pages to a sweep, so no replay resumes there.
+	written int
+	// baseHeight is the height of the checkpoint whose World is base.
+	baseHeight uint64
+	// baseRoots are the World roots baseHold names when pages is set.
+	baseRoots []*block.BlockRef
+	// pendingWorlds are the checkpoint Worlds named before their adoption,
+	// held until the checkpoint moves past the height each was prepared at.
+	pendingWorlds []pendingWorld
 	// served is set when positions are the replay of the World an engine
 	// serves. A replay that stops at an unavailable block then keeps that
 	// World and its positions when the stop would leave out an operation the
 	// World applied, instead of serving a World behind it.
 	served bool
+}
+
+// pendingWorld is a checkpoint World named before the checkpoint is adopted.
+type pendingWorld struct {
+	// root is the World's root.
+	root *block.BlockRef
+	// height is the checkpoint height the World was prepared above.
+	height uint64
 }
 
 // newReplayer constructs a replayer for the World of so.
@@ -225,26 +250,130 @@ func (r *replayer) rebase(ctx context.Context, snap sobject.SharedObjectStateSna
 		return errors.Wrap(err, "checkpoint World state")
 	}
 	if base.EqualVT(r.base) {
+		if r.prunePending(checkpoint.GetHeight()) {
+			return r.holdBase(ctx)
+		}
 		return nil
 	}
 
 	// Gather its hold for the next save, judge it against the replay and
 	// start from it.
-	hold := newRootHold(r.so.GetBlockStore())
-	if err := hold.world(ctx, replayBaseRootName, base.GetHeadRef().GetRootRef()); err != nil {
-		return err
+	if r.pages == nil {
+		hold := newRootHold(r.so.GetBlockStore())
+		if err := hold.world(ctx, replayBaseRootName, base.GetHeadRef().GetRootRef()); err != nil {
+			return err
+		}
+		r.baseHold, r.baseUnheld = hold, true
 	}
-	r.baseHold, r.baseUnheld = hold, true
 	if world, _, ok := r.coveredWorld(checkpoint); ok {
 		r.mismatch = nil
 		if !world.EqualVT(base) {
 			r.mismatch = &sobject.SOCheckpointMismatch{Height: checkpoint.GetHeight()}
 		}
 	}
-	r.base, r.positions = base, r.positionsAbove(base)
+
+	// Keep the positions above it, of which those written stay written.
+	positions := r.positionsAbove(base)
+	r.written = max(0, r.written-(len(r.positions)-len(positions)))
+	r.base, r.positions = base, positions
+	r.prunePending(checkpoint.GetHeight())
 	r.changed, r.deferred = true, false
 	r.span, r.spanLen = nil, 0
+
+	// Name the new base under the replay base root.
+	if r.pages == nil {
+		return nil
+	}
+	if err := r.holdBase(ctx); err != nil {
+		r.base, r.positions, r.written = nil, nil, 0
+		return err
+	}
 	return nil
+}
+
+// prunePending records height as the base checkpoint's and drops the pending
+// Worlds prepared below it, which the checkpoint at height adopted or passed.
+// It reports whether it dropped any.
+func (r *replayer) prunePending(height uint64) bool {
+	r.baseHeight = height
+	n := len(r.pendingWorlds)
+	r.pendingWorlds = slices.DeleteFunc(r.pendingWorlds, func(w pendingWorld) bool { return w.height < height })
+	return len(r.pendingWorlds) != n
+}
+
+// holdBase gathers baseHold for the next save when pages is set: it names
+// base, the World after the written positions and the pending Worlds under
+// the replay base root with every kept page they reach, and releases the
+// accepted World root, which only the engine without pages holds.
+func (r *replayer) holdBase(ctx context.Context) error {
+	// Name each distinct World once.
+	roots := []*block.BlockRef{r.base.GetHeadRef().GetRootRef()}
+	if r.written != 0 {
+		roots = append(roots, r.positions[r.written-1].state.GetHeadRef().GetRootRef())
+	}
+	for _, w := range r.pendingWorlds {
+		roots = append(roots, w.root)
+	}
+	var named []*block.BlockRef
+	seen := make(map[string]struct{}, len(roots))
+	for _, root := range roots {
+		key := root.MarshalString()
+		if _, ok := seen[key]; ok || root.GetEmpty() {
+			continue
+		}
+		seen[key] = struct{}{}
+		named = append(named, root)
+	}
+
+	// Gather them for the next save.
+	hold := newRootHold(r.pages)
+	hold.release(acceptedWorldRootName)
+	if err := hold.worlds(ctx, replayBaseRootName, r.pages, named); err != nil {
+		return err
+	}
+	r.baseHold, r.baseRoots, r.baseUnheld = hold, named, true
+	r.changed, r.deferred = true, false
+	return nil
+}
+
+// stallBase names the head World when the saved replay is
+// replayStallOperations positions behind it or the kept pages near their
+// bound, so a restart replays a bounded number of operations and the next
+// publication naming a World fits its kept pages.
+func (r *replayer) stallBase(ctx context.Context) error {
+	// Wait for enough positions or pages.
+	if r.pages == nil || r.written == len(r.positions) {
+		return nil
+	}
+	if len(r.positions)-r.written < replayStallOperations && !r.pages.full() {
+		return nil
+	}
+
+	// Record every position, whose last World is the head and readable.
+	written := r.written
+	r.written = len(r.positions)
+	if err := r.holdBase(ctx); err != nil {
+		r.written = written
+		return err
+	}
+	return nil
+}
+
+// readable reports whether the World after the first n positions stays
+// readable: without pages every World is stored, and with them only base and
+// the Worlds from the last written position on are kept or named.
+func (r *replayer) readable(n int) bool {
+	return r.pages == nil || n == 0 || n >= r.written
+}
+
+// liveRoots returns the roots of the Worlds whose pages the page view keeps:
+// the named Worlds, the readable positions and head.
+func (r *replayer) liveRoots(head *block.BlockRef) []*block.BlockRef {
+	live := slices.Clone(r.baseRoots)
+	for _, pos := range r.positions[max(r.written-1, 0):] {
+		live = append(live, pos.state.GetHeadRef().GetRootRef())
+	}
+	return append(live, head)
 }
 
 // positionsAbove returns the positions after the last one whose World is
@@ -375,6 +504,17 @@ func (r *replayer) load(ctx context.Context) error {
 	}
 	r.base, r.positions = base, positions
 	r.changed, r.deferred = false, false
+	if r.pages == nil {
+		return nil
+	}
+
+	// Name the base and the head of the saved replay, the Worlds it reads
+	// back, and drop it when either is not readable.
+	r.written = len(positions)
+	if err := r.holdBase(ctx); err != nil {
+		r.c.le.WithError(err).Warn("saved replay World is not readable, replaying from the checkpoint")
+		r.base, r.positions, r.written, r.changed = nil, nil, 0, false
+	}
 	return nil
 }
 
@@ -435,6 +575,15 @@ func (r *replayer) save(ctx context.Context) error {
 	return nil
 }
 
+// unheldRoots returns the Worlds the next save names that no durable save
+// named before, or nil.
+func (r *replayer) unheldRoots() []*block.BlockRef {
+	if r.pages == nil || !r.baseUnheld {
+		return nil
+	}
+	return r.baseRoots
+}
+
 // unsaved reports whether save would write the replay.
 func (r *replayer) unsaved() bool {
 	return r.changed && !r.deferred
@@ -443,8 +592,12 @@ func (r *replayer) unsaved() bool {
 // holdSpan adds to hold the World after every position and the payloads of
 // every position under ReplaySpanRootName when save will write the replay,
 // releasing those of positions a checkpoint now covers.
-func (r *replayer) holdSpan(hold *rootHold) error {
-	// Skip a saved or deferred replay.
+func (r *replayer) holdSpan(ctx context.Context, hold *rootHold) error {
+	// Name the head when the save falls too far behind it, then skip a saved
+	// or deferred replay.
+	if err := r.stallBase(ctx); err != nil {
+		return err
+	}
 	if !r.unsaved() {
 		return nil
 	}
@@ -479,8 +632,12 @@ func (r *replayer) holdSpan(hold *rootHold) error {
 // payloads of the published operation, which replay has not placed yet. It
 // returns no parts when the replay is saved and payloads is empty. Call saved
 // once the publication commits.
-func (r *replayer) pendingSave(publisher sobject.StatePublisher, payloads []*block.BlockRef) ([]*block.PutBatchEntry, []block.NamedRoot, *block.AtomicHeadUpdate, error) {
-	// Skip a saved replay with nothing more to hold.
+func (r *replayer) pendingSave(ctx context.Context, publisher sobject.StatePublisher, payloads []*block.BlockRef) ([]*block.PutBatchEntry, []block.NamedRoot, *block.AtomicHeadUpdate, error) {
+	// Name the head when the save falls too far behind it, then skip a saved
+	// replay with nothing more to hold.
+	if err := r.stallBase(ctx); err != nil {
+		return nil, nil, nil, err
+	}
 	if !r.changed && len(payloads) == 0 {
 		return nil, nil, nil, nil
 	}
@@ -541,9 +698,11 @@ func (r *replayer) saved() {
 // another checkpoint World holds nothing replay keeps, and only the failed
 // publications carried the hold of the current one.
 func (r *replayer) unsave(base *InnerState, span *block.BlockRef, spanLen int, baseUnheld bool) {
-	// Mark the replay unsaved from the last durable save.
+	// Mark the replay unsaved from the last durable save. With pages a failed
+	// save may have carried a later baseHold, so the current one is carried
+	// again.
 	r.changed, r.deferred = true, false
-	r.baseUnheld = baseUnheld || base != r.base
+	r.baseUnheld = baseUnheld || base != r.base || (r.pages != nil && r.baseHold != nil)
 	r.span, r.spanLen = span, spanLen
 	if base != r.base {
 		r.span, r.spanLen = nil, 0
@@ -553,6 +712,8 @@ func (r *replayer) unsave(base *InnerState, span *block.BlockRef, spanLen int, b
 
 // encodeSpan returns the span block holding the World after every position
 // and the payloads of every position followed by extra, with the span to name.
+// With pages it holds the payloads only: the base hold names the Worlds a
+// restart reads.
 // The block holds only the positions the saved span does not, and refers to
 // the saved span as Prev, so the chain holds every position. It returns no
 // block when the saved span holds everything, and no span when no World or
@@ -565,7 +726,7 @@ func (r *replayer) encodeSpan(extra []*block.BlockRef) (*block.PutBatchEntry, *b
 	for _, pos := range r.positions[from:] {
 		payloads = append(payloads, pos.outcome.payloads...)
 		world := pos.state.GetHeadRef().GetRootRef()
-		if world.GetEmpty() || (len(worlds) != 0 && worlds[len(worlds)-1].EqualsRef(world)) {
+		if r.pages != nil || world.GetEmpty() || (len(worlds) != 0 && worlds[len(worlds)-1].EqualsRef(world)) {
 			continue
 		}
 		worlds = append(worlds, world)
@@ -593,19 +754,27 @@ func (r *replayer) encodeSpan(extra []*block.BlockRef) (*block.PutBatchEntry, *b
 
 // encodeCursor returns the encoded base, outcomes and World after them. Each
 // outcome records the root of the World after it, and its retained roots when
-// they changed.
+// they changed. With pages it records the written positions, whose last World
+// the base hold names.
 func (r *replayer) encodeCursor() ([]byte, error) {
 	// Record the base and head.
-	base, head, _ := r.head()
+	n := len(r.positions)
+	if r.pages != nil {
+		n = r.written
+	}
+	head := r.base
+	if n != 0 {
+		head = r.positions[n-1].state
+	}
 	cursor := &ReplayCursor{
-		Base:     base,
+		Base:     r.base,
 		Head:     head,
-		Outcomes: make([]*ReplayCursorOutcome, len(r.positions)),
+		Outcomes: make([]*ReplayCursorOutcome, n),
 	}
 
 	// Record each outcome with its World.
-	roots := base.GetRetainedRoots()
-	for i, pos := range r.positions {
+	roots := r.base.GetRetainedRoots()
+	for i, pos := range r.positions[:n] {
 		outcome := &ReplayCursorOutcome{
 			Hash:     pos.outcome.hash,
 			Reason:   pos.outcome.reason,
@@ -644,7 +813,7 @@ func (r *replayer) replay(
 	fork *replayFork,
 ) (state *InnerState, outcomes []replayOutcome, err error) {
 	// Advance one World through the pass and fence its blocks at the end.
-	w := newReplayWorld(r.c, r.so, r.store())
+	w := newReplayWorld(r.c, r.store())
 	defer func() {
 		if cerr := w.close(ctx); cerr != nil {
 			state, outcomes, err = nil, nil, cerr
@@ -658,10 +827,13 @@ func (r *replayer) replay(
 	for n < len(order) && n < len(r.positions) && bytes.Equal(order[n], r.positions[n].outcome.hash) {
 		n++
 	}
+	if !r.readable(n) {
+		n = 0
+	}
 
 	// Remember the rest of a served replay, which a stop behind it restores.
 	var dropped []replayPosition
-	changed, deferred, span, spanLen := r.changed, r.deferred, r.span, r.spanLen
+	changed, deferred, span, spanLen, written := r.changed, r.deferred, r.span, r.spanLen, r.written
 	if r.served {
 		dropped = slices.Clone(r.positions[n:])
 	}
@@ -676,6 +848,7 @@ func (r *replayer) replay(
 	if n < r.spanLen {
 		r.span, r.spanLen = nil, 0
 	}
+	r.written = min(r.written, n)
 
 	// Replay the rest of the order from the World after the shared prefix.
 	state = r.base
@@ -715,7 +888,7 @@ func (r *replayer) replay(
 				if r.leavesOut(set, dropped, n) {
 					r.c.le.WithError(stopErr).Warn("replay stopped behind the served World, keeping the served World")
 					r.positions = append(r.positions[:n], dropped...)
-					r.changed, r.deferred, r.span, r.spanLen = changed, deferred, span, spanLen
+					r.changed, r.deferred, r.span, r.spanLen, r.written = changed, deferred, span, spanLen, written
 					return nil, nil, stopErr
 				}
 				r.c.le.WithError(stopErr).Warn("replay stopped at an operation it cannot place yet")

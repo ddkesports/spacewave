@@ -212,8 +212,10 @@ func TestLocalWorldCommitPhysicalCommits(t *testing.T) {
 }
 
 // TestCheckpointInstallPhysicalCommits checks that a checkpoint and its
-// install are two database commits: the SharedObject state, then the hold of
-// the checkpoint World, the replay span and the replay save together.
+// install are four database commits: the publication storing the checkpoint
+// World, the SharedObject state, the reader pin the engine took on a kept page
+// moving to the store, then the hold of the checkpoint World, the replay span
+// and the replay save together.
 func TestCheckpointInstallPhysicalCommits(t *testing.T) {
 	// Write one operation short of a checkpoint, the first with a payload, and
 	// let the engine settle.
@@ -241,9 +243,9 @@ func TestCheckpointInstallPhysicalCommits(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The checkpoint and its install commit twice.
-	if got := waitSeqIdle(t, w) - written; got != 2 {
-		t.Fatalf("checkpoint and install made %d physical commits, want 2", got)
+	// The checkpoint and its install commit four times.
+	if got := waitSeqIdle(t, w) - written; got != 4 {
+		t.Fatalf("checkpoint and install made %d physical commits, want 4", got)
 	}
 
 	// The metrics count every commit, each kind of byte, and the checkpoint.

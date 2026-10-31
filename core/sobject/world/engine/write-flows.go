@@ -2,6 +2,7 @@ package sobject_world_engine
 
 import (
 	"context"
+	"slices"
 	"sync/atomic"
 
 	"github.com/s4wave/spacewave/db/block"
@@ -91,18 +92,17 @@ func countSkip(s CheckpointSkip) {
 	writeFlows.skips[s].Add(1)
 }
 
-// countPublication counts a published commit whose block entries are batch,
-// splitting them into the payloads, which payloads and the batch blocks they
-// reach are, and the World pages, which the rest are, and its replay save
-// entries.
-func countPublication(batch, save []*block.PutBatchEntry, payloads []*block.BlockRef) {
+// splitPayloads splits a commit's block entries into the payload blocks,
+// which payloads and the batch blocks they reach are, and the World pages,
+// which the rest are, each in batch order.
+func splitPayloads(batch []*block.PutBatchEntry, payloads []*block.BlockRef) (payload, pages []*block.PutBatchEntry) {
 	// Index the batch, then walk it from the payload roots.
 	byRef := make(map[string]*block.PutBatchEntry, len(batch))
 	for _, e := range batch {
 		byRef[e.Ref.MarshalString()] = e
 	}
-	var payloadBytes uint64
-	stack := payloads
+	reached := make(map[*block.PutBatchEntry]struct{})
+	stack := slices.Clone(payloads)
 	for len(stack) != 0 {
 		ref := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
@@ -112,23 +112,37 @@ func countPublication(batch, save []*block.PutBatchEntry, payloads []*block.Bloc
 			continue
 		}
 		delete(byRef, key)
-		payloadBytes += uint64(len(e.Data))
+		reached[e] = struct{}{}
 		stack = append(stack, e.Refs...)
 	}
 
-	// The batch blocks no payload reaches are World pages.
-	var worldBytes uint64
-	for _, e := range byRef {
-		worldBytes += uint64(len(e.Data))
+	// Split in batch order.
+	for _, e := range batch {
+		if _, ok := reached[e]; ok {
+			payload = append(payload, e)
+		} else {
+			pages = append(pages, e)
+		}
 	}
-	var saveBytes uint64
-	for _, e := range save {
-		saveBytes += uint64(len(e.Data))
-	}
+	return payload, pages
+}
+
+// countPublication counts a published commit with its payload blocks, the
+// World pages it stored and its replay save entries.
+func countPublication(payload, pages, save []*block.PutBatchEntry) {
 	writeFlows.commits.Add(1)
-	writeFlows.bytes[WriteKindWorld].Add(worldBytes)
-	writeFlows.bytes[WriteKindPayload].Add(payloadBytes)
-	writeFlows.bytes[WriteKindReplay].Add(saveBytes)
+	writeFlows.bytes[WriteKindWorld].Add(entriesLen(pages))
+	writeFlows.bytes[WriteKindPayload].Add(entriesLen(payload))
+	writeFlows.bytes[WriteKindReplay].Add(entriesLen(save))
+}
+
+// entriesLen returns the length of the data of entries.
+func entriesLen(entries []*block.PutBatchEntry) uint64 {
+	var n uint64
+	for _, e := range entries {
+		n += uint64(len(e.Data))
+	}
+	return n
 }
 
 // countHead returns head with the length of each record it writes counted as

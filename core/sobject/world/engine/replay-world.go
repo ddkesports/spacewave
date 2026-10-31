@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/s4wave/spacewave/core/bstore"
-	"github.com/s4wave/spacewave/core/sobject"
 	"github.com/s4wave/spacewave/db/bucket"
 	trace "github.com/s4wave/spacewave/db/traceutil"
 	world_block "github.com/s4wave/spacewave/db/world/block"
@@ -21,8 +20,6 @@ import (
 type replayWorld struct {
 	// c builds the engine.
 	c *Controller
-	// so initializes the World.
-	so sobject.SharedObject
 	// store holds the World blocks: so's block store or the engine's view.
 	store bstore.BlockStore
 	// ws serves head, or is nil before the first bind.
@@ -31,9 +28,9 @@ type replayWorld struct {
 	head *bucket.ObjectRef
 }
 
-// newReplayWorld constructs a replay World of so over the blocks of store.
-func newReplayWorld(c *Controller, so sobject.SharedObject, store bstore.BlockStore) *replayWorld {
-	return &replayWorld{c: c, so: so, store: store}
+// newReplayWorld constructs a replay World over the blocks of store.
+func newReplayWorld(c *Controller, store bstore.BlockStore) *replayWorld {
+	return &replayWorld{c: c, store: store}
 }
 
 // bind returns the engine serving head. It rebuilds the engine when the pass

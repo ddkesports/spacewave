@@ -32,6 +32,9 @@ type writeAdmission struct {
 	retained *bucket.ObjectRef
 	// retainedRoots are the retained roots held before the publication.
 	retainedRoots []*RetainedRoot
+	// named are the Worlds the publication's base hold names whole, whose
+	// kept pages leave the page view once it succeeds.
+	named []*block.BlockRef
 }
 
 // admit records a publication admitted with receipt, then records its replay
@@ -47,6 +50,7 @@ func (e *soEngine) admit(receipt *block.PublicationReceipt, held *bucket.ObjectR
 		baseUnheld:    e.replay.baseUnheld,
 		retained:      e.retained,
 		retainedRoots: e.retainedRoots,
+		named:         e.replay.unheldRoots(),
 	})
 	e.retained = held
 	e.replay.saved()
@@ -78,9 +82,11 @@ func (e *soEngine) settle() {
 			return
 		}
 
-		// A successful receipt makes its publication durable.
+		// A successful receipt makes its publication durable, with the Worlds
+		// it named.
 		if adm.receipt.Err() == nil {
 			e.admissions = e.admissions[1:]
+			e.storedPages(e.lifetime, adm.named)
 			continue
 		}
 

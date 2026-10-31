@@ -59,6 +59,52 @@ func (h *rootHold) world(ctx context.Context, name string, root *block.BlockRef)
 	return nil
 }
 
+// worlds holds the World graphs under roots under name in one reference
+// block, or releases name when roots is empty. It carries every kept page the
+// roots reach, so the store then holds each graph whole, and stores each other
+// root block as world does.
+func (h *rootHold) worlds(ctx context.Context, name string, pages *worldPages, roots []*block.BlockRef) error {
+	// Gather nothing for a store without root ownership.
+	if h.skip {
+		return nil
+	}
+	if len(roots) == 0 {
+		h.release(name)
+		return nil
+	}
+
+	// Carry the kept pages, then the root blocks not among them.
+	entries := pages.pagesOf(roots...)
+	kept := make(map[string]struct{}, len(entries))
+	for _, e := range entries {
+		kept[e.Ref.MarshalString()] = struct{}{}
+	}
+	for _, root := range roots {
+		if _, ok := kept[root.MarshalString()]; ok {
+			continue
+		}
+		stored, err := h.store.GetStoredBlock(ctx, root)
+		if err != nil {
+			return err
+		}
+		if stored == nil {
+			return fmt.Errorf("replay hold root %s: %w", name, block.NotFoundError(root))
+		}
+		if !stored.RefsKnown {
+			return errors.Wrap(block.ErrRefsUnknown, root.MarshalString())
+		}
+		entries = append(entries, &block.PutBatchEntry{Ref: root, Data: stored.Data, Refs: stored.Refs, RefsKnown: true})
+	}
+	h.entries = append(h.entries, entries...)
+
+	// Name them from one block.
+	data, err := (&ReplaySpan{Worlds: roots}).MarshalVT()
+	if err != nil {
+		return err
+	}
+	return h.refBlock(name, data, roots)
+}
+
 // refBlock holds data as a block whose outgoing refs are refs under name, so
 // the store keeps every block refs reach.
 func (h *rootHold) refBlock(name string, data []byte, refs []*block.BlockRef) error {

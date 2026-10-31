@@ -176,7 +176,7 @@ func (e *soEngine) executeBackfill(ctx context.Context, _ bool) error {
 		e.c.writeBcast.HoldLock(func(_ func(), getWaitCh func() <-chan struct{}) {
 			waitCh = getWaitCh()
 		})
-		roots, seqno, err := e.backfillRoots(ctx)
+		head, roots, seqno, err := e.backfillRoots(ctx)
 		if err != nil {
 			return err
 		}
@@ -204,7 +204,7 @@ func (e *soEngine) executeBackfill(ctx context.Context, _ bool) error {
 		} else {
 			le.WithFields(fields).Debug("backfilled the World")
 		}
-		if err := e.publishBackfill(ctx, &BackfillState{Root: roots[0], Holes: holes, Seqno: seqno}); err != nil {
+		if err := e.publishBackfill(ctx, &BackfillState{Root: head, Holes: holes, Seqno: seqno}); err != nil {
 			return err
 		}
 
@@ -256,36 +256,36 @@ func (e *soEngine) publishBackfill(ctx context.Context, state *BackfillState) er
 	return nil
 }
 
-// backfillRoots returns the installed World root, then the retained roots, and
-// the World seqno of the installed root.
-func (e *soEngine) backfillRoots(ctx context.Context) ([]*block.BlockRef, uint64, error) {
+// backfillRoots returns the installed World root, the roots a copy of it and
+// the retained roots starts from, and the World seqno of the installed root.
+// The copy starts below the kept World pages, which this device holds in
+// memory until a checkpoint stores them.
+func (e *soEngine) backfillRoots(ctx context.Context) (*block.BlockRef, []*block.BlockRef, uint64, error) {
 	// Read them under the writer lock once the installed World is durable,
 	// since the copy reads only the store.
 	unlockWriteMtx, err := e.c.lockSettled(ctx, "backfill")
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, 0, err
 	}
 	defer unlockWriteMtx()
 	seqno, err := e.bengine.GetSeqno(ctx)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, 0, err
 	}
 
 	// Collect the head, then the retained roots.
-	roots := []*block.BlockRef{e.retained.GetRootRef()}
+	head := e.retained.GetRootRef()
+	roots := []*block.BlockRef{head}
 	for _, root := range e.retainedRoots {
 		roots = append(roots, root.GetRootRef())
 	}
-	return roots, seqno, nil
+	return head, e.replay.pages.frontier(roots), seqno, nil
 }
 
 // GetHead returns the installed World root and its seqno.
 func (e *soEngine) GetHead(ctx context.Context) (*block.BlockRef, uint64, error) {
-	roots, seqno, err := e.backfillRoots(ctx)
-	if err != nil {
-		return nil, 0, err
-	}
-	return roots[0], seqno, nil
+	head, _, seqno, err := e.backfillRoots(ctx)
+	return head, seqno, err
 }
 
 // _ is a type assertion
@@ -356,6 +356,7 @@ type ReplayFromReport struct {
 // missing, as long as the World at root has none missing. When the replay
 // fails, the replay keeps its former positions and nothing is installed.
 func (e *soEngine) ReplayFrom(ctx context.Context, root *block.BlockRef, apply bool) (*ReplayFromReport, error) {
+	// Hold the writer lock once the resolved receipts settle.
 	unlockWriteMtx, err := e.c.lockSettled(ctx, "replay-from")
 	if err != nil {
 		return nil, err

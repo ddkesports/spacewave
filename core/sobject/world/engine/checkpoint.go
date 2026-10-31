@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"slices"
+	"sync"
 
 	"github.com/aperturerobotics/controllerbus/bus"
 	"github.com/pkg/errors"
 	"github.com/s4wave/spacewave/core/sobject"
+	"github.com/s4wave/spacewave/db/block"
 	block_transform "github.com/s4wave/spacewave/db/block/transform"
 	"github.com/s4wave/spacewave/net/crypto"
 	"github.com/s4wave/spacewave/net/peer"
@@ -147,6 +149,75 @@ type stableCheckpoint struct {
 	host   sobject.StateHost
 	prefix [][]byte
 	data   []byte
+	// height is the height of the checkpoint it follows.
+	height uint64
+	// named resolves once the store holds the World whole, or is nil when it
+	// already does.
+	named *block.PublicationReceipt
+}
+
+// nameWorld names world, the World after the first n positions, under the
+// replay base root with every kept page it reaches, in a publication after the
+// admitted ones, so the store holds it whole before a checkpoint above height
+// adopts it. It returns the receipt that resolves once the store holds it, or
+// nil when it already does. ok is false when the World is not readable. The
+// receipt is only waited on. The caller holds the writer lock.
+func (e *soEngine) nameWorld(ctx context.Context, world *InnerState, n int, height uint64) (*block.PublicationReceipt, bool, error) {
+	// Without the page view every World is stored.
+	r := e.replay
+	if r.pages == nil {
+		return nil, true, nil
+	}
+	if !r.readable(n) {
+		return nil, false, nil
+	}
+
+	// A World a save carried is named once that save lands.
+	root := world.GetHeadRef().GetRootRef()
+	if !r.baseUnheld && slices.ContainsFunc(r.baseRoots, root.EqualsRef) {
+		return e.lastReceipt(), true, nil
+	}
+
+	// Gather it with the base hold and the replay save.
+	r.pendingWorlds = append(r.pendingWorlds, pendingWorld{root: root, height: height})
+	if err := r.holdBase(ctx); err != nil {
+		return nil, false, err
+	}
+
+	// Collect the pending save.
+	entries, roots, cursor, err := r.pendingSave(ctx, e.so.(sobject.StatePublisher), nil)
+	if err != nil {
+		return nil, false, err
+	}
+
+	// Publish it after the admitted publications, splitting the kept pages
+	// from the save first: a receipt may store and drop them meanwhile.
+	pages, save := r.pages.split(entries)
+	receipt, err := r.pages.SubmitAtomic(ctx, &block.AtomicPublication{
+		Entries: entries,
+		Heads:   []*block.AtomicHeadUpdate{countHead(cursor, WriteKindReplay)},
+		Roots:   roots,
+		After:   e.lastReceipt(),
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	countPublication(nil, pages, save)
+	e.admit(receipt, e.retained)
+	go receipt.Release()
+	return receipt, true, nil
+}
+
+// waitNamed waits for receipt, from nameWorld, and returns the publication's
+// error.
+func waitNamed(ctx context.Context, receipt *block.PublicationReceipt) error {
+	if receipt == nil {
+		return nil
+	}
+	if err := receipt.Wait(ctx); err != nil {
+		return err
+	}
+	return receipt.Err()
 }
 
 // queueStableCheckpoint prepares the checkpoint at the stable point and hands
@@ -182,7 +253,9 @@ func (e *soEngine) executeStableCheckpoints() {
 		if ckpt == nil {
 			continue
 		}
-		if err := e.adoptStable(e.lifetime, ckpt); err != nil && e.lifetime.Err() == nil {
+		err := e.adoptStable(e.lifetime, ckpt)
+		e.stableBusy.Store(false)
+		if err != nil && e.lifetime.Err() == nil {
 			e.c.le.WithError(err).Warn("failed to checkpoint the stable point")
 		}
 	}
@@ -237,33 +310,61 @@ func (e *soEngine) prepareStableCheckpoint(ctx context.Context, snap sobject.Sha
 		return nil, nil
 	}
 
-	// Skip while an admission waits for its receipt: the checkpoint writes
-	// the state directly, and the update after the last receipt settles
-	// checkpoints again.
-	if e.pending() {
+	// Skip while an earlier checkpoint is in flight. Without the page view
+	// skip while an admission waits for its receipt too: the checkpoint
+	// writes the state directly, naming a World only the pending publications
+	// hold, and the update after the last receipt settles checkpoints again.
+	// With it the checkpoint names its World in a publication after them.
+	if e.stableBusy.Load() || (e.replay.pages == nil && e.pending()) {
 		countSkip(CheckpointSkipPending)
 		return nil, nil
 	}
 
-	// Encode the World after the stable prefix.
+	// Find the World after the stable prefix.
 	world := e.replay.stateAfter(prefix)
 	if world == nil {
 		countSkip(CheckpointSkipUnplaced)
 		return nil, nil
 	}
+
+	// Name it for the checkpoint above the held one, then encode it.
+	held, err := snap.GetCheckpoint(ctx)
+	if err != nil {
+		return nil, err
+	}
+	named, ok, err := e.nameWorld(ctx, world, len(prefix), held.GetHeight())
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		countSkip(CheckpointSkipUnplaced)
+		return nil, nil
+	}
+
+	// Encode it, holding later checkpoints until this one is adopted.
 	data, err := world.MarshalVT()
 	if err != nil {
 		return nil, err
 	}
-	return &stableCheckpoint{host: host, prefix: prefix, data: data}, nil
+	if e.replay.pages != nil {
+		e.stableBusy.Store(true)
+	}
+	return &stableCheckpoint{host: host, prefix: prefix, data: data, height: held.GetHeight(), named: named}, nil
 }
 
-// adoptStable signs and adopts ckpt under the host lock, unless the held state
-// moved past its stable point. The host lock writes after any pending receipt,
-// on the durable state.
+// adoptStable signs and adopts ckpt under the host lock once the store holds
+// its World, unless the held state moved past its stable point or its
+// checkpoint. The host lock writes after any pending receipt, on the durable
+// state.
 func (e *soEngine) adoptStable(ctx context.Context, ckpt *stableCheckpoint) error {
+	// Wait for the store to hold the World.
+	if err := waitNamed(ctx, ckpt.named); err != nil {
+		return err
+	}
+
+	// Adopt it, counting a stale checkpoint as skipped.
 	err := ckpt.host.GetSOHost().UpdateSOState(ctx, func(state *sobject.SOState) error {
-		return e.adoptStableCheckpoint(ctx, ckpt.host, state, ckpt.prefix, ckpt.data)
+		return e.adoptStableCheckpoint(ctx, ckpt.host, state, ckpt.prefix, ckpt.data, ckpt.height)
 	})
 	if errors.Is(err, errStableCheckpointStale) {
 		countSkip(CheckpointSkipStale)
@@ -277,15 +378,25 @@ func (e *soEngine) adoptStable(ctx context.Context, ckpt *stableCheckpoint) erro
 
 // adoptStableCheckpoint signs, as host, the checkpoint covering prefix with the
 // World data after it, and adopts it into state. Returns
-// errStableCheckpointStale when prefix is no longer stable in state.
+// errStableCheckpointStale when state no longer holds the checkpoint at height
+// or prefix is no longer stable in it: the replay base hold names the World
+// only until the checkpoint moves past height.
 func (e *soEngine) adoptStableCheckpoint(
 	ctx context.Context,
 	host sobject.StateHost,
 	state *sobject.SOState,
 	prefix [][]byte,
 	data []byte,
+	height uint64,
 ) error {
-	// Check prefix is still stable.
+	// Check the held checkpoint is unchanged and prefix is still stable.
+	current, err := state.GetCheckpointInner()
+	if err != nil {
+		return err
+	}
+	if current.GetHeight() != height {
+		return errStableCheckpointStale
+	}
 	soID := e.so.GetSharedObjectID()
 	held, err := state.OperationSet(soID)
 	if err != nil {
@@ -336,10 +447,11 @@ func (e *soEngine) ProposeCheckpoint(ctx context.Context, state *sobject.SOState
 	if !ok {
 		return nil, nil
 	}
-	unlock, err := e.c.writeMtx.Lock(ctx, "propose-checkpoint")
+	unlockWriteMtx, err := e.c.writeMtx.Lock(ctx, "propose-checkpoint")
 	if err != nil {
 		return nil, err
 	}
+	unlock := sync.OnceFunc(unlockWriteMtx)
 	defer unlock()
 
 	// Find the stable prefix and the World after it.
@@ -357,6 +469,16 @@ func (e *soEngine) ProposeCheckpoint(ctx context.Context, state *sobject.SOState
 		return nil, nil
 	}
 
+	// Name the World for the checkpoint above the held one.
+	held, err := state.GetCheckpointInner()
+	if err != nil {
+		return nil, err
+	}
+	named, ok, err := e.nameWorld(ctx, world, len(prefix), held.GetHeight())
+	if err != nil || !ok {
+		return nil, err
+	}
+
 	// Encrypt the World into the checkpoint body.
 	data, err := world.MarshalVT()
 	if err != nil {
@@ -366,7 +488,17 @@ func (e *soEngine) ProposeCheckpoint(ctx context.Context, state *sobject.SOState
 	if err != nil {
 		return nil, err
 	}
-	return state.StableCheckpointInner(soID, prefix, dataEnc)
+	inner, err := state.StableCheckpointInner(soID, prefix, dataEnc)
+	if err != nil {
+		return nil, err
+	}
+
+	// Propose it once the store holds its World, without the write lock.
+	unlock()
+	if err := waitNamed(ctx, named); err != nil {
+		return nil, err
+	}
+	return inner, nil
 }
 
 // JudgeCheckpoint reports whether inner is the checkpoint after the one state

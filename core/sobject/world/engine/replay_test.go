@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"slices"
+	"strconv"
 	"testing"
 
 	"github.com/aperturerobotics/util/ccontainer"
@@ -571,7 +572,7 @@ func TestReplaySpanHoldsOnlyNewPositions(t *testing.T) {
 	save := func() (*ReplaySpan, *block.BlockRef) {
 		// Collect the pending save, which must name one new span block.
 		t.Helper()
-		entries, roots, _, err := r.pendingSave(replayTestPublisher{}, nil)
+		entries, roots, _, err := r.pendingSave(t.Context(), replayTestPublisher{}, nil)
 		if err != nil {
 			t.Fatal(err.Error())
 		}
@@ -686,7 +687,7 @@ func TestReplayCarriesBaseHoldUntilSaved(t *testing.T) {
 	// carries reports whether the pending save names the base root.
 	carries := func() bool {
 		t.Helper()
-		_, roots, _, err := r.pendingSave(replayTestPublisher{}, nil)
+		_, roots, _, err := r.pendingSave(t.Context(), replayTestPublisher{}, nil)
 		if err != nil {
 			t.Fatal(err.Error())
 		}
@@ -721,5 +722,49 @@ func TestReplayCarriesBaseHoldUntilSaved(t *testing.T) {
 	r.unsave(firstBase, firstSpan, firstLen, false)
 	if !carries() {
 		t.Fatal("failed publications did not restore the hold of the later checkpoint World")
+	}
+}
+
+// TestReplayStallBaseBoundsUnwrittenOperations writes 200 operations in a
+// Space whose other participant never checkpoints. With the page view, the
+// replay names a stall base at least every replayStallOperations operations,
+// so the positions a restart would replay stay under that bound.
+func TestReplayStallBaseBoundsUnwrittenOperations(t *testing.T) {
+	// A writes alone; B never acknowledges.
+	privA, pidA := newReplayTestKey(t)
+	_, pidB := newReplayTestKey(t)
+	space := newReplayTestSpace(t, pidA, pidB)
+	member := space.member(pidA, false)
+	r := member.replayer
+	r.pages = newWorldPages(space.so.blockStore)
+
+	// Each save, as a commit makes, leaves fewer than replayStallOperations
+	// positions above the last written one.
+	var prev *sobject.SOOperation
+	var bases int
+	for i := range 200 {
+		// Deliver the next operation.
+		link := &sobject.SOOperationLink{Nonce: uint64(i + 1)}
+		if prev != nil {
+			link.PrevOpHash = prev.Hash()
+		}
+		prev = space.sign("a"+strconv.Itoa(i), privA, "object-"+strconv.Itoa(i), link)
+		written := r.written
+		member.deliver(prev)
+
+		// Save the replay and check the bound.
+		if _, _, _, err := r.pendingSave(t.Context(), replayTestPublisher{}, nil); err != nil {
+			t.Fatal(err.Error())
+		}
+		r.saved()
+		if above := len(r.positions) - r.written; above >= replayStallOperations {
+			t.Fatalf("after %d operations, %d positions above the stall base", i+1, above)
+		}
+		if r.written != written {
+			bases++
+		}
+	}
+	if bases < 200/replayStallOperations {
+		t.Fatalf("%d stall bases over 200 operations", bases)
 	}
 }

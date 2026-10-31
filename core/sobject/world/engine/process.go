@@ -5,6 +5,7 @@ import (
 
 	"github.com/aperturerobotics/controllerbus/controller"
 	"github.com/pkg/errors"
+	"github.com/s4wave/spacewave/core/bstore"
 	"github.com/s4wave/spacewave/core/sobject"
 	"github.com/s4wave/spacewave/db/block"
 	block_transform "github.com/s4wave/spacewave/db/block/transform"
@@ -59,7 +60,7 @@ func (c *Controller) processOp(
 		return c.processInitWorldOp(
 			ctx,
 			ole,
-			w.so,
+			w.store,
 			body.InitWorld,
 			headState,
 			peerID,
@@ -149,7 +150,7 @@ func opPayloadRefs(ctx context.Context, lookupOp world.LookupOp, opData []byte) 
 func (c *Controller) processInitWorldOp(
 	ctx context.Context,
 	le *logrus.Entry,
-	so sobject.SharedObject,
+	store bstore.BlockStore,
 	initOp *InitWorldOp,
 	headState *InnerState,
 	peerID peer.ID,
@@ -169,7 +170,7 @@ func (c *Controller) processInitWorldOp(
 		le.WithError(err).Warn("rejecting world init op")
 		return nil, opRejection(peerID, nonce, "invalid world init: "+err.Error()), nil
 	}
-	if err := c.writeInitialWorldRoot(ctx, le, so, initOp, finalState.GetHeadRef()); err != nil {
+	if err := c.writeInitialWorldRoot(ctx, le, store, initOp, finalState.GetHeadRef()); err != nil {
 		return nil, nil, err
 	}
 	return finalState, sobject.BuildSOOperationResult(peerID.String(), nonce, true, nil), nil
@@ -195,12 +196,13 @@ func opRejection(peerID peer.ID, nonce uint64, msg string) *sobject.SOOperationR
 	)
 }
 
-// writeInitialWorldRoot persists an initial World when changelog initialization
-// is disabled or the graph starts with settings.
+// writeInitialWorldRoot writes an initial World to store when changelog
+// initialization is disabled or the graph starts with settings. A page view
+// keeps the root as a World page, as a commit keeps its pages.
 func (c *Controller) writeInitialWorldRoot(
 	ctx context.Context,
 	le *logrus.Entry,
-	so sobject.SharedObject,
+	store bstore.BlockStore,
 	initOp *InitWorldOp,
 	headRef *bucket.ObjectRef,
 ) error {
@@ -210,8 +212,8 @@ func (c *Controller) writeInitialWorldRoot(
 	if !initOp.GetLastChangeDisable() && len(settings.GetIndexes()) == 0 {
 		return nil
 	}
-	if so == nil {
-		return errors.New("shared object is required to write the initial world root")
+	if store == nil {
+		return errors.New("block store is required to write the initial world root")
 	}
 	if headRef.GetTransformConf().GetEmpty() {
 		return errors.New("initial world transform config is empty")
@@ -227,17 +229,21 @@ func (c *Controller) writeInitialWorldRoot(
 		return err
 	}
 
-	// Store the root holding the World's starting settings.
-	btx, bcs := block.NewTransaction(so.GetBlockStore(), xfrm, nil, nil)
-	root := world_block.NewWorld(initOp.GetLastChangeDisable())
-	root.GraphSettings = settings.CloneVT()
-	bcs.SetBlock(root, true)
-	rootRef, _, err := btx.Write(ctx, true)
-	if err != nil {
+	// Write the root holding the World's starting settings.
+	write := func(ops block.StoreOps) error {
+		// Build the root and write it.
+		btx, bcs := block.NewTransaction(ops, xfrm, nil, nil)
+		root := world_block.NewWorld(initOp.GetLastChangeDisable())
+		root.GraphSettings = settings.CloneVT()
+		bcs.SetBlock(root, true)
+		rootRef, _, err := btx.Write(ctx, true)
+		headRef.RootRef = rootRef
 		return err
 	}
-	headRef.RootRef = rootRef
-	return nil
+	if pages, ok := store.(*worldPages); ok {
+		return pages.write(ctx, write)
+	}
+	return write(store)
 }
 
 // processApplyTxOpWithEngine processes an ApplyTxOp operation with an existing engine.

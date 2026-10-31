@@ -27,7 +27,7 @@ func TestSetTransformConfMovesWorldToS2(t *testing.T) {
 	ctx := context.Background()
 	pid := newProcessTestPeerID(t)
 	c, so, headState := newProcessTestWorld(t, ctx)
-	w := newReplayWorld(c, so, so.GetBlockStore())
+	w := newReplayWorld(c, so.GetBlockStore())
 	headState = processTransformTestOp(t, c, w, pid, 1, headState, transformTestCreateOp(t, headState, "before"))
 
 	// Switch to s2.
