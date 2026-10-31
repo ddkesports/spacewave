@@ -27,8 +27,9 @@ type Admission interface {
 	// the seqno of that World with the error. The wait ends with the engine's
 	// lifetime, not with ctx: the outcome is then unknown.
 	WaitDurable(ctx context.Context) (uint64, error)
-	// Release releases the write. Call it once, after WaitDurable or to stop
-	// waiting for the result.
+	// Release releases the write. Call it once, after WaitDurable returns:
+	// it drops the write's hold on the World after it, which the durable head
+	// may not hold yet before then, so a sweep could free that World's blocks.
 	Release()
 }
 
