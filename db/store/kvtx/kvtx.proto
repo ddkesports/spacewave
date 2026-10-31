@@ -25,6 +25,12 @@ message Config {
   // as a Volume whose World engine stores every World, to save the graph
   // reads and writes they cost each put.
   bool disable_hold_counts = 5;
+  // UpgradeSharedCounts moves a Volume of store format 5 that already tracks
+  // blocks to format 6, which starts the walk that counts the holders of every
+  // stored block. Without it such a Volume stays at format 5 and keeps no
+  // shared counts; an empty Volume moves to format 6 either way. It conflicts
+  // with DisableHoldCounts, so setting both fails the Volume's open.
+  bool upgrade_shared_counts = 6;
 
   // reserved: 1 mqueue_config
 }

@@ -149,7 +149,8 @@ func (g *RefGraph) ResolveDeaths(ctx context.Context, from *block.BlockRef, dead
 // ChangeHolds adds each change to its block's shared count in one transaction,
 // deleting a count that reaches zero. A change that would take a count below
 // zero leaves it at zero; it returns how many did, since any means a holder
-// was never counted.
+// was never counted. It refuses with ErrSharingWalk while the counts are not
+// complete.
 func (g *RefGraph) ChangeHolds(ctx context.Context, changes map[string]int64) (int, error) {
 	// Sort the nonzero changes so the writes go in key order.
 	if len(changes) == 0 {
@@ -164,7 +165,17 @@ func (g *RefGraph) ChangeHolds(ctx context.Context, changes map[string]int64) (i
 	slices.Sort(nodes)
 	var underflows int
 	err := g.transaction(ctx, true, func(ctx context.Context, tx kvtx.Tx) error {
+		// Refuse unless the counts are complete.
 		underflows = 0
+		s, err := readSharingTx(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if !s.Phase.Counting() {
+			return ErrSharingWalk
+		}
+
+		// Change each count.
 		for _, node := range nodes {
 			if !isBlockNode(node) {
 				return errors.Errorf("hold on %q, which is not a block", node)

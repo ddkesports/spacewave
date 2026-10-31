@@ -145,7 +145,7 @@ func testUpgradeCayleyRefGraph(t *testing.T, store db_kvtx.Store) {
 	ctx := context.Background()
 	keys := store_kvkey.NewDefaultKVKey()
 	writeCayleyStore(t, store, keys)
-	if err := upgradeFormat(ctx, store, keys); err != nil {
+	if _, err := upgradeFormat(ctx, store, keys, false); err != nil {
 		t.Fatal(err)
 	}
 	checkConvertedRefGraph(t, store)
@@ -159,7 +159,7 @@ func TestUpgradeLegacyRefGraph(t *testing.T) {
 	store := store_kvtx_inmem.NewStore()
 	keys := store_kvkey.NewDefaultKVKey()
 	writeLegacyStore(t, store, keys)
-	if err := upgradeFormat(ctx, store, keys); err != nil {
+	if _, err := upgradeFormat(ctx, store, keys, false); err != nil {
 		t.Fatal(err)
 	}
 	checkLegacyRefGraph(t, store)
@@ -328,7 +328,7 @@ func TestUpgradeChildLists(t *testing.T) {
 	writeFormat3Graph(t, store, keys, edges)
 
 	// Upgrade it.
-	if err := upgradeFormat(ctx, store, keys); err != nil {
+	if _, err := upgradeFormat(ctx, store, keys, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -789,6 +789,12 @@ func testCopyReachable(t *testing.T, src, dst db_kvtx.Store) {
 	last.Bytes, last.DroppedBytes = 0, 0
 	if last != want {
 		t.Fatalf("progress %+v, want %+v", last, want)
+	}
+
+	// The copy begins the destination's sharing walk, so its counts start
+	// stale and the first block pass builds them.
+	if s, err := OpenRefGraph(dst).GetSharing(ctx); err != nil || !s.Phase.Walking() {
+		t.Fatalf("destination sharing phase %c err %v, want walking", s.Phase, err)
 	}
 
 	// The destination holds the reachable blocks and edges and the other key.

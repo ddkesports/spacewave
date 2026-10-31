@@ -41,6 +41,14 @@ export interface Config {
    * reads and writes they cost each put.
    */
   disableHoldCounts?: boolean
+  /**
+   * UpgradeSharedCounts moves a Volume of store format 5 that already tracks
+   * blocks to format 6, which starts the walk that counts the holders of every
+   * stored block. Without it such a Volume stays at format 5 and keeps no
+   * shared counts; an empty Volume moves to format 6 either way. It conflicts
+   * with DisableHoldCounts, so setting both fails the Volume's open.
+   */
+  upgradeSharedCounts?: boolean
 }
 
 export const Config: MessageType<Config> =
@@ -49,4 +57,5 @@ export const Config: MessageType<Config> =
     [3, 'disable_hash_get', 8],
     [4, 'gc_mark_walk', 8],
     [5, 'disable_hold_counts', 8],
+    [6, 'upgrade_shared_counts', 8],
   ])

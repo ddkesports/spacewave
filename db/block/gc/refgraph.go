@@ -43,6 +43,12 @@ const (
 	kindPass byte = 'p'
 	// kindRoot keys the registered roots.
 	kindRoot byte = 'r'
+	// kindSeen keys the seen record of a block the sharing walk sighted
+	// once, as WalkSharing describes.
+	kindSeen byte = 's'
+	// kindSharing is the one record of the sharing walk's state, as
+	// WalkSharing describes.
+	kindSharing byte = 'w'
 	// kindYoungReady is the one record that reports the young log complete,
 	// as YoungReady describes.
 	kindYoungReady byte = 'm'
@@ -75,6 +81,8 @@ const (
 type RefGraph struct {
 	// store holds the graph records.
 	store kvtx.Store
+	// holders answers the sharing walk's questions about blocks, may be nil.
+	holders HolderSource
 }
 
 // NewRefGraph constructs a reference graph over store.
@@ -244,10 +252,12 @@ func (g *RefGraph) applyRefBatchTx(ctx context.Context, tx kvtx.Tx, adds, remove
 		return err
 	}
 
-	// Add every edge first, so an edge in both lists ends removed. The child
-	// edges of each block merge into its list in one write.
+	// Add every edge first, so an edge in both lists ends removed. Gather the
+	// child edges of each block, which merge into its list in one write, and
+	// note the owner edges written, which the sharing walk may sight.
 	children := make(map[string][]string)
 	var adopted []string
+	var owned []RefEdge
 	for _, edge := range adds {
 		if isBlockNode(edge.Object) {
 			adopted = append(adopted, edge.Object)
@@ -260,21 +270,39 @@ func (g *RefGraph) applyRefBatchTx(ctx context.Context, tx kvtx.Tx, adds, remove
 			children[parent] = list
 			continue
 		}
-		if err := addRefTx(ctx, tx, edge.Subject, edge.Object); err != nil {
+		wrote, err := addRefTx(ctx, tx, edge.Subject, edge.Object)
+		if err != nil {
 			return err
 		}
+		if wrote {
+			owned = append(owned, edge)
+		}
 	}
+
+	// Merge each block's children into its list, noting the lists created or
+	// changed for the young log and the children added for the sharing walk.
 	var young youngRecord
+	listed := make(map[string][]string, len(children))
 	for _, parent := range slices.Sorted(maps.Keys(children)) {
-		created, changed, err := addChildrenTx(ctx, tx, parent, children[parent])
+		added, created, err := addChildrenTx(ctx, tx, parent, children[parent])
 		if err != nil {
 			return err
 		}
 		switch {
 		case created:
 			young.created = append(young.created, parent)
-		case changed:
+		case len(added) != 0:
 			young.changed = append(young.changed, parent)
+		}
+		if len(added) != 0 {
+			listed[parent] = added
+		}
+	}
+
+	// Sight the new holders, then log the adopted and young blocks.
+	if len(listed) != 0 || len(owned) != 0 {
+		if err := g.sightWritesTx(ctx, tx, listed, owned); err != nil {
+			return err
 		}
 	}
 	if err := logAdoptedTx(ctx, tx, adopted); err != nil {
@@ -312,7 +340,7 @@ func (g *RefGraph) applyRefBatchTx(ctx context.Context, tx kvtx.Tx, adds, remove
 			return err
 		}
 		if !owned {
-			if err := addRefTx(ctx, tx, NodeUnreferenced, object); err != nil {
+			if _, err := addRefTx(ctx, tx, NodeUnreferenced, object); err != nil {
 				return err
 			}
 		}
@@ -349,20 +377,20 @@ func edgeKey(edge RefEdge) []byte {
 }
 
 // addRefTx adds both directions of an edge that is not a child edge unless
-// the exact forward edge already exists.
-func addRefTx(ctx context.Context, tx kvtx.Tx, subject, object string) error {
+// the exact forward edge already exists, and reports whether it wrote them.
+func addRefTx(ctx context.Context, tx kvtx.Tx, subject, object string) (bool, error) {
 	// Skip the edge when its exact forward record already exists.
 	forward := graphKey(kindForward, subject, object)
 	exists, err := tx.Exists(ctx, forward)
 	if err != nil || exists {
-		return err
+		return false, err
 	}
 
 	// Write the two edge directions.
 	if err := tx.Set(ctx, forward, nil); err != nil {
-		return err
+		return false, err
 	}
-	return tx.Set(ctx, graphKey(kindIncoming, object, subject), nil)
+	return true, tx.Set(ctx, graphKey(kindIncoming, object, subject), nil)
 }
 
 // removeRefTx removes an exact edge and reports whether it existed. A child

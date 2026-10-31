@@ -37,6 +37,12 @@ type Config struct {
 	// as a Volume whose World engine stores every World, to save the graph
 	// reads and writes they cost each put.
 	DisableHoldCounts bool `protobuf:"varint,5,opt,name=disable_hold_counts,json=disableHoldCounts,proto3" json:"disableHoldCounts,omitempty"`
+	// UpgradeSharedCounts moves a Volume of store format 5 that already tracks
+	// blocks to format 6, which starts the walk that counts the holders of every
+	// stored block. Without it such a Volume stays at format 5 and keeps no
+	// shared counts; an empty Volume moves to format 6 either way. It conflicts
+	// with DisableHoldCounts, so setting both fails the Volume's open.
+	UpgradeSharedCounts bool `protobuf:"varint,6,opt,name=upgrade_shared_counts,json=upgradeSharedCounts,proto3" json:"upgradeSharedCounts,omitempty"`
 }
 
 func (x *Config) Reset() {
@@ -73,6 +79,13 @@ func (x *Config) GetDisableHoldCounts() bool {
 	return false
 }
 
+func (x *Config) GetUpgradeSharedCounts() bool {
+	if x != nil {
+		return x.UpgradeSharedCounts
+	}
+	return false
+}
+
 func (m *Config) CloneVT() *Config {
 	if m == nil {
 		return (*Config)(nil)
@@ -82,6 +95,7 @@ func (m *Config) CloneVT() *Config {
 	r.DisableHashGet = m.DisableHashGet
 	r.GcMarkWalk = m.GcMarkWalk
 	r.DisableHoldCounts = m.DisableHoldCounts
+	r.UpgradeSharedCounts = m.UpgradeSharedCounts
 	if len(m.unknownFields) > 0 {
 		r.unknownFields = slices.Clone(m.unknownFields)
 	}
@@ -108,6 +122,9 @@ func (this *Config) EqualVT(that *Config) bool {
 		return false
 	}
 	if this.DisableHoldCounts != that.DisableHoldCounts {
+		return false
+	}
+	if this.UpgradeSharedCounts != that.UpgradeSharedCounts {
 		return false
 	}
 	return string(this.unknownFields) == string(that.unknownFields)
@@ -149,6 +166,11 @@ func (x *Config) MarshalProtoJSON(s *json.MarshalState) {
 		s.WriteObjectField("disableHoldCounts")
 		s.WriteBool(x.DisableHoldCounts)
 	}
+	if x.UpgradeSharedCounts || s.HasField("upgradeSharedCounts") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("upgradeSharedCounts")
+		s.WriteBool(x.UpgradeSharedCounts)
+	}
 	s.WriteObjectEnd()
 }
 
@@ -178,6 +200,9 @@ func (x *Config) UnmarshalProtoJSON(s *json.UnmarshalState) {
 		case "disable_hold_counts", "disableHoldCounts":
 			s.AddField("disable_hold_counts")
 			x.DisableHoldCounts = s.ReadBool()
+		case "upgrade_shared_counts", "upgradeSharedCounts":
+			s.AddField("upgrade_shared_counts")
+			x.UpgradeSharedCounts = s.ReadBool()
 		}
 	})
 }
@@ -216,6 +241,11 @@ func (m *Config) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	if m.unknownFields != nil {
 		i = protobuf_go_lite.EncodeRawBytes(dAtA, i, m.unknownFields)
 	}
+	if m.UpgradeSharedCounts {
+		i = protobuf_go_lite.EncodeBool(dAtA, i, m.UpgradeSharedCounts)
+		i--
+		dAtA[i] = 0x30
+	}
 	if m.DisableHoldCounts {
 		i = protobuf_go_lite.EncodeBool(dAtA, i, m.DisableHoldCounts)
 		i--
@@ -249,6 +279,7 @@ func (m *Config) SizeVT() (n int) {
 	n += protobuf_go_lite.SizeBoolNonZero(1, m.DisableHashGet)
 	n += protobuf_go_lite.SizeBoolNonZero(1, m.GcMarkWalk)
 	n += protobuf_go_lite.SizeBoolNonZero(1, m.DisableHoldCounts)
+	n += protobuf_go_lite.SizeBoolNonZero(1, m.UpgradeSharedCounts)
 	n += len(m.unknownFields)
 	return n
 }
@@ -271,6 +302,10 @@ func (x *Config) MarshalProtoText() string {
 	if x.DisableHoldCounts != false {
 		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "disable_hold_counts")
 		protobuf_go_lite.TextWriteBool(&sb, x.DisableHoldCounts)
+	}
+	if x.UpgradeSharedCounts != false {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "upgrade_shared_counts")
+		protobuf_go_lite.TextWriteBool(&sb, x.UpgradeSharedCounts)
 	}
 	return protobuf_go_lite.TextFinishMessage(&sb)
 }
@@ -340,6 +375,16 @@ func (m *Config) UnmarshalVT(dAtA []byte) error {
 				return err
 			}
 			m.DisableHoldCounts = bool(v)
+		case 6:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field UpgradeSharedCounts", wireType)
+			}
+			var v bool
+			v, iNdEx, err = protobuf_go_lite.DecodeVarintBool(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			m.UpgradeSharedCounts = bool(v)
 		default:
 			iNdEx = preIndex
 			skippy, err := protobuf_go_lite.Skip(dAtA[iNdEx:])

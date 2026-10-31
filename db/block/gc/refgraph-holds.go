@@ -10,12 +10,17 @@ import (
 
 // AddHolds adds one shared count to each block in blocks, once per entry, in
 // one transaction. A block's shared count is its holders minus one: a holder
-// is a page or root that names it.
+// is a page or root that names it. It adds nothing while the counts are not
+// complete, since the sharing walk counts the same holders from the graph.
 func (g *RefGraph) AddHolds(ctx context.Context, blocks []string) error {
 	if len(blocks) == 0 {
 		return nil
 	}
 	return g.transaction(ctx, true, func(ctx context.Context, tx kvtx.Tx) error {
+		s, err := readSharingTx(ctx, tx)
+		if err != nil || !s.Phase.Counting() {
+			return err
+		}
 		for _, block := range blocks {
 			if !isBlockNode(block) {
 				return errors.Errorf("hold on %q, which is not a block", block)

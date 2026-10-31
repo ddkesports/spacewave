@@ -25,8 +25,9 @@ const deadlistSampleSize = 8
 // writes the shared count changes it makes and deletes nothing; a page it
 // would free that the mark reached is a deadlist error, counted and logged.
 // Each applied record's name is released, so a later pass sweeps it. A record
-// the store no longer holds is released unapplied; one that fails to read or
-// apply stays for the next pass.
+// the store no longer holds, or that a Volume keeping no shared counts cannot
+// check, is released unapplied; one that fails to read or apply, such as
+// while the sharing walk builds the counts, stays for the next pass.
 func (v *Volume) checkDueDeadlists(ctx context.Context, mark *block_gc.BlockMark) error {
 	// Gather the due records in name order, which is sequence order.
 	type due struct {
@@ -50,8 +51,14 @@ func (v *Volume) checkDueDeadlists(ctx context.Context, mark *block_gc.BlockMark
 	// Apply each record in turn.
 	for _, rec := range records {
 		// Read it and apply it.
-		first, dead, err := block.ReadDeadlist(ctx, v, rec.ref)
+		var first *block.Deadlist
+		var dead *block.Replacements
+		var err error
+		if v.holdCounts {
+			first, dead, err = block.ReadDeadlist(ctx, v, rec.ref)
+		}
 		switch {
+		case !v.holdCounts:
 		case errors.Is(err, block.ErrNotFound):
 			if le := v.logDeadlist(rec.bucketID, rec.name); le != nil {
 				le.Warn("due deadlist record is missing, releasing it unapplied")
