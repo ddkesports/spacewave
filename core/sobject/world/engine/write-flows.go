@@ -62,6 +62,12 @@ type WriteFlows struct {
 	Checkpoints uint64
 	// Skips is the number of due checkpoints skipped, by CheckpointSkip.
 	Skips [checkpointSkipCount]uint64
+	// Deaths is the number of pages and subtree roots the named Worlds'
+	// composed intervals reported dead.
+	Deaths uint64
+	// DeathForfeits is the number of named Worlds whose interval was
+	// forfeited and leaks.
+	DeathForfeits uint64
 }
 
 // writeFlows holds the process's counters.
@@ -70,6 +76,8 @@ var writeFlows struct {
 	bytes       [writeKindCount]atomic.Uint64
 	checkpoints atomic.Uint64
 	skips       [checkpointSkipCount]atomic.Uint64
+	deaths      atomic.Uint64
+	forfeits    atomic.Uint64
 }
 
 // GetWriteFlows returns the process's counters as of now.
@@ -84,12 +92,24 @@ func GetWriteFlows() WriteFlows {
 	for s := range f.Skips {
 		f.Skips[s] = writeFlows.skips[s].Load()
 	}
+	f.Deaths = writeFlows.deaths.Load()
+	f.DeathForfeits = writeFlows.forfeits.Load()
 	return f
 }
 
 // countSkip counts a due checkpoint skipped for reason s.
 func countSkip(s CheckpointSkip) {
 	writeFlows.skips[s].Add(1)
+}
+
+// countDeaths counts a named World's composed interval, or its forfeit when
+// ok is false.
+func countDeaths(dead *block.Replacements, ok bool) {
+	if !ok {
+		writeFlows.forfeits.Add(1)
+		return
+	}
+	writeFlows.deaths.Add(uint64(len(dead.Replaced) + len(dead.Removed)))
 }
 
 // splitPayloads splits a commit's block entries into the payload blocks,

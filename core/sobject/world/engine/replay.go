@@ -13,6 +13,7 @@ import (
 	"github.com/s4wave/spacewave/db/kvtx"
 	trace "github.com/s4wave/spacewave/db/traceutil"
 	"github.com/s4wave/spacewave/db/world"
+	world_block "github.com/s4wave/spacewave/db/world/block"
 )
 
 // replayBaseRootName names the local root that holds the checkpoint's World,
@@ -167,6 +168,9 @@ type replayer struct {
 	baseHeight uint64
 	// baseRoots are the World roots baseHold names when pages is set.
 	baseRoots []*block.BlockRef
+	// deaths gathers the World transitions the engine's block engines commit,
+	// or is nil before the engine starts.
+	deaths *worldDeaths
 	// pendingWorlds are the checkpoint Worlds named before their adoption,
 	// held until the checkpoint moves past the height each was prepared at.
 	pendingWorlds []pendingWorld
@@ -814,6 +818,7 @@ func (r *replayer) replay(
 ) (state *InnerState, outcomes []replayOutcome, err error) {
 	// Advance one World through the pass and fence its blocks at the end.
 	w := newReplayWorld(r.c, r.store())
+	w.opts = r.transitions()
 	defer func() {
 		if cerr := w.close(ctx); cerr != nil {
 			state, outcomes, err = nil, nil, cerr
@@ -946,6 +951,25 @@ func (r *replayer) leavesOut(set *sobject.SOOperationSet, dropped []replayPositi
 		}
 	}
 	return false
+}
+
+// transitions returns the engine options that hand each World commit's
+// transition to deaths, or none before the engine starts.
+func (r *replayer) transitions() []world_block.EngineOption {
+	if r.deaths == nil {
+		return nil
+	}
+	return []world_block.EngineOption{world_block.WithTransitions(r.deaths.add)}
+}
+
+// composeDeaths composes what died from the last named World to the World at
+// root and counts it. A forfeited interval leaks.
+func (r *replayer) composeDeaths(root *block.BlockRef) {
+	if r.deaths == nil {
+		return
+	}
+	dead, ok := r.deaths.take(root)
+	countDeaths(dead, ok)
 }
 
 // worldLost reports whether the root block of the World state is missing from

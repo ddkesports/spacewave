@@ -43,12 +43,15 @@ func startGatedWorld(t *testing.T, dir string, soRef *sobject.SharedObjectRef) (
 	}
 	t.Cleanup(soMountRef.Release)
 
-	// Build the World engine over the local SharedObject.
+	// Build the World engine over the local SharedObject, starting without a
+	// change log as a Space World does.
 	local, ok := so.(*provider_local.SharedObject)
 	if !ok {
 		t.Fatalf("SharedObject is %T, not a local SharedObject", so)
 	}
-	ctrl, err := sobject_world_engine.NewController(tb.Logger, tb.Bus, sobject_world_engine.NewConfig("gated-world-engine", soRef), transform_all.BuildFactorySet())
+	conf := sobject_world_engine.NewConfig("gated-world-engine", soRef)
+	conf.InitWorldOp = &sobject_world_engine.InitWorldOp{LastChangeDisable: true}
+	ctrl, err := sobject_world_engine.NewController(tb.Logger, tb.Bus, conf, transform_all.BuildFactorySet())
 	if err != nil {
 		t.Fatal(err)
 	}

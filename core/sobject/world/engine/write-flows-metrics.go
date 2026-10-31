@@ -26,6 +26,16 @@ var (
 		"Due stable checkpoints the World engines skipped, by reason, since the process started.",
 		[]string{"reason"}, nil,
 	)
+	worldDeathsDesc = prometheus.NewDesc(
+		"spacewave_world_deaths_total",
+		"Pages and subtree roots the named Worlds' composed intervals reported dead, since the process started.",
+		nil, nil,
+	)
+	worldDeathForfeitsDesc = prometheus.NewDesc(
+		"spacewave_world_death_forfeits_total",
+		"Named Worlds whose interval of deaths was forfeited and leaks, since the process started.",
+		nil, nil,
+	)
 )
 
 // writeFlowsCollector reports GetWriteFlows.
@@ -33,10 +43,13 @@ type writeFlowsCollector struct{}
 
 // Describe sends the World write metric descriptors.
 func (writeFlowsCollector) Describe(ch chan<- *prometheus.Desc) {
+	// Send the write, checkpoint and death descriptors.
 	ch <- worldCommitsDesc
 	ch <- worldCommitBytesDesc
 	ch <- worldCheckpointsDesc
 	ch <- worldCheckpointSkipsDesc
+	ch <- worldDeathsDesc
+	ch <- worldDeathForfeitsDesc
 }
 
 // Collect sends the counters as of now.
@@ -51,6 +64,10 @@ func (writeFlowsCollector) Collect(ch chan<- prometheus.Metric) {
 	for s, n := range f.Skips {
 		ch <- prometheus.MustNewConstMetric(worldCheckpointSkipsDesc, prometheus.CounterValue, float64(n), CheckpointSkip(s).String())
 	}
+
+	// Report the composed deaths and the forfeited intervals.
+	ch <- prometheus.MustNewConstMetric(worldDeathsDesc, prometheus.CounterValue, float64(f.Deaths))
+	ch <- prometheus.MustNewConstMetric(worldDeathForfeitsDesc, prometheus.CounterValue, float64(f.DeathForfeits))
 }
 
 // init registers the collector with the default registry, which the process

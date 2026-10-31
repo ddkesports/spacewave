@@ -163,17 +163,19 @@ type stableCheckpoint struct {
 // nil when it already does. ok is false when the World is not readable. The
 // receipt is only waited on. The caller holds the writer lock.
 func (e *soEngine) nameWorld(ctx context.Context, world *InnerState, n int, height uint64) (*block.PublicationReceipt, bool, error) {
-	// Without the page view every World is stored.
+	// Compose what died since the last named World. Without the page view
+	// every World is stored.
 	r := e.replay
+	if r.pages != nil && !r.readable(n) {
+		return nil, false, nil
+	}
+	root := world.GetHeadRef().GetRootRef()
+	r.composeDeaths(root)
 	if r.pages == nil {
 		return nil, true, nil
 	}
-	if !r.readable(n) {
-		return nil, false, nil
-	}
 
 	// A World a save carried is named once that save lands.
-	root := world.GetHeadRef().GetRootRef()
 	if !r.baseUnheld && slices.ContainsFunc(r.baseRoots, root.EqualsRef) {
 		return e.lastReceipt(), true, nil
 	}

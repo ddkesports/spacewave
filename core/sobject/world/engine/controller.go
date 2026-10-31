@@ -241,8 +241,10 @@ func (c *Controller) executeWorld(
 		return sobject.ErrEmptyTransformConfig
 	}
 
-	// Bind the head to the block store.
-	blkEngine, err := c.buildBlkEngine(ctx, le, replay.store(), headRef, transformConf)
+	// Bind the head to the block store, gathering what each World commit
+	// replaces from here on.
+	replay.deaths = newWorldDeaths(headRef.GetRootRef())
+	blkEngine, err := c.buildBlkEngine(ctx, le, replay.store(), headRef, transformConf, replay.transitions()...)
 	if err != nil {
 		return err
 	}

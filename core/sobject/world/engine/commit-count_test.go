@@ -215,7 +215,8 @@ func TestLocalWorldCommitPhysicalCommits(t *testing.T) {
 // install are four database commits: the publication storing the checkpoint
 // World, the SharedObject state, the reader pin the engine took on a kept page
 // moving to the store, then the hold of the checkpoint World, the replay span
-// and the replay save together.
+// and the replay save together, and that the checkpoint composes what the writes
+// replaced.
 func TestCheckpointInstallPhysicalCommits(t *testing.T) {
 	// Write one operation short of a checkpoint, the first with a payload, and
 	// let the engine settle.
@@ -264,6 +265,15 @@ func TestCheckpointInstallPhysicalCommits(t *testing.T) {
 	}
 	if _, ok := after["spacewave_world_checkpoint_skips_total{reason=pending}"]; !ok {
 		t.Fatal("no checkpoint skip series")
+	}
+
+	// The checkpoint composed the pages the writes replaced, without a
+	// forfeit: the change log is off.
+	if after["spacewave_world_deaths_total"] <= flows["spacewave_world_deaths_total"] {
+		t.Fatalf("composed no deaths, forfeited %v", after["spacewave_world_death_forfeits_total"]-flows["spacewave_world_death_forfeits_total"])
+	}
+	if got := after["spacewave_world_death_forfeits_total"] - flows["spacewave_world_death_forfeits_total"]; got != 0 {
+		t.Fatalf("forfeited %v intervals", got)
 	}
 }
 
