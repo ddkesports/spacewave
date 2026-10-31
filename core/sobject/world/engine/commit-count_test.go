@@ -309,8 +309,8 @@ func TestCheckpointInstallPhysicalCommits(t *testing.T) {
 	if len(records) == 0 {
 		t.Fatal("named no deadlist record")
 	}
-	for _, dead := range records {
-		for _, ref := range slices.Concat(dead.Replaced, dead.Removed) {
+	for _, rec := range records {
+		for _, ref := range slices.Concat(rec.dead.Replaced, rec.dead.Removed) {
 			if _, ok := live[ref.MarshalString()]; ok {
 				t.Fatalf("deadlist lists %s, which the checkpoint World reaches", ref.MarshalString())
 			}
@@ -318,38 +318,57 @@ func TestCheckpointInstallPhysicalCommits(t *testing.T) {
 	}
 }
 
+// deadlistRecord is one deadlist record a volume names for a World.
+type deadlistRecord struct {
+	// name is the record's named root.
+	name string
+	// head is the record's first block, which names the World it runs to.
+	head *block.Deadlist
+	// dead is what the record lists, gathered from every part.
+	dead *block.Replacements
+}
+
 // deadlists reads every deadlist record the volume names for the World, due
-// or pending, from store.
-func (w *localWorld) deadlists(t *testing.T, store block.StoreOps) []*block.Replacements {
+// or pending, from store. A sequence that names no record, such as a forfeited
+// interval or a released record, is skipped; the scan ends past the ledger's
+// bound of pending records with none named.
+func (w *localWorld) deadlists(t *testing.T, store block.StoreOps) []deadlistRecord {
 	// Find the bucket's named roots in the volume's graph.
 	t.Helper()
 	graph := w.acc.GetVolume().(kvtx_volume.KvtxVolume).GetRefGraph()
 	bucketID := provider_local.BlockStoreBucketID(w.acc.GetProviderID(), w.acc.GetAccountID(), w.soRef.GetBlockStoreId())
 
-	// Read each record by sequence until neither name holds one.
-	var out []*block.Replacements
-	for seq := uint64(1); ; seq++ {
+	// Read each record by sequence.
+	var out []deadlistRecord
+	for seq, empty := uint64(1), 0; empty <= 64; seq++ {
+		var name string
 		var refs []string
-		for _, name := range []string{block.DeadlistRootName(seq), block.DeadlistDueRootName(seq)} {
-			named, err := graph.GetOutgoingRefs(t.Context(), kvtx_volume.RootOwnerIRI(bucketID, name))
+		for _, n := range []string{block.DeadlistRootName(seq), block.DeadlistDueRootName(seq)} {
+			named, err := graph.GetOutgoingRefs(t.Context(), kvtx_volume.RootOwnerIRI(bucketID, n))
 			if err != nil {
 				t.Fatal(err)
+			}
+			if len(named) != 0 && name == "" {
+				name = n
 			}
 			refs = append(refs, named...)
 		}
 		if len(refs) == 0 {
-			return out
+			empty++
+			continue
 		}
+		empty = 0
 		ref, ok := block_gc.ParseBlockIRI(refs[0])
 		if !ok {
 			t.Fatalf("deadlist root names %s", refs[0])
 		}
-		_, dead, err := block.ReadDeadlist(t.Context(), store, ref)
+		head, dead, err := block.ReadDeadlist(t.Context(), store, ref)
 		if err != nil {
 			t.Fatal(err)
 		}
-		out = append(out, dead)
+		out = append(out, deadlistRecord{name: name, head: head, dead: dead})
 	}
+	return out
 }
 
 // scrapeWriteFlows gathers the process metrics and returns the World write
