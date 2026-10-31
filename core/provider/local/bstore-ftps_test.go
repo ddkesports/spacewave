@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"github.com/s4wave/spacewave/db/kvtx/hashmap"
 	"math/big"
 	"net"
 	"os"
@@ -114,7 +115,7 @@ func TestFTPSPlacementAndFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := newFallbackTestOn(t, func() backendStore {
-		store, err := buildFTPSBlockStore(logrus.NewEntry(logrus.New()), backend.GetFtps(), tlsConf)
+		store, err := buildFTPSBlockStore(logrus.NewEntry(logrus.New()), backend.GetFtps(), tlsConf, hashmap.NewHashmapKvtx(hashmap.NewHashmap[[]byte]()))
 		if err != nil {
 			t.Fatal(err)
 		}

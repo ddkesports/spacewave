@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"github.com/s4wave/spacewave/db/kvtx"
 	"net"
 	"strconv"
 
@@ -41,14 +42,16 @@ func buildFTPSClient(location *account_settings.FtpsLocation, tlsConf *tls.Confi
 
 // buildFTPSBlockStore opens the packfile store on the location's directory.
 // The store keeps every packfile: nothing compacts or deletes one, and it
-// reads the location's prefix as given.
-func buildFTPSBlockStore(le *logrus.Entry, location *account_settings.FtpsLocation, tlsConf *tls.Config) (backendStore, error) {
+// reads the location's prefix as given. index, when not nil, is the local KV
+// that holds the store's entry cache and block location index.
+func buildFTPSBlockStore(le *logrus.Entry, location *account_settings.FtpsLocation, tlsConf *tls.Config, index kvtx.Store) (backendStore, error) {
 	client, err := buildFTPSClient(location, tlsConf)
 	if err != nil {
 		return nil, err
 	}
 	return block_store_s3.NewPackStore(le, client, location.GetRoot(), location.GetPrefix(), &block_store_s3.PackStoreOptions{
 		KeepPacks: true,
+		Index:     index,
 	}), nil
 }
 

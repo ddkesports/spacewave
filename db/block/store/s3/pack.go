@@ -21,6 +21,7 @@ import (
 	"github.com/aperturerobotics/util/routine"
 	"github.com/pkg/errors"
 	"github.com/s4wave/spacewave/db/block"
+	"github.com/s4wave/spacewave/db/kvtx"
 	"github.com/s4wave/spacewave/db/packfile"
 	"github.com/s4wave/spacewave/db/packfile/identity"
 	packfile_store "github.com/s4wave/spacewave/db/packfile/store"
@@ -102,6 +103,13 @@ type PackStore struct {
 	refresher *routine.RoutineContainer
 	// refreshInterval is the time between two listings of the refresher.
 	refreshInterval time.Duration
+	// index is the entry cache and block location index in the local KV, or
+	// nil without one.
+	index *packIndex
+	// indexer indexes the listed packs in the background.
+	indexer *routine.RoutineContainer
+	// cacheLoaded is set once the cached entries were read. Guarded by listMtx.
+	cacheLoaded bool
 	// refreshOnce starts the refresher at the first read.
 	refreshOnce sync.Once
 	// loaded is set once a listing completed, which makes the entries the
@@ -160,6 +168,17 @@ type PackStoreOptions struct {
 	// entries, which find the packfiles other writers added. Zero uses
 	// DefaultRefreshInterval.
 	RefreshInterval time.Duration
+	// Index is a local KV store for the entry cache and the block location
+	// index; nil keeps neither. The store owns every key in it, so pass a
+	// prefixed view.
+	//
+	// With it, a start reads the cached entries and lists the bucket in the
+	// background, reading only the entries it does not know. A lookup reads the
+	// pack the index places a block in. A background routine indexes the listed
+	// packs: one read of the end of each pack and a few short write transactions,
+	// with a pause between them. It takes no lock a read waits on. Until a
+	// pack is indexed, lookups test its bloom filter as without the index.
+	Index kvtx.Store
 }
 
 // NewPackStore builds a packfile block store on the bucket. opts may be nil.
@@ -202,6 +221,15 @@ func NewPackStore(le *logrus.Entry, client ObjectStore, bucket, prefix string, o
 	s.compactor.SetRoutine(s.runCompaction)
 	s.compactor.SetContext(context.Background(), false)
 	s.refresher.SetRoutine(s.runRefresh)
+	if opts.Index != nil {
+		s.index = newPackIndex(opts.Index)
+		s.packs.SetLocator(s.index)
+		s.indexer = routine.NewRoutineContainerWithLogger(
+			le.WithField("routine", "pack-index"),
+			routine.WithRetry(compactBackoff),
+		)
+		s.indexer.SetRoutine(s.runIndexer)
+	}
 	return s
 }
 
@@ -210,6 +238,9 @@ func NewPackStore(le *logrus.Entry, client ObjectStore, bucket, prefix string, o
 func (s *PackStore) Close() {
 	s.compactor.ClearContext()
 	s.refresher.ClearContext()
+	if s.indexer != nil {
+		s.indexer.ClearContext()
+	}
 	s.packs.Close()
 }
 
@@ -288,7 +319,14 @@ func (s *PackStore) PutBlockBatch(ctx context.Context, batch []*block.PutBatchEn
 func (s *PackStore) writePack(ctx context.Context, next writer.BlockIterator) (*packfile.PackfileEntry, error) {
 	// Pack the blocks in memory within the size limit.
 	var buf bytes.Buffer
-	result, err := writer.PackBlocks(&buf, next)
+	var keys [][]byte
+	result, err := writer.PackBlocks(&buf, func() (*hash.Hash, *block.StoredBlock, error) {
+		h, b, err := next()
+		if h != nil && s.index != nil {
+			keys = append(keys, packfile.BlockKey(h))
+		}
+		return h, b, err
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -322,6 +360,13 @@ func (s *PackStore) writePack(ctx context.Context, next writer.BlockIterator) (*
 	}
 	if err := s.client.PutObject(ctx, s.bucket, s.prefix+entryDir+id, entryData, "application/octet-stream"); err != nil {
 		return nil, errors.Wrap(err, "write packfile entry")
+	}
+
+	// Index the keys with the entry, so the pack is found at once.
+	if s.index != nil {
+		if err := s.index.addWritten(ctx, entry, keys); err != nil {
+			return nil, errors.Wrap(err, "index packfile")
+		}
 	}
 	return entry, nil
 }
@@ -400,7 +445,12 @@ func (s *PackStore) lookup(ctx context.Context, find func() (bool, error)) error
 	if err := s.loadEntries(ctx); err != nil {
 		return err
 	}
-	s.refreshOnce.Do(func() { s.refresher.SetContext(context.Background(), false) })
+	s.refreshOnce.Do(func() {
+		s.refresher.SetContext(context.Background(), false)
+		if s.indexer != nil {
+			s.indexer.SetContext(context.Background(), false)
+		}
+	})
 
 	// Look for the block in the known packfiles.
 	listed := s.listings.Load()
@@ -432,11 +482,14 @@ func (s *PackStore) loadEntries(ctx context.Context) error {
 func (s *PackStore) runRefresh(ctx context.Context) error {
 	timer := time.NewTimer(s.refreshInterval)
 	defer timer.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return context.Canceled
-		case <-timer.C:
+	for first := true; ; first = false {
+		// A start from the cached entries lists at once.
+		if !first || s.listings.Load() != 0 {
+			select {
+			case <-ctx.Done():
+				return context.Canceled
+			case <-timer.C:
+			}
 		}
 		if err := s.listEntries(ctx, s.listings.Load()); err != nil {
 			return err
@@ -458,6 +511,21 @@ func (s *PackStore) listEntries(ctx context.Context, listed uint64) error {
 	defer release()
 	if s.listings.Load() != listed {
 		return nil
+	}
+
+	// Start from the cached entries when there are any, and list in the
+	// background: the cache holds the packs the last run knew.
+	if s.index != nil && !s.cacheLoaded {
+		s.cacheLoaded = true
+		cached, err := s.index.load(ctx)
+		if err != nil {
+			return err
+		}
+		if len(cached) != 0 {
+			s.updateEntries(cached, nil)
+			s.loaded.Store(true)
+			return nil
+		}
 	}
 	s.listings.Add(1)
 
@@ -498,6 +566,9 @@ func (s *PackStore) listEntries(ctx context.Context, listed uint64) error {
 				return nil
 			}
 			entries[i] = entry
+			if err == nil && entry != nil && s.index != nil {
+				err = s.index.addListed(egCtx, entry)
+			}
 			return err
 		})
 	}
@@ -509,6 +580,11 @@ func (s *PackStore) listEntries(ctx context.Context, listed uint64) error {
 	entries = slices.DeleteFunc(entries, func(entry *packfile.PackfileEntry) bool {
 		return entry == nil
 	})
+	if s.index != nil {
+		if err := s.index.flush(ctx); err != nil {
+			return err
+		}
+	}
 	s.updateEntries(entries, slices.Collect(maps.Keys(known)))
 	s.loaded.Store(true)
 	return nil
@@ -551,6 +627,11 @@ func (s *PackStore) readEntry(ctx context.Context, id string) (*packfile.Packfil
 // updateEntries adds and removes known packfiles and publishes the result to
 // the reader. Publishing under the lock keeps concurrent updates in order.
 func (s *PackStore) updateEntries(add []*packfile.PackfileEntry, remove []string) {
+	if s.index != nil {
+		if err := s.index.remove(context.Background(), remove); err != nil {
+			s.le.WithError(err).Warn("drop packs from the index")
+		}
+	}
 	s.bcast.HoldLock(func(func(), func() <-chan struct{}) {
 		for _, id := range remove {
 			delete(s.entries, id)

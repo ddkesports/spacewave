@@ -2,6 +2,10 @@ package provider_local
 
 import (
 	"context"
+	block_store_s3 "github.com/s4wave/spacewave/db/block/store/s3"
+	"github.com/s4wave/spacewave/db/kvtx"
+	kvtx_prefixer "github.com/s4wave/spacewave/db/kvtx/prefixer"
+	kvtx_volume "github.com/s4wave/spacewave/db/volume/common/kvtx"
 	"math"
 	"sync/atomic"
 	"time"
@@ -242,7 +246,7 @@ func (t *bstoreTracker) openBackendStore(
 	// An FTPS server logs in from its netrc file and has no credential Secret.
 	le := t.a.le.WithField("bstore-id", t.id)
 	if location := backend.GetFtps(); location != nil {
-		return buildFTPSBlockStore(le, location, nil)
+		return buildFTPSBlockStore(le, location, nil, t.packIndexStore())
 	}
 
 	// Open the backend's bucket with its credential Secret.
@@ -304,4 +308,14 @@ var sqlMaxConns atomic.Int32
 // after the call; zero or less uses the store's default.
 func SetSQLMaxConns(n int) {
 	sqlMaxConns.Store(int32(max(n, 0))) // #nosec G115 -- pool sizes fit in int32.
+}
+
+// packIndexStore returns the account volume's key space for the pack index of
+// the block store's FTPS packs, or nil when the volume has no key/value store.
+func (t *bstoreTracker) packIndexStore() kvtx.Store {
+	kvVol, ok := t.a.vol.(kvtx_volume.KvtxVolume)
+	if !ok {
+		return nil
+	}
+	return kvtx_prefixer.NewPrefixer(kvVol.GetKvtxStore(), block_store_s3.PackIndexPrefix(t.id))
 }
