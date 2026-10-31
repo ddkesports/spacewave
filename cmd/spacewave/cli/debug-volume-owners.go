@@ -9,7 +9,8 @@ import (
 
 	"github.com/aperturerobotics/cli"
 	"github.com/pkg/errors"
-	block_gc "github.com/s4wave/spacewave/db/block/gc"
+	volume_kvtx "github.com/s4wave/spacewave/db/volume/common/kvtx"
+	volume_s4db "github.com/s4wave/spacewave/db/volume/s4db"
 	"github.com/sirupsen/logrus"
 )
 
@@ -44,10 +45,7 @@ func (a *debugVolumeOwnersArgs) Run(c *cli.Context) error {
 		return err
 	}
 	defer vol.Close()
-	rg, ok := vol.GetRefGraph().(*block_gc.RefGraph)
-	if !ok {
-		return errors.New("volume has no local ref graph")
-	}
+	rg := volume_kvtx.OpenRefGraph(volume_s4db.GetDB(vol))
 
 	// Mark the whole graph for the baseline.
 	start := time.Now()

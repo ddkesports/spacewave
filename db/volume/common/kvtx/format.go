@@ -54,6 +54,7 @@ func upgradeFormat(ctx context.Context, store kvtx.Store, keys *store_kvkey.KVKe
 	if err := formatMigrations[version](ctx, store, keys); err != nil {
 		return fmt.Errorf("migrate store format version %d to %d: %w", version, store_kvkey.FormatVersion, err)
 	}
+
 	// A graph that tracks no block yet is minor-ready from birth, as
 	// block_gc.RefGraph.ClaimYoungReady describes.
 	tx, err := store.NewTransaction(ctx, true)
@@ -61,7 +62,7 @@ func upgradeFormat(ctx context.Context, store kvtx.Store, keys *store_kvkey.KVKe
 		return err
 	}
 	defer tx.Discard()
-	if _, err := openRefGraph(kvtx.NewTxStore(tx)).ClaimYoungReady(ctx); err != nil {
+	if _, err := OpenRefGraph(kvtx.NewTxStore(tx)).ClaimYoungReady(ctx); err != nil {
 		return err
 	}
 	if err := tx.Set(ctx, keys.GetFormatVersionKey(), store_kvkey.MarshalFormatVersion(store_kvkey.FormatVersion)); err != nil {

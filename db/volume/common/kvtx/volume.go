@@ -261,7 +261,7 @@ func initVolume(
 	v.volumeID = volume.NewVolumeID(storeID, v.Peer.GetPeerID())
 
 	// Open the persistent reference graph for Volume garbage collection.
-	v.refGraph = openRefGraph(v.kvtxStore)
+	v.refGraph = OpenRefGraph(v.kvtxStore)
 	return v, nil
 }
 

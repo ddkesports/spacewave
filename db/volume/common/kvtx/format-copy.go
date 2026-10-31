@@ -122,7 +122,7 @@ func copyStore(
 	// Mark the reachable nodes in the same snapshot.
 	w := &copyWriter{store: dst, progress: progress, convert: version < 4}
 	if reachable != nil {
-		w.graph = openRefGraph(kvtx.NewTxStore(stx))
+		w.graph = OpenRefGraph(kvtx.NewTxStore(stx))
 		w.blockPrefix = keys.GetBlockFullPrefix()
 		w.countUnowned = reachable.CountUnowned
 		mark, err := w.graph.Reachable(ctx)
@@ -359,7 +359,7 @@ func (w *copyWriter) commitKeys(ctx context.Context, batch []keyValue, size int)
 			return err
 		}
 	}
-	if err := openRefGraph(kvtx.NewTxStore(tx)).ApplyRefBatch(ctx, w.adds, nil); err != nil {
+	if err := OpenRefGraph(kvtx.NewTxStore(tx)).ApplyRefBatch(ctx, w.adds, nil); err != nil {
 		return err
 	}
 	if err := kvtx.CommitOrdered(ctx, tx); err != nil {
@@ -394,7 +394,7 @@ func (w *copyWriter) convertEdges(ctx context.Context, stx kvtx.Tx) error {
 		if err != nil {
 			return err
 		}
-		err = openRefGraph(kvtx.NewTxStore(tx)).ApplyRefBatch(ctx, refs, nil)
+		err = OpenRefGraph(kvtx.NewTxStore(tx)).ApplyRefBatch(ctx, refs, nil)
 		if err == nil {
 			err = kvtx.CommitOrdered(ctx, tx)
 		}

@@ -333,7 +333,7 @@ func TestUpgradeChildLists(t *testing.T) {
 	}
 
 	// The bucket owns a, a lists every child, and each block is tracked.
-	rg := openRefGraph(store)
+	rg := OpenRefGraph(store)
 	for node, want := range map[string][]string{
 		block_gc.NodeGCRoot:       {bucket},
 		bucket:                    {a},
@@ -536,7 +536,7 @@ func writeCayleyStore(t *testing.T, store db_kvtx.Store, keys *store_kvkey.KVKey
 func checkConvertedRefGraph(t *testing.T, store db_kvtx.Store) {
 	// The live reference edges moved.
 	ctx := context.Background()
-	rg := openRefGraph(store)
+	rg := OpenRefGraph(store)
 	for subject, want := range map[string][]string{
 		block_gc.NodeGCRoot: {"a"},
 		"a":                 {"b"},
@@ -636,7 +636,7 @@ func testBlockIRI(t *testing.T, data string) string {
 func checkLegacyRefGraph(t *testing.T, store db_kvtx.Store) {
 	// Each edge reads forward and back.
 	ctx := context.Background()
-	rg := openRefGraph(store)
+	rg := OpenRefGraph(store)
 	for _, edge := range legacyEdges(t) {
 		out, err := rg.GetOutgoingRefs(ctx, edge.Subject)
 		if err != nil {
@@ -748,7 +748,7 @@ func testCopyReachable(t *testing.T, src, dst db_kvtx.Store) {
 
 	// Write the graph.
 	iri := func(name string) string { return block_gc.BlockIRI(refs[name]) }
-	graph := openRefGraph(src)
+	graph := OpenRefGraph(src)
 	if err := graph.AddRoot(ctx, block_gc.BucketIRI("pinned")); err != nil {
 		t.Fatal(err)
 	}
@@ -810,7 +810,7 @@ func testCopyReachable(t *testing.T, src, dst db_kvtx.Store) {
 	if found, err := rtx.Exists(ctx, []byte("other")); err != nil || !found {
 		t.Fatalf("other key: found %v err %v", found, err)
 	}
-	rg := openRefGraph(dst)
+	rg := OpenRefGraph(dst)
 	for node, want := range map[string][]string{
 		block_gc.NodeGCRoot:          {block_gc.BucketIRI("live")},
 		block_gc.BucketIRI("live"):   {iri("a")},

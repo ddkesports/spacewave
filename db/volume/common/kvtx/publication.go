@@ -12,9 +12,9 @@ import (
 // refGraphPrefix holds the Volume's reference graph records.
 var refGraphPrefix = []byte{2}
 
-// openRefGraph opens the Volume's reference graph over store. Opening reads
-// nothing, so each transaction opens its own.
-func openRefGraph(store store_kvtx.Store) *block_gc.RefGraph {
+// OpenRefGraph opens the reference graph of the Volume whose key-value store
+// is store. Opening reads nothing, so each transaction opens its own.
+func OpenRefGraph(store store_kvtx.Store) *block_gc.RefGraph {
 	return block_gc.NewRefGraph(store_kvtx_prefixer.NewPrefixer(store, refGraphPrefix))
 }
 

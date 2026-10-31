@@ -513,7 +513,7 @@ func (v *Volume) sweepUnreached(ctx context.Context, mark *block_gc.BlockMark, s
 		// Walk the blocks writes adopted since the last transaction in
 		// short reads first, leaving the rescue under the writer only what
 		// arrived since.
-		caught, err := openRefGraph(&directReadStore{volume: v}).CatchUpAdopted(ctx, mark)
+		caught, err := OpenRefGraph(&directReadStore{volume: v}).CatchUpAdopted(ctx, mark)
 		if err != nil {
 			return false, err
 		}
@@ -655,7 +655,7 @@ func (v *Volume) sweepUnreached(ctx context.Context, mark *block_gc.BlockMark, s
 // prefetchNodeRefs warms the records of nodes in a read transaction that holds
 // no writer, as RefGraph.PrefetchNodeRefs describes.
 func (v *Volume) prefetchNodeRefs(ctx context.Context, nodes []string) error {
-	return openRefGraph(&directReadStore{volume: v}).PrefetchNodeRefs(ctx, nodes)
+	return OpenRefGraph(&directReadStore{volume: v}).PrefetchNodeRefs(ctx, nodes)
 }
 
 // sweepBlockChunk removes the chunk's blocks that the mark and the rescues

@@ -80,7 +80,7 @@ func convertCayleyEdgeBatch(ctx context.Context, store kvtx.Store, start []byte)
 	if err != nil {
 		return nil, err
 	}
-	if err := openRefGraph(kvtx.NewTxStore(tx)).ApplyRefBatch(ctx, adds, nil); err != nil {
+	if err := OpenRefGraph(kvtx.NewTxStore(tx)).ApplyRefBatch(ctx, adds, nil); err != nil {
 		return nil, err
 	}
 

@@ -54,7 +54,7 @@ func (v *Volume) openPhysical(ctx context.Context) (*physicalTx, error) {
 		return nil, err
 	}
 	p := &physicalTx{tx: tx, store: kvtx.NewTxStore(tx)}
-	p.rg = openRefGraph(p.store)
+	p.rg = OpenRefGraph(p.store)
 
 	// Serve blocks from the domain's transaction, or as records. Either view
 	// reads tx's uncommitted writes, so neither marks reads durable.

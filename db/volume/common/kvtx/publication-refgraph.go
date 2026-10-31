@@ -33,7 +33,7 @@ func (g *transactionRefGraph) read(ctx context.Context, fn func(*block_gc.RefGra
 	defer tx.Discard()
 
 	// Read through a fresh reference graph scoped to the transaction.
-	return fn(openRefGraph(kvtx.NewTxStore(tx)))
+	return fn(OpenRefGraph(kvtx.NewTxStore(tx)))
 }
 
 // write runs fn against a fresh writable reference graph in one transaction.
@@ -126,7 +126,7 @@ func (g *transactionRefGraph) MarkBlocks(ctx context.Context, opts ...block_gc.M
 // TraceOwners finds the owned path to each block, as RefGraph.TraceOwners
 // describes, reading each level in its own transaction.
 func (g *transactionRefGraph) TraceOwners(ctx context.Context, blocks []string, maxDepth int) ([]block_gc.OwnerTrace, error) {
-	return openRefGraph(&directReadStore{volume: g.volume}).TraceOwners(ctx, blocks, maxDepth)
+	return OpenRefGraph(&directReadStore{volume: g.volume}).TraceOwners(ctx, blocks, maxDepth)
 }
 
 // MarkBlocksScan marks the graph's blocks by scanning child lists in short
@@ -135,7 +135,7 @@ func (g *transactionRefGraph) TraceOwners(ctx context.Context, blocks []string, 
 // operations on its own, so neither a snapshot nor Close waits on the whole
 // mark.
 func (g *transactionRefGraph) MarkBlocksScan(ctx context.Context, opts ...block_gc.MarkOption) (*block_gc.BlockMark, error) {
-	return openRefGraph(&directReadStore{volume: g.volume}).MarkBlocksScan(ctx, g.volume.blocksStored, opts...)
+	return OpenRefGraph(&directReadStore{volume: g.volume}).MarkBlocksScan(ctx, g.volume.blocksStored, opts...)
 }
 
 // storedProbeBatch bounds the blocks one read transaction of blocksStored

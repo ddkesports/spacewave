@@ -82,7 +82,7 @@ func newPublicationWriter(v *Volume) *publicationWriter {
 // leaves the flush to read the pages itself.
 func (w *publicationWriter) prefetchRefs(ctx context.Context, p *block.AtomicPublication) {
 	owner := block_gc.BucketIRI(p.BucketID)
-	_ = openRefGraph(&directReadStore{volume: w.volume}).PrefetchPutBatch(ctx, owner, p.Entries)
+	_ = OpenRefGraph(&directReadStore{volume: w.volume}).PrefetchPutBatch(ctx, owner, p.Entries)
 }
 
 // publicationSize computes the bounded admission cost of a publication.
