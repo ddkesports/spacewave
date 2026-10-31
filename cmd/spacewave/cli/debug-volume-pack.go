@@ -99,7 +99,7 @@ func newDebugVolumePackCommand() *cli.Command {
 			&cli.StringFlag{Name: "ftps-host", Usage: "write the packs to this FTPS server instead of the bucket", Destination: &args.ftps.host},
 			&cli.StringFlag{Name: "ftps-netrc", Usage: "the netrc file holding the FTPS login", Destination: &args.ftps.netrc},
 			&cli.StringFlag{Name: "ftps-root", Usage: "the FTPS directory holding the key prefix", Destination: &args.ftps.root},
-			&cli.IntFlag{Name: "ftps-conns", Usage: "the FTPS connections", Value: block_store_ftps.DefaultConns, Destination: &args.ftps.conns},
+			&cli.IntFlag{Name: "ftps-conns", Usage: "the most FTPS sessions open at once across the netrc logins, spares included", Value: block_store_ftps.DefaultMaxSessions, Destination: &args.ftps.conns},
 			&cli.BoolFlag{Name: "skip-rest", Usage: "do not count the keys outside the block range", Destination: &args.skipRest},
 			&cli.StringFlag{Name: "sql-log", Usage: "also pack the SQL block store's rows the volume lacks, with this log", Destination: &args.sqlLog},
 			&cli.StringFlag{Name: "sql-host", Usage: "with --sql-log, the database host", Destination: &args.sql.Host},

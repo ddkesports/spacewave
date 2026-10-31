@@ -17,6 +17,7 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jlaffaye/ftp"
@@ -24,8 +25,18 @@ import (
 	block_store_s3 "github.com/s4wave/spacewave/db/block/store/s3"
 )
 
-// DefaultConns is the default number of control connections of a Client.
-const DefaultConns = 8
+// DefaultMaxSessions is the default most sessions open at once from this
+// client, spares included: the limit of ten sessions per client host that
+// servers such as ProFTPD enforce.
+const DefaultMaxSessions = 10
+
+// DefaultConnsPerLogin is the default most sessions open at once on one
+// login: the server's limit of ten per user, less one session of headroom.
+const DefaultConnsPerLogin = 9
+
+// fullBackoff is the longest wait between dials while the server reports that
+// its session limit is reached.
+const fullBackoff = 2 * time.Second
 
 // dialTimeout bounds connecting, the TLS handshake and each data connection.
 const dialTimeout = 30 * time.Second
@@ -50,13 +61,38 @@ type Client struct {
 	// tlsConf verifies the server and caches TLS sessions, which some servers
 	// require the data connections to resume.
 	tlsConf *tls.Config
-	// conns holds one slot per pooled connection: a logged in connection, or
-	// nil when the slot must dial before use.
-	conns chan *ftp.ServerConn
+	// slots holds the pool: each slot is bound to one login and holds a
+	// logged in session, or none when it must dial before use.
+	slots chan *slot
+	// total holds one token for each session open or being dialed, spares
+	// included, which bounds the sessions from this client.
+	total chan struct{}
+	// tokens holds the same per login, which bounds the sessions on a login.
+	tokens []chan struct{}
+	// sizes holds the sizes of the objects seen by ListObjects and PutObject,
+	// which tell a range read whether it reaches the end of the object.
+	sizes sync.Map
 }
 
-// NewClient builds a Client. It connects lazily, on the first call.
+// slot is a pool entry. conn and spare each hold a token of the slot's login.
+type slot struct {
+	// login indexes the Config logins.
+	login int
+	// conn is the logged in session, or nil.
+	conn *ftp.ServerConn
+	// spare delivers the session dialed ahead for a range read that ends
+	// its session early, or nil when none is being dialed. It receives nil
+	// when the dial failed.
+	spare chan *ftp.ServerConn
+}
+
+// NewClient builds a Client. It connects lazily, on the first call. It
+// panics when conf has no logins.
 func NewClient(conf Config) *Client {
+	if len(conf.Logins) == 0 {
+		panic("block_store_ftps: no logins")
+	}
+
 	// Default the port and the TLS configuration.
 	if _, _, err := net.SplitHostPort(conf.Addr); err != nil {
 		conf.Addr = net.JoinHostPort(conf.Addr, "21")
@@ -72,28 +108,44 @@ func NewClient(conf Config) *Client {
 		tlsConf.ClientSessionCache = tls.NewLRUClientSessionCache(0)
 	}
 
-	// Fill the pool with empty slots.
-	n := conf.Conns
-	if n <= 0 {
-		n = DefaultConns
+	// Pool one slot fewer than the session cap and than each login allows, so
+	// a spare has room, and split the slots across the logins evenly.
+	limit := conf.ConnsPerLogin
+	if limit <= 0 {
+		limit = DefaultConnsPerLogin
 	}
-	conns := make(chan *ftp.ServerConn, n)
-	for range n {
-		conns <- nil
+	maxSessions := conf.MaxSessions
+	if maxSessions <= 0 {
+		maxSessions = DefaultMaxSessions
 	}
-	return &Client{conf: conf, tlsConf: tlsConf, conns: conns}
+	n := min(max(limit-1, 1)*len(conf.Logins), max(maxSessions-1, 1))
+	c := &Client{conf: conf, tlsConf: tlsConf, slots: make(chan *slot, n), total: make(chan struct{}, maxSessions)}
+	for range conf.Logins {
+		c.tokens = append(c.tokens, make(chan struct{}, limit))
+	}
+	for i := range n {
+		c.slots <- &slot{login: i % len(conf.Logins)}
+	}
+	return c
 }
 
-// Close waits for running calls and logs out every connection. A later call
+// Conns returns the number of pooled sessions, the concurrency the pool can
+// serve.
+func (c *Client) Conns() int {
+	return cap(c.slots)
+}
+
+// Close waits for running calls and logs out every session. A later call
 // dials again.
 func (c *Client) Close() {
-	for range cap(c.conns) {
-		if conn := <-c.conns; conn != nil {
-			_ = conn.Quit()
-		}
+	held := make([]*slot, 0, cap(c.slots))
+	for range cap(c.slots) {
+		s := <-c.slots
+		c.drop(s)
+		held = append(held, s)
 	}
-	for range cap(c.conns) {
-		c.conns <- nil
+	for _, s := range held {
+		c.slots <- s
 	}
 }
 
@@ -109,7 +161,7 @@ func (c *Client) PutObject(ctx context.Context, bucket, key string, data []byte,
 	_, _ = rand.Read(tag)
 	tmp := dir + tempPrefix + hex.EncodeToString(tag) + "-" + base
 
-	return c.do(ctx, func(conn *ftp.ServerConn) error {
+	err := c.do(ctx, func(conn *ftp.ServerConn, _ *slot) error {
 		// Upload the temporary file, creating the directories it needs.
 		err := conn.Stor(tmp, bytes.NewReader(data))
 		if isReply(err) {
@@ -133,6 +185,10 @@ func (c *Client) PutObject(ctx context.Context, bucket, key string, data []byte,
 		}
 		return nil
 	})
+	if err == nil {
+		c.sizes.Store(name, int64(len(data)))
+	}
+	return err
 }
 
 // GetObject reads the whole object. Packfile readers read whole objects only
@@ -142,7 +198,7 @@ func (c *Client) GetObject(ctx context.Context, bucket, key string) (io.ReadClos
 	// Download the object whole on one connection.
 	name := path.Join(bucket, key)
 	var data []byte
-	err := c.do(ctx, func(conn *ftp.ServerConn) error {
+	err := c.do(ctx, func(conn *ftp.ServerConn, _ *slot) error {
 		// Start the download.
 		resp, err := conn.Retr(name)
 		if err != nil {
@@ -164,13 +220,21 @@ func (c *Client) GetObject(ctx context.Context, bucket, key string) (io.ReadClos
 
 // GetObjectRange reads length bytes from offset off with REST and RETR, then
 // closes the data connection, which ends the transfer early. A server that
-// ends the session on the early close, as ProFTPD does, costs the next call
-// on that slot a new connection.
+// ends the session on the early close, as ProFTPD does, spends the session,
+// so a range that does not reach the end of the object, as far as the sizes
+// seen by ListObjects and PutObject say, starts dialing the slot's
+// replacement before it reads, and the next call finds it ready.
 func (c *Client) GetObjectRange(ctx context.Context, bucket, key string, off int64, length int) ([]byte, error) {
 	// Read the range on one connection.
 	name := path.Join(bucket, key)
 	var out []byte
-	err := c.do(ctx, func(conn *ftp.ServerConn) error {
+	err := c.do(ctx, func(conn *ftp.ServerConn, s *slot) error {
+		// Dial the replacement while the transfer runs, unless the range
+		// reaches the end of the object and ends the transfer by itself.
+		if size, ok := c.sizes.Load(name); !ok || off+int64(length) < size.(int64) {
+			c.startSpare(ctx, s)
+		}
+
 		// Start the download at the offset.
 		resp, err := conn.RetrFrom(name, uint64(off)) //nolint:gosec // offsets are not negative.
 		if err != nil {
@@ -205,8 +269,14 @@ func (c *Client) GetObjectRange(ctx context.Context, bucket, key string, off int
 // with prefix, walking the directories depth first in name order. Temporary
 // files of unfinished writes are skipped. A missing directory lists nothing.
 func (c *Client) ListObjects(ctx context.Context, bucket, prefix string, fn func(key string, size int64) error) error {
+	// Remember the sizes for the range reads.
+	inner := fn
+	fn = func(key string, size int64) error {
+		c.sizes.Store(path.Join(bucket, key), size)
+		return inner(key, size)
+	}
 	dir, _ := path.Split(prefix)
-	return c.do(ctx, func(conn *ftp.ServerConn) error {
+	return c.do(ctx, func(conn *ftp.ServerConn, _ *slot) error {
 		return walk(conn, bucket, dir, prefix, fn)
 	})
 }
@@ -253,7 +323,8 @@ func walk(conn *ftp.ServerConn, bucket, dir, prefix string, fn func(key string, 
 // DeleteObject removes the object. A missing object counts as deleted.
 func (c *Client) DeleteObject(ctx context.Context, bucket, key string) error {
 	name := path.Join(bucket, key)
-	return c.do(ctx, func(conn *ftp.ServerConn) error {
+	c.sizes.Delete(name)
+	return c.do(ctx, func(conn *ftp.ServerConn, _ *slot) error {
 		if err := conn.Delete(name); err != nil && !isReply(err) {
 			return err
 		}
@@ -269,66 +340,202 @@ var errSpent = errors.New("ftps connection spent")
 // rather than with a server reply, it runs once more on a fresh connection,
 // since an idle connection the server closed fails only on first use. When fn
 // returns errSpent, the connection is dropped and do returns nil.
-func (c *Client) do(ctx context.Context, fn func(conn *ftp.ServerConn) error) error {
-	// Take a connection from the pool.
-	conn, err := c.acquire(ctx)
+func (c *Client) do(ctx context.Context, fn func(conn *ftp.ServerConn, s *slot) error) error {
+	// Take a slot with a connection from the pool.
+	s, err := c.acquire(ctx)
 	if err != nil {
 		return err
 	}
+	conn := s.conn
 
-	// Retry on a fresh connection when the pooled one failed.
-	err = fn(conn)
+	// Retry on a fresh connection when the pooled one failed. The new
+	// connection keeps the slot's token.
+	err = fn(conn, s)
 	if err != nil && err != errSpent && !isReply(err) {
 		_ = conn.Quit()
-		conn, err = c.dial(ctx)
+		conn, err = c.dial(ctx, s.login)
 		if err == nil {
-			err = fn(conn)
+			s.conn = conn
+			err = fn(conn, s)
+		} else {
+			s.conn = nil
+			c.free(s.login)
 		}
 	}
 
 	// Return the slot, dropping a failed or spent connection.
-	c.release(conn, err)
+	c.release(s, err)
 	if err == errSpent {
 		return nil
 	}
 	return err
 }
 
-// acquire takes a pool slot, dialing when it holds no connection. On error
-// the slot is already back in the pool.
-func (c *Client) acquire(ctx context.Context) (*ftp.ServerConn, error) {
+// acquire takes a slot and gives it a connection: the spare dialed for it, or
+// a new dial. On error the slot is already back in the pool.
+func (c *Client) acquire(ctx context.Context) (*slot, error) {
 	// Wait for a free slot.
-	var conn *ftp.ServerConn
+	var s *slot
 	select {
-	case conn = <-c.conns:
+	case s = <-c.slots:
 	case <-ctx.Done():
 		return nil, context.Cause(ctx)
 	}
-	if conn != nil {
-		return conn, nil
+	if s.conn != nil {
+		return s, nil
 	}
 
-	// Dial the empty slot.
-	conn, err := c.dial(ctx)
-	if err != nil {
-		c.conns <- nil
+	// Wait for the spare dialed while the last session ran.
+	if s.spare != nil {
+		select {
+		case s.conn = <-s.spare:
+			s.spare = nil
+			if s.conn == nil {
+				c.free(s.login)
+			}
+		case <-ctx.Done():
+			c.slots <- s
+			return nil, context.Cause(ctx)
+		}
+		if s.conn != nil {
+			return s, nil
+		}
+	}
+
+	// Dial the empty slot under a token of its login.
+	if err := c.take(ctx, s.login); err != nil {
+		c.slots <- s
 		return nil, err
 	}
-	return conn, nil
-}
-
-// release returns a slot to the pool, keeping conn unless err shows the
-// connection failed.
-func (c *Client) release(conn *ftp.ServerConn, err error) {
-	if conn != nil && err != nil && !isReply(err) {
-		_ = conn.Quit()
-		conn = nil
+	conn, err := c.dial(ctx, s.login)
+	if err != nil {
+		c.free(s.login)
+		c.slots <- s
+		return nil, err
 	}
-	c.conns <- conn
+	s.conn = conn
+	return s, nil
 }
 
-// dial connects, upgrades to TLS with AUTH TLS, and logs in.
-func (c *Client) dial(ctx context.Context) (*ftp.ServerConn, error) {
+// release returns a slot to the pool, keeping its connection unless err shows
+// the connection failed or spent. A connection that outlived its range read
+// makes the spare dialed for it surplus.
+func (c *Client) release(s *slot, err error) {
+	if s.conn != nil && err != nil && !isReply(err) {
+		_ = s.conn.Quit()
+		s.conn = nil
+		c.free(s.login)
+	}
+	if s.conn != nil && s.spare != nil {
+		go c.discard(s.login, s.spare)
+		s.spare = nil
+	}
+	c.slots <- s
+}
+
+// startSpare dials a replacement for the slot's session in the background,
+// when its login has a session to spare. The dial is bounded by dialTimeout.
+func (c *Client) startSpare(ctx context.Context, s *slot) {
+	if s.spare != nil {
+		return
+	}
+	if !c.tryTake(s.login) {
+		return
+	}
+	spare := make(chan *ftp.ServerConn, 1)
+	s.spare = spare
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*dialTimeout)
+	go func() {
+		defer cancel()
+		conn, err := c.dial(ctx, s.login)
+		if err != nil {
+			conn = nil
+		}
+		spare <- conn
+	}()
+}
+
+// discard closes the spare session and frees its token.
+func (c *Client) discard(login int, spare chan *ftp.ServerConn) {
+	if conn := <-spare; conn != nil {
+		_ = conn.Quit()
+	}
+	c.free(login)
+}
+
+// drop logs out the sessions of a slot held by the caller.
+func (c *Client) drop(s *slot) {
+	if s.conn != nil {
+		_ = s.conn.Quit()
+		s.conn = nil
+		c.free(s.login)
+	}
+	if s.spare != nil {
+		c.discard(s.login, s.spare)
+		s.spare = nil
+	}
+}
+
+// take waits for a session token of the login and of the client.
+func (c *Client) take(ctx context.Context, login int) error {
+	select {
+	case c.tokens[login] <- struct{}{}:
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	}
+	select {
+	case c.total <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		<-c.tokens[login]
+		return context.Cause(ctx)
+	}
+}
+
+// tryTake takes the tokens of a session without waiting, and reports whether
+// it did.
+func (c *Client) tryTake(login int) bool {
+	select {
+	case c.tokens[login] <- struct{}{}:
+	default:
+		return false
+	}
+	select {
+	case c.total <- struct{}{}:
+		return true
+	default:
+		<-c.tokens[login]
+		return false
+	}
+}
+
+// free returns the tokens of a session of the login.
+func (c *Client) free(login int) {
+	<-c.total
+	<-c.tokens[login]
+}
+
+// dial connects, upgrades to TLS with AUTH TLS, and logs in. While the server
+// answers that its limit of sessions is reached, which another client of the
+// host may cause, it waits with a growing delay and tries again until ctx ends.
+func (c *Client) dial(ctx context.Context, login int) (*ftp.ServerConn, error) {
+	wait := 100 * time.Millisecond
+	for {
+		conn, err := c.dialOnce(ctx, login)
+		if err == nil || !isFull(err) {
+			return conn, err
+		}
+		select {
+		case <-time.After(wait):
+		case <-ctx.Done():
+			return nil, err
+		}
+		wait = min(2*wait, fullBackoff)
+	}
+}
+
+// dialOnce makes one attempt to dial.
+func (c *Client) dialOnce(ctx context.Context, login int) (*ftp.ServerConn, error) {
 	// Connect and upgrade the control connection to TLS.
 	conn, err := ftp.Dial(c.conf.Addr,
 		ftp.DialWithContext(ctx),
@@ -341,11 +548,21 @@ func (c *Client) dial(ctx context.Context) (*ftp.ServerConn, error) {
 	}
 
 	// Log in. The error names the server, never the credentials.
-	if err := conn.Login(c.conf.User, c.conf.Password); err != nil {
+	if err := conn.Login(c.conf.Logins[login].User, c.conf.Logins[login].Password); err != nil {
 		_ = conn.Quit()
 		return nil, errors.Wrap(err, "log in to "+c.conf.Addr)
 	}
 	return conn, nil
+}
+
+// isFull reports whether err is the server's answer that it holds the most
+// sessions it allows the user or the client host, sent at the greeting or the
+// login, as "530 Sorry, the maximum number of clients (10) for this user are
+// already connected".
+func isFull(err error) bool {
+	var reply *textproto.Error
+	return errors.As(err, &reply) && (reply.Code == 530 || reply.Code == 421) &&
+		strings.Contains(reply.Msg, "maximum number")
 }
 
 // makeDirs creates dir and each missing parent. The errors of directories

@@ -15,11 +15,6 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// ftpsDefaultConns is the control connections an FTPS backend opens when the
-// location sets none. It stays small, since a server may allow few connections
-// per client host.
-const ftpsDefaultConns = 4
-
 // errCheckListed stops the FTPS check's listing after its first object.
 var errCheckListed = errors.New("listed")
 
@@ -27,7 +22,7 @@ var errCheckListed = errors.New("listed")
 // A nil tlsConf verifies the server against the system roots. It connects on
 // its first call.
 func buildFTPSClient(location *account_settings.FtpsLocation, tlsConf *tls.Config) (*block_store_ftps.Client, error) {
-	user, password, err := block_store_ftps.ReadNetrc(location.GetNetrcPath(), location.GetHost())
+	logins, err := block_store_ftps.ReadNetrc(location.GetNetrcPath(), location.GetHost())
 	if err != nil {
 		return nil, err
 	}
@@ -35,11 +30,13 @@ func buildFTPSClient(location *account_settings.FtpsLocation, tlsConf *tls.Confi
 	if port := location.GetPort(); port != 0 {
 		addr = net.JoinHostPort(addr, strconv.FormatUint(uint64(port), 10))
 	}
-	conns := int(location.GetMaxConns())
-	if conns == 0 {
-		conns = ftpsDefaultConns
-	}
-	return block_store_ftps.NewClient(block_store_ftps.Config{Addr: addr, User: user, Password: password, TLSConfig: tlsConf, Conns: conns}), nil
+	return block_store_ftps.NewClient(block_store_ftps.Config{
+		Addr:          addr,
+		Logins:        logins,
+		TLSConfig:     tlsConf,
+		MaxSessions:   int(location.GetMaxConns()),
+		ConnsPerLogin: int(location.GetConnsPerLogin()),
+	}), nil
 }
 
 // buildFTPSBlockStore opens the packfile store on the location's directory.

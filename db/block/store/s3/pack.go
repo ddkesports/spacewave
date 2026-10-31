@@ -489,7 +489,7 @@ func (s *PackStore) listEntries(ctx context.Context, listed uint64) error {
 	// Read new packfile entries with bounded concurrent requests.
 	entries := make([]*packfile.PackfileEntry, len(ids))
 	eg, egCtx := errgroup.WithContext(ctx)
-	eg.SetLimit(batchConcurrency)
+	eg.SetLimit(s.readConcurrency())
 	for i, id := range ids {
 		eg.Go(func() error {
 			entry, err := s.readEntry(egCtx, id)
@@ -512,6 +512,16 @@ func (s *PackStore) listEntries(ctx context.Context, listed uint64) error {
 	s.updateEntries(entries, slices.Collect(maps.Keys(known)))
 	s.loaded.Store(true)
 	return nil
+}
+
+// readConcurrency returns the concurrent requests that read the packfile
+// entries: batchConcurrency, or the width of the object store when it is wider,
+// as each entry is one request on one of its connections.
+func (s *PackStore) readConcurrency() int {
+	if w, ok := s.client.(interface{ Conns() int }); ok {
+		return max(batchConcurrency, w.Conns())
+	}
+	return batchConcurrency
 }
 
 // readEntry reads the entry object of packfile id.

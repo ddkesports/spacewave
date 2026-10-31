@@ -63,20 +63,22 @@ class StorageBackend(_message.Message):
     def __init__(self, id: _Optional[str] = ..., display_name: _Optional[str] = ..., s3: _Optional[_Union[S3Location, _Mapping]] = ..., credential: _Optional[_Union[_secret_pb2.Secret, _Mapping]] = ..., sql: _Optional[_Union[SqlLocation, _Mapping]] = ..., ftps: _Optional[_Union[FtpsLocation, _Mapping]] = ...) -> None: ...
 
 class FtpsLocation(_message.Message):
-    __slots__ = ("host", "port", "netrc_path", "root", "prefix", "max_conns")
+    __slots__ = ("host", "port", "netrc_path", "root", "prefix", "max_conns", "conns_per_login")
     HOST_FIELD_NUMBER: _ClassVar[int]
     PORT_FIELD_NUMBER: _ClassVar[int]
     NETRC_PATH_FIELD_NUMBER: _ClassVar[int]
     ROOT_FIELD_NUMBER: _ClassVar[int]
     PREFIX_FIELD_NUMBER: _ClassVar[int]
     MAX_CONNS_FIELD_NUMBER: _ClassVar[int]
+    CONNS_PER_LOGIN_FIELD_NUMBER: _ClassVar[int]
     host: str
     port: int
     netrc_path: str
     root: str
     prefix: str
     max_conns: int
-    def __init__(self, host: _Optional[str] = ..., port: _Optional[int] = ..., netrc_path: _Optional[str] = ..., root: _Optional[str] = ..., prefix: _Optional[str] = ..., max_conns: _Optional[int] = ...) -> None: ...
+    conns_per_login: int
+    def __init__(self, host: _Optional[str] = ..., port: _Optional[int] = ..., netrc_path: _Optional[str] = ..., root: _Optional[str] = ..., prefix: _Optional[str] = ..., max_conns: _Optional[int] = ..., conns_per_login: _Optional[int] = ...) -> None: ...
 
 class SqlLocation(_message.Message):
     __slots__ = ("host", "port", "database", "table_prefix", "tls", "tls_cert_sha256")

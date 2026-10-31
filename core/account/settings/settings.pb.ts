@@ -165,7 +165,9 @@ export const StorageBackend: MessageType<StorageBackend> =
 /**
  * FtpsLocation locates a directory on an FTPS server that holds packfiles,
  * read and written as a bucket is. The server logs in from a netrc file on the
- * host that runs the account, which names the host without its port. Packfiles
+ * host that runs the account, which names the host without its port. Each
+ * machine line of the host is one login, and each login adds its own
+ * connections. Packfiles
  * are only added: the backend never deletes or compacts one.
  *
  * @generated from message account.settings.FtpsLocation
@@ -193,10 +195,16 @@ export interface FtpsLocation {
    */
   prefix?: string
   /**
-   * MaxConns is the number of control connections the backend opens, zero
-   * for 4. The server may allow few connections per client host.
+   * MaxConns is the most sessions the backend holds open at once across
+   * all logins, spares included, zero for 10. A server may cap sessions per
+   * client host as well as per user, so logins do not raise it.
    */
   maxConns?: number
+  /**
+   * ConnsPerLogin is the most sessions open at once on one netrc login,
+   * counting the spares dialed ahead of range reads, zero for 9.
+   */
+  connsPerLogin?: number
 }
 
 export const FtpsLocation: MessageType<FtpsLocation> =
@@ -209,6 +217,7 @@ export const FtpsLocation: MessageType<FtpsLocation> =
       [4, 'root', 9],
       [5, 'prefix', 9],
       [6, 'max_conns', 13],
+      [7, 'conns_per_login', 13],
     ],
   )
 

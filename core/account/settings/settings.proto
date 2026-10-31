@@ -76,7 +76,9 @@ message StorageBackend {
 
 // FtpsLocation locates a directory on an FTPS server that holds packfiles,
 // read and written as a bucket is. The server logs in from a netrc file on the
-// host that runs the account, which names the host without its port. Packfiles
+// host that runs the account, which names the host without its port. Each
+// machine line of the host is one login, and each login adds its own
+// connections. Packfiles
 // are only added: the backend never deletes or compacts one.
 message FtpsLocation {
   // Host is the server host name, also the machine of the netrc entry.
@@ -90,9 +92,13 @@ message FtpsLocation {
   // Prefix is the key prefix of the packfiles below Root, used as given by
   // every block store placed on the backend, such as "world/packs/".
   string prefix = 5;
-  // MaxConns is the number of control connections the backend opens, zero
-  // for 4. The server may allow few connections per client host.
+  // MaxConns is the most sessions the backend holds open at once across
+  // all logins, spares included, zero for 10. A server may cap sessions per
+  // client host as well as per user, so logins do not raise it.
   uint32 max_conns = 6;
+  // ConnsPerLogin is the most sessions open at once on one netrc login,
+  // counting the spares dialed ahead of range reads, zero for 9.
+  uint32 conns_per_login = 7;
 }
 
 // SqlLocation locates a MySQL-compatible database that holds blocks. It only

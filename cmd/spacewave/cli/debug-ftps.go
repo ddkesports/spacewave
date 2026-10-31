@@ -43,11 +43,11 @@ func (a *ftpsArgs) client() (*block_store_ftps.Client, error) {
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		host = h
 	}
-	user, password, err := block_store_ftps.ReadNetrc(a.netrc, host)
+	logins, err := block_store_ftps.ReadNetrc(a.netrc, host)
 	if err != nil {
 		return nil, err
 	}
-	return block_store_ftps.NewClient(block_store_ftps.Config{Addr: a.host, User: user, Password: password, Conns: a.conns}), nil
+	return block_store_ftps.NewClient(block_store_ftps.Config{Addr: a.host, Logins: logins, MaxSessions: a.conns}), nil
 }
 
 // smokeObjectSize is the size of the objects the smoke test writes, about
@@ -68,7 +68,7 @@ func newDebugFTPSSmokeCommand() *cli.Command {
 			&cli.StringFlag{Name: "ftps-host", Usage: "the FTPS server", Destination: &args.host, Required: true},
 			&cli.StringFlag{Name: "ftps-netrc", Usage: "the netrc file holding the FTPS login", Destination: &args.netrc, Required: true},
 			&cli.StringFlag{Name: "ftps-root", Usage: "the scratch directory", Destination: &args.root, Required: true},
-			&cli.IntFlag{Name: "ftps-conns", Usage: "the FTPS connections", Value: block_store_ftps.DefaultConns, Destination: &args.conns},
+			&cli.IntFlag{Name: "ftps-conns", Usage: "the most FTPS sessions open at once across the netrc logins, spares included", Value: block_store_ftps.DefaultMaxSessions, Destination: &args.conns},
 		},
 		Action: func(c *cli.Context) error {
 			client, err := args.client()
@@ -76,7 +76,7 @@ func newDebugFTPSSmokeCommand() *cli.Command {
 				return err
 			}
 			defer client.Close()
-			return ftpsSmoke(c.Context, client, args.root, args.conns, os.Stderr)
+			return ftpsSmoke(c.Context, client, args.root, client.Conns(), os.Stderr)
 		},
 	}
 }

@@ -248,7 +248,9 @@ func (x *StorageBackend) GetFtps() *FtpsLocation {
 
 // FtpsLocation locates a directory on an FTPS server that holds packfiles,
 // read and written as a bucket is. The server logs in from a netrc file on the
-// host that runs the account, which names the host without its port. Packfiles
+// host that runs the account, which names the host without its port. Each
+// machine line of the host is one login, and each login adds its own
+// connections. Packfiles
 // are only added: the backend never deletes or compacts one.
 type FtpsLocation struct {
 	unknownFields []byte
@@ -263,9 +265,13 @@ type FtpsLocation struct {
 	// Prefix is the key prefix of the packfiles below Root, used as given by
 	// every block store placed on the backend, such as "world/packs/".
 	Prefix string `protobuf:"bytes,5,opt,name=prefix,proto3" json:"prefix,omitempty"`
-	// MaxConns is the number of control connections the backend opens, zero
-	// for 4. The server may allow few connections per client host.
+	// MaxConns is the most sessions the backend holds open at once across
+	// all logins, spares included, zero for 10. A server may cap sessions per
+	// client host as well as per user, so logins do not raise it.
 	MaxConns uint32 `protobuf:"varint,6,opt,name=max_conns,json=maxConns,proto3" json:"maxConns,omitempty"`
+	// ConnsPerLogin is the most sessions open at once on one netrc login,
+	// counting the spares dialed ahead of range reads, zero for 9.
+	ConnsPerLogin uint32 `protobuf:"varint,7,opt,name=conns_per_login,json=connsPerLogin,proto3" json:"connsPerLogin,omitempty"`
 }
 
 func (x *FtpsLocation) Reset() {
@@ -312,6 +318,13 @@ func (x *FtpsLocation) GetPrefix() string {
 func (x *FtpsLocation) GetMaxConns() uint32 {
 	if x != nil {
 		return x.MaxConns
+	}
+	return 0
+}
+
+func (x *FtpsLocation) GetConnsPerLogin() uint32 {
+	if x != nil {
+		return x.ConnsPerLogin
 	}
 	return 0
 }
@@ -1377,6 +1390,7 @@ func (m *FtpsLocation) CloneVT() *FtpsLocation {
 	r.Root = m.Root
 	r.Prefix = m.Prefix
 	r.MaxConns = m.MaxConns
+	r.ConnsPerLogin = m.ConnsPerLogin
 	if len(m.unknownFields) > 0 {
 		r.unknownFields = slices.Clone(m.unknownFields)
 	}
@@ -2089,6 +2103,9 @@ func (this *FtpsLocation) EqualVT(that *FtpsLocation) bool {
 		return false
 	}
 	if this.MaxConns != that.MaxConns {
+		return false
+	}
+	if this.ConnsPerLogin != that.ConnsPerLogin {
 		return false
 	}
 	return string(this.unknownFields) == string(that.unknownFields)
@@ -3401,6 +3418,11 @@ func (x *FtpsLocation) MarshalProtoJSON(s *json.MarshalState) {
 		s.WriteObjectField("maxConns")
 		s.WriteUint32(x.MaxConns)
 	}
+	if x.ConnsPerLogin != 0 || s.HasField("connsPerLogin") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("connsPerLogin")
+		s.WriteUint32(x.ConnsPerLogin)
+	}
 	s.WriteObjectEnd()
 }
 
@@ -3436,6 +3458,9 @@ func (x *FtpsLocation) UnmarshalProtoJSON(s *json.UnmarshalState) {
 		case "max_conns", "maxConns":
 			s.AddField("max_conns")
 			x.MaxConns = s.ReadUint32()
+		case "conns_per_login", "connsPerLogin":
+			s.AddField("conns_per_login")
+			x.ConnsPerLogin = s.ReadUint32()
 		}
 	})
 }
@@ -5034,6 +5059,11 @@ func (m *FtpsLocation) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	if m.unknownFields != nil {
 		i = protobuf_go_lite.EncodeRawBytes(dAtA, i, m.unknownFields)
 	}
+	if m.ConnsPerLogin != 0 {
+		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(m.ConnsPerLogin))
+		i--
+		dAtA[i] = 0x38
+	}
 	if m.MaxConns != 0 {
 		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(m.MaxConns))
 		i--
@@ -6525,6 +6555,7 @@ func (m *FtpsLocation) SizeVT() (n int) {
 	n += protobuf_go_lite.SizeStringNonEmpty(1, m.Root)
 	n += protobuf_go_lite.SizeStringNonEmpty(1, m.Prefix)
 	n += protobuf_go_lite.SizeVarintNonZero(1, m.MaxConns)
+	n += protobuf_go_lite.SizeVarintNonZero(1, m.ConnsPerLogin)
 	n += len(m.unknownFields)
 	return n
 }
@@ -7283,6 +7314,10 @@ func (x *FtpsLocation) MarshalProtoText() string {
 	if x.MaxConns != 0 {
 		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "max_conns")
 		protobuf_go_lite.TextWriteUint(&sb, x.MaxConns)
+	}
+	if x.ConnsPerLogin != 0 {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "conns_per_login")
+		protobuf_go_lite.TextWriteUint(&sb, x.ConnsPerLogin)
 	}
 	return protobuf_go_lite.TextFinishMessage(&sb)
 }
@@ -8241,6 +8276,15 @@ func (m *FtpsLocation) UnmarshalVT(dAtA []byte) error {
 			}
 			m.MaxConns = 0
 			m.MaxConns, iNdEx, err = protobuf_go_lite.DecodeVarintUint32(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+		case 7:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ConnsPerLogin", wireType)
+			}
+			m.ConnsPerLogin = 0
+			m.ConnsPerLogin, iNdEx, err = protobuf_go_lite.DecodeVarintUint32(dAtA, iNdEx)
 			if err != nil {
 				return err
 			}
