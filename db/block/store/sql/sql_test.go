@@ -13,6 +13,7 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/s4wave/spacewave/db/block"
+	block_mock "github.com/s4wave/spacewave/db/block/mock"
 	block_store_s3 "github.com/s4wave/spacewave/db/block/store/s3"
 	"github.com/sirupsen/logrus"
 )
@@ -213,5 +214,35 @@ func TestReadSkipsPrepare(t *testing.T) {
 	// The reads prepared nothing.
 	if after := prepares(); after != before {
 		t.Fatalf("ten reads prepared %d statements, want 0", after-before)
+	}
+}
+
+// TestReadAdmitsDecodedBlock checks that a block read from the store enters
+// the shared decoded-block pool, so a second transaction decodes it from the
+// pool instead of querying the database again.
+func TestReadAdmitsDecodedBlock(t *testing.T) {
+	// Write a block to a fresh store.
+	ctx := t.Context()
+	store := openTestStore(t, testConfig(t), "admit")
+	ref, _, err := block.PutBlock(ctx, store, &block_mock.Example{Msg: "admitted"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decodedBlocks, err := block.NewDecodedBlockCacheWithOptions(block.DefaultDecodedBlockCacheOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer decodedBlocks.Close()
+
+	// Read it in two transactions sharing the cache.
+	for range 2 {
+		tx, cursor := block.NewTransaction(store, nil, ref, nil)
+		tx.SetDecodedBlockCache(decodedBlocks)
+		if _, err := cursor.Unmarshal(ctx, block_mock.NewExampleBlock); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if snap := decodedBlocks.Snapshot(); snap.Stores != 1 || snap.Hits != 1 {
+		t.Fatalf("pool stores=%d hits=%d, want 1 and 1", snap.Stores, snap.Hits)
 	}
 }

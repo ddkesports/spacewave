@@ -254,13 +254,15 @@ func (s *Store) GetBlock(ctx context.Context, ref *block.BlockRef) ([]byte, bool
 }
 
 // GetStoredBlock returns the block with its refs. Returns nil if the block is
-// not found.
+// not found. A found block is committed and the store never removes one, so
+// the read is marked durable and the decoded block may enter the shared pool.
 func (s *Store) GetStoredBlock(ctx context.Context, ref *block.BlockRef) (*block.StoredBlock, error) {
-	// Read the block's row.
+	// Read the block's row, taking the removal generation before the query.
 	key, err := hashKey(ref)
 	if err != nil {
 		return nil, err
 	}
+	gen := block.DurableReadGeneration()
 	var data, refs []byte
 	err = s.db.QueryRowContext(ctx, "SELECT data, refs FROM "+s.table+" WHERE store_id = ? AND hash = ?", s.storeID, key).Scan(&data, &refs)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -278,6 +280,7 @@ func (s *Store) GetStoredBlock(ctx context.Context, ref *block.BlockRef) (*block
 		}
 		stored.RefsKnown = true
 	}
+	block.MarkDurableRead(ctx, ref, gen)
 	return stored, nil
 }
 
