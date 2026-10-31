@@ -1,6 +1,9 @@
 package block
 
-import "context"
+import (
+	"context"
+	"slices"
+)
 
 // Replacements lists the stored pages the writes a ReplacementLog recorded
 // stopped naming in one interval, so the caller can learn what died without
@@ -39,4 +42,35 @@ func (r *Replacements) Expand(ctx context.Context, src StoreOps, visit func(ref 
 		}
 		return visit(ref)
 	})
+}
+
+// Then returns what died across r's interval followed by next's, the interval
+// that starts at the root r's ended at. A page next keeps is live at its end,
+// so it leaves the dead pages even when r reported it, as when a later write
+// stores a page again or attaches a subtree r removed. Expansion stops at
+// every page either interval replaced or kept; stopping early only leaks.
+func (r *Replacements) Then(next *Replacements) *Replacements {
+	// Collect the pages next keeps.
+	live := make(map[string]struct{}, len(next.Kept))
+	for _, ref := range next.Kept {
+		live[ref.MarshalString()] = struct{}{}
+	}
+	dead := func(lists ...[]*BlockRef) []*BlockRef {
+		var out []*BlockRef
+		for _, list := range lists {
+			for _, ref := range list {
+				if _, ok := live[ref.MarshalString()]; !ok {
+					out = append(out, ref)
+				}
+			}
+		}
+		return out
+	}
+
+	// Join the dead pages, dropping the live ones, and every stop.
+	return &Replacements{
+		Replaced: dead(r.Replaced, next.Replaced),
+		Removed:  dead(r.Removed, next.Removed),
+		Kept:     slices.Concat(r.Kept, next.Kept),
+	}
 }

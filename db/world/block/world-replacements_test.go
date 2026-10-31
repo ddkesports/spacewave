@@ -13,8 +13,8 @@ import (
 )
 
 // TestWorldReplacementsMatchDiff commits World operations that write object
-// trees through the World, and checks each commit's record against the diff of
-// the old and new World roots.
+// trees through the World, and checks each commit's transition against the
+// diff of the old and new World roots.
 func TestWorldReplacementsMatchDiff(t *testing.T) {
 	// Build an empty testbed cursor.
 	ctx := t.Context()
@@ -30,27 +30,53 @@ func TestWorldReplacementsMatchDiff(t *testing.T) {
 	}
 	defer ocs.Release()
 
-	// Build a World on it whose transactions record into one log.
-	log := block.NewReplacementLog(nil)
-	ocs.SetReplacementLog(log)
-	ws, err := BuildMockWorldState(ctx, le, true, ocs, false)
+	// Build an engine that hands over each commit's transition.
+	type transition struct {
+		from, to *block.BlockRef
+		dead     *block.Replacements
+	}
+	var got []transition
+	eng, err := NewEngine(ctx, le, ocs, nil, nil, false, WithTransitions(func(from, to *block.BlockRef, dead *block.Replacements) {
+		got = append(got, transition{from, to, dead})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ws.Discard()
-	store := ocs.GetBucket()
+	defer eng.Close()
 
-	// commit commits the pending operations and checks the interval's record.
+	// Fork a write on it and read through the fork's buffered store.
+	fork, err := eng.ForkBlockTransaction(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fork.Discard()
+	ws := fork.state
+	store := ws.store
+
+	// commit commits the pending operations and checks their transition, and
+	// composes it onto chain.
 	from := ws.GetRootRef()
+	var chain *block.Replacements
 	commit := func(name string) {
+		// Commit and check the one transition against the diff.
 		if err := ws.Commit(ctx); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
 		to := ws.GetRootRef()
-		if err := block_mock.CheckReplacements(ctx, store, from, to, log.Take(to)); err != nil {
+		if len(got) != 1 || !got[0].from.EqualsRef(from) || !got[0].to.EqualsRef(to) {
+			t.Fatalf("%s: transitions %v, want one from %v to %v", name, got, from, to)
+		}
+		if err := block_mock.CheckReplacements(ctx, store, from, to, got[0].dead); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		from = to
+
+		// Compose it onto the chain.
+		if chain == nil {
+			chain = got[0].dead
+		} else {
+			chain = chain.Then(got[0].dead)
+		}
+		got, from = nil, to
 	}
 
 	// writeChain writes root -> mid -> leaf through the World and returns the
@@ -106,13 +132,20 @@ func TestWorldReplacementsMatchDiff(t *testing.T) {
 		}
 	}
 
-	// The first commit writes the empty World's pages. Turn the changelog off:
-	// its entries name Object blocks the object tree also names, a second
-	// parent the record does not count.
+	// Turning the changelog off drops entries that name Object blocks the
+	// object tree also names, a second parent the record does not count, so
+	// the commit forfeits its record.
 	if _, err := ws.SetChangelogDisabled(ctx, true); err != nil {
 		t.Fatal(err)
 	}
-	commit("init")
+	if err := ws.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].dead != nil {
+		t.Fatalf("changelog switch: transitions %v, want one forfeited", got)
+	}
+	got, from = nil, ws.GetRootRef()
+	chainFrom := from
 
 	// Create two objects with their trees.
 	createObject("a")
@@ -199,4 +232,23 @@ func TestWorldReplacementsMatchDiff(t *testing.T) {
 		t.Fatal(err)
 	}
 	commit("put edit")
+
+	// Delete n, then store its block again under a new object: the page dies
+	// in one commit and lives again in the next.
+	if _, err := ws.DeleteObject(ctx, "n"); err != nil {
+		t.Fatal(err)
+	}
+	commit("put delete")
+	obj, err = ws.CreateObject(ctx, "m", putRoot("note edited"))
+	world.ReleaseObjectState(obj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit("put again")
+
+	// The composed chain reports what died from the first recorded root to
+	// the last.
+	if err := block_mock.CheckReplacements(ctx, store, chainFrom, from, chain); err != nil {
+		t.Fatalf("chain: %v", err)
+	}
 }

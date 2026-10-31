@@ -916,9 +916,14 @@ func (c *Cursor) SetBlock(b any, dirty bool) {
 		c.pos.ref, c.pos.base = nil, nil
 	}
 
-	// Propagate the changed block state to its ancestors.
+	// Propagate the changed block state to its ancestors. A clean block is the
+	// stored page at the position, so a recording transaction takes it as the
+	// base, as a load does. A block whose refs cannot be read gets no base, and
+	// its replacement leaks rather than being reported.
 	if dirty {
 		c.markDirty()
+	} else if b != nil {
+		_ = c.recordBase()
 	}
 }
 

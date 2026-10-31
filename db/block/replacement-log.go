@@ -22,6 +22,8 @@ type ReplacementLog struct {
 	replaced map[string]pageBase
 	// created holds each page a write stored, by ref.
 	created map[string]pageBase
+	// forfeit is set when the interval's record cannot be trusted.
+	forfeit bool
 }
 
 // NewReplacementLog starts a log whose first interval begins at the root from.
@@ -31,14 +33,34 @@ func NewReplacementLog(from *BlockRef) *ReplacementLog {
 	return l
 }
 
+// From returns the root the current interval began at.
+func (l *ReplacementLog) From() *BlockRef {
+	l.mtx.Lock()
+	defer l.mtx.Unlock()
+	return l.from.Clone()
+}
+
+// Forfeit gives up the current interval's record, for a write the record
+// cannot account for, such as one that gives a page a second parent the record
+// does not count. Take then reports nothing for the interval, so what died in
+// it leaks rather than a page another parent names being reported dead.
+func (l *ReplacementLog) Forfeit() {
+	l.mtx.Lock()
+	l.forfeit = true
+	l.mtx.Unlock()
+}
+
 // Take returns what the writes since the interval began did to the stored
 // pages under its root, with the root now at to, and starts the next interval
-// at to.
+// at to. Returns nil when the interval was forfeited.
 func (l *ReplacementLog) Take(to *BlockRef) *Replacements {
 	// Net the interval and start the next one under the lock.
 	l.mtx.Lock()
 	defer l.mtx.Unlock()
-	out := l.net(to)
+	var out *Replacements
+	if !l.forfeit {
+		out = l.net(to)
+	}
 	l.reset(to)
 	return out
 }
@@ -48,6 +70,7 @@ func (l *ReplacementLog) reset(from *BlockRef) {
 	l.from = from.Clone()
 	l.replaced = make(map[string]pageBase)
 	l.created = make(map[string]pageBase)
+	l.forfeit = false
 }
 
 // RecordReplacements makes the transaction's writes record the stored pages
