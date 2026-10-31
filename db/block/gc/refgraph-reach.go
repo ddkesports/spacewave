@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"github.com/s4wave/spacewave/db/kvtx"
 	"github.com/s4wave/spacewave/net/hash"
 )
 
@@ -24,31 +23,7 @@ const reachChunk = 4096
 // batch of reads per chunk instead of one read per node, and the work list
 // stays small however wide the graph is.
 func (g *RefGraph) Reachable(ctx context.Context) (*BlockMark, error) {
-	reached := NewNodeSet()
-	mark := &BlockMark{Live: reached}
-	err := g.transaction(ctx, false, func(ctx context.Context, tx kvtx.Tx) error {
-		// Seed the stack with the graph root and the registered roots.
-		reached.Add(NodeGCRoot)
-		stack := []namedNode{{node: NodeGCRoot}}
-		prefix := graphKey(kindRoot)
-		err := tx.ScanPrefixKeys(ctx, prefix, func(key []byte) error {
-			if node := lastNode(prefix, key); node != NodeUnreferenced && reached.Add(node) {
-				stack = append(stack, namedNode{node, NodeGCRoot})
-			}
-			return nil
-		})
-		if err != nil {
-			return err
-		}
-
-		// Walk from them.
-		_, err = walkTx(ctx, tx, reached, stack, nil, nil, mark.noteUnknown, nil, nil)
-		return err
-	})
-	if err != nil {
-		return nil, err
-	}
-	return mark, nil
+	return g.ReachableWithout(ctx)
 }
 
 // RecordSubject returns the node whose liveness decides whether a complete

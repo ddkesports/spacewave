@@ -75,4 +75,21 @@ func TestReachable(t *testing.T) {
 	if want := 6 + chain; reached.Len() != want {
 		t.Errorf("reached %d nodes, want %d", reached.Len(), want)
 	}
+
+	// Cutting the bucket kind reaches the bucket but none of its blocks,
+	// unless another owner names one: the object root also holds the leaf.
+	addRef("object", block("leaf"))
+	mark, err = rg.ReachableWithout(ctx, "bucket")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !mark.Live.Has("bucket") || !mark.Live.Has(block("leaf")) {
+		t.Error("cut walk lost the bucket or the leaf the object holds")
+	}
+	if mark.Live.Has(block("left")) || mark.Live.Has(block("right")) {
+		t.Error("cut walk reached blocks only the bucket holds")
+	}
+	if want := 4 + chain; mark.Live.Len() != want {
+		t.Errorf("cut walk reached %d nodes, want %d", mark.Live.Len(), want)
+	}
 }
