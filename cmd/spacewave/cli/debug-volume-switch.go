@@ -28,6 +28,10 @@ type switchArgs struct {
 	logPath string
 	// shards is the number of key ranges volume-pack ran.
 	shards int
+	// omitGraph leaves out the reference graph.
+	omitGraph bool
+	// skipBlocks seeks past the block range without checking it against the log.
+	skipBlocks bool
 }
 
 // newDebugVolumeSwitchCommand builds the command that moves a stopped volume
@@ -50,6 +54,8 @@ func newDebugVolumeSwitchCommand() *cli.Command {
 			&cli.StringFlag{Name: "writeback-store", Usage: "the object store ID of the World store's write-back records; defaults to <world-store>/writeback", Destination: &args.writebackStore},
 			&cli.StringFlag{Name: "log", Usage: "the pack log volume-pack wrote", Destination: &args.logPath, Required: true},
 			&cli.IntFlag{Name: "shards", Usage: "the --shards volume-pack ran with; reads the log and its .NN shard logs", Value: 1, Destination: &args.shards},
+			&cli.BoolFlag{Name: "omit-graph", Usage: "leave out the reference graph, so the new file's collector starts empty", Destination: &args.omitGraph},
+			&cli.BoolFlag{Name: "skip-blocks", Usage: "seek past every block without checking it against the log; only when the logs cover the whole block range", Destination: &args.skipBlocks},
 		},
 		Action: func(c *cli.Context) error {
 			if c.NArg() != 2 {
@@ -107,6 +113,8 @@ func switchVolumeFile(ctx context.Context, src, dst string, args *switchArgs, w 
 		LogPaths:        packmove.ShardLogPaths(args.logPath, max(args.shards, 1)),
 		WorldStoreID:    args.worldStore,
 		WritebackPrefix: keys.GetObjectStorePrefixByID(args.writebackStore),
+		OmitGraph:       args.omitGraph,
+		SkipBlocks:      args.skipBlocks,
 		Progress: func(p volume_kvtx.CopyProgress) {
 			if time.Since(last) < copyReportInterval {
 				return

@@ -9,7 +9,7 @@ type SplitOptions struct {
 	// is set, such as the keys that queue the block for the place the dropped
 	// ones went; nil writes none.
 	Kept KeptBlockKeys
-	// Omit lists key prefixes the copy leaves out. Each omitted key counts in
-	// CopyProgress.DroppedRecords.
+	// Omit lists key prefixes the copy leaves out. The copy seeks past each
+	// one, reading none of its keys, so an omitted key counts nowhere.
 	Omit [][]byte
 }

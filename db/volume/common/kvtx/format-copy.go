@@ -276,9 +276,10 @@ func (w *copyWriter) copyKeys(ctx context.Context, stx kvtx.Tx, versionKey []byt
 			}
 			continue
 		}
-		if w.omitted(key) {
-			w.counts.DroppedRecords++
-			it.Next()
+		if prefix := w.omitted(key); prefix != nil {
+			if err := it.Seek(prefixEnd(prefix)); err != nil {
+				return err
+			}
 			continue
 		}
 		if !bytes.Equal(key, versionKey) {
@@ -344,14 +345,14 @@ func (w *copyWriter) copyKeys(ctx context.Context, stx kvtx.Tx, versionKey []byt
 	return w.commitKeys(ctx, batch, size)
 }
 
-// omitted reports whether key starts with an omitted prefix.
-func (w *copyWriter) omitted(key []byte) bool {
+// omitted returns the omitted prefix key starts with, or nil.
+func (w *copyWriter) omitted(key []byte) []byte {
 	for _, prefix := range w.omit {
 		if bytes.HasPrefix(key, prefix) {
-			return true
+			return prefix
 		}
 	}
-	return false
+	return nil
 }
 
 // checkHeld asks drop which held blocks the copy leaves out, and appends the

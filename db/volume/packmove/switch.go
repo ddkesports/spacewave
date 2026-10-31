@@ -31,6 +31,9 @@ func Switch(ctx context.Context, cfg SwitchConfig) (SwitchResult, error) {
 	if err != nil {
 		return SwitchResult{}, errors.Wrap(err, "find the blocks outside the World")
 	}
+	if cfg.SkipBlocks && outside.Len() != 0 {
+		return SwitchResult{}, errors.Errorf("skip blocks would leave out %d blocks outside the World", outside.Len())
+	}
 
 	// Read the logs' entries in key order alongside the block range.
 	cursor, err := openPackedCursor(cfg.LogPaths)
@@ -85,7 +88,14 @@ func Switch(ctx context.Context, cfg SwitchConfig) (SwitchResult, error) {
 	}
 
 	// Copy.
-	opts := volume_kvtx.SplitOptions{Drop: packed, Kept: kept, Omit: [][]byte{cfg.WritebackPrefix}}
+	omit := [][]byte{cfg.WritebackPrefix}
+	if cfg.OmitGraph {
+		omit = append(omit, volume_kvtx.RefGraphPrefixes()...)
+	}
+	if cfg.SkipBlocks {
+		omit = append(omit, cfg.Keys.GetBlockFullPrefix())
+	}
+	opts := volume_kvtx.SplitOptions{Drop: packed, Kept: kept, Omit: omit}
 	err = volume_kvtx.CopyStoreSplitting(ctx, cfg.Source, cfg.Dest, cfg.Keys, opts, func(p volume_kvtx.CopyProgress) {
 		result.Copy = p
 		if cfg.Progress != nil {

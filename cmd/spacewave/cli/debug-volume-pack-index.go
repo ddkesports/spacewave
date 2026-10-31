@@ -36,7 +36,7 @@ func newDebugVolumePackIndexCommand() *cli.Command {
 		Usage:     "build the entry cache and block location index of the packs into a stopped volume file",
 		ArgsUsage: "<volume.s4db>",
 		Flags: []cli.Flag{
-			&cli.StringFlag{Name: "world-store", Usage: "the bucket ID of the World's block store, p/<provider>/<account>/blk/<id>", Destination: &args.pack.worldStore, Required: true},
+			&cli.StringFlag{Name: "world-store", Usage: "the World block store's id in its account, as the backend logs it in bstore-id, such as hyperline-world; the index is keyed by it", Destination: &args.pack.worldStore, Required: true},
 			&cli.StringFlag{Name: "bucket", Usage: "the bucket that holds the packs", EnvVars: []string{"HYPERLINE_PROD_BUCKET"}, Destination: &args.pack.bucket},
 			&cli.StringFlag{Name: "endpoint", Usage: "the S3 endpoint", Value: "https://s3.us-east-005.backblazeb2.com", EnvVars: []string{"HYPERLINE_PROD_BUCKET_ENDPOINT"}, Destination: &args.pack.endpoint},
 			&cli.StringFlag{Name: "region", Usage: "the S3 region", Value: "us-east-005", EnvVars: []string{"HYPERLINE_PROD_BUCKET_REGION"}, Destination: &args.pack.region},
