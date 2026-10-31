@@ -43,7 +43,8 @@
     "build:sync": "go run ./scripts/sync-library",
     "qualify:sync": "bun run scripts/sync-library/qualify.ts",
     "pack:sync": "npm pack --ignore-scripts ./packages/spacewave --pack-destination .tmp/sync-library",
-    "check": "bun run typecheck && bun run lint",
+    "check": "bun run typecheck && bun run lint && bun run check:tla",
+    "check:tla": "aptre-tla .",
     "fecheck": "bun scripts/fecheck.js",
     "clean": "rimraf ./dist ./.bldr/{devtool.db*,logs,src,plugin,build,cli,cache} ./.bldr-dist ./.tools ./bin ./bldr/bin",
     "clean:full": "bun run clean && rimraf ./.bldr ./.tmp",
@@ -243,7 +244,7 @@
     "bldr:vendor": "go mod vendor"
   },
   "devDependencies": {
-    "@aptre/common": "0.36.5",
+    "@aptre/common": "0.37.0",
     "@google/design.md": "^0.4.0",
     "@playwright/test": "^1.62.1",
     "@reylosql/mysql": "0.5.0",

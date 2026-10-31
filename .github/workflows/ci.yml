@@ -85,6 +85,23 @@ jobs:
             ;;
           esac
 
+  # specs checks every TLA+ spec in the tree against its configs; each model
+  # checks in milliseconds, so it runs on every event.
+  specs:
+    name: TLA+ specs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install Bun dependencies
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Check specs
+        run: bun run check:tla
+
   member-ci:
     name: CI (${{ matrix.name }})
     needs: affected
