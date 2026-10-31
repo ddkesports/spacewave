@@ -150,3 +150,10 @@ func (b *fakeBucket) keys() []string {
 	defer b.mtx.Unlock()
 	return slices.Sorted(maps.Keys(b.objects))
 }
+
+// listCount returns the object listing requests served so far.
+func (b *fakeBucket) listCount() int {
+	b.mtx.Lock()
+	defer b.mtx.Unlock()
+	return b.lists
+}

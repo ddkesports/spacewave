@@ -2,9 +2,12 @@ package block_store_writeback
 
 import (
 	"context"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/pkg/errors"
 	"github.com/s4wave/spacewave/db/block"
@@ -440,12 +443,13 @@ func TestDroppedBlockWrittenAgainKeepsMarker(t *testing.T) {
 	}
 
 	// Read the batch as an upload does: the block is gone, so it is dropped.
-	batch, err := s.scanBatch(ctx)
-	if err != nil || len(batch) != 1 {
-		t.Fatalf("scan = %d blocks, %v", len(batch), err)
+	head, err := s.scanHead(ctx, batchLimitsOf(nil))
+	if err != nil || len(head.entries) != 1 {
+		t.Fatalf("scan = %d blocks, %v", len(head.entries), err)
 	}
+	batch := head.entries
 	remote := newInmemBlockStore()
-	if err := s.uploadChunk(ctx, remote, batch, []int{0}); err != nil || !batch[0].dropped {
+	if err := s.uploadChunk(ctx, remote, batch); err != nil || !batch[0].dropped {
 		t.Fatalf("upload chunk = %v, dropped %v", err, batch[0].dropped)
 	}
 
@@ -501,4 +505,115 @@ func TestMarkingStoreStageHoldsCompleteRoots(t *testing.T) {
 	block_store_testing.RequireStageHold(t, func(ops block.StoreOps) block.StoreOps {
 		return NewMarkingStore(ops, nil)
 	})
+}
+
+// sizedStore sizes its batches and records them, standing in for a bucket of
+// packfiles. It fails the write numbered failAt, counting from 1, once.
+type sizedStore struct {
+	block.StoreOps
+	limits block.BatchLimits
+	mtx    sync.Mutex
+	// batches lists the size of each batch written.
+	batches []int
+	// failAt is the number of the write to fail, or zero.
+	failAt int
+}
+
+// GetBatchLimits returns the test's limits.
+func (r *sizedStore) GetBatchLimits() block.BatchLimits {
+	return r.limits
+}
+
+// PutBlockBatch records the batch, failing the numbered write.
+func (r *sizedStore) PutBlockBatch(ctx context.Context, entries []*block.PutBatchEntry) ([]bool, error) {
+	// Record the batch and decide whether this write fails.
+	r.mtx.Lock()
+	r.batches = append(r.batches, len(entries))
+	fail := len(r.batches) == r.failAt
+	r.mtx.Unlock()
+
+	// Fail the numbered write, or store the batch.
+	if fail {
+		return nil, errors.New("bucket unreachable")
+	}
+	return r.StoreOps.PutBlockBatch(ctx, entries)
+}
+
+// getBatches returns the sizes of the batches written so far.
+func (r *sizedStore) getBatches() []int {
+	r.mtx.Lock()
+	defer r.mtx.Unlock()
+	return slices.Clone(r.batches)
+}
+
+// waitStatus waits until the status satisfies done.
+func waitStatus(t *testing.T, s *Store, done func(Status) bool) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	for {
+		status, changed := s.GetStatus()
+		if done(status) {
+			return
+		}
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			t.Fatalf("status never satisfied the wait: %+v", status)
+		}
+	}
+}
+
+// TestUploadFillsBatches checks that a remote that sizes its batches gets full
+// ones at once and the short rest only after the linger time, and that a failed
+// batch repeats alone.
+func TestUploadFillsBatches(t *testing.T) {
+	// Open a store that queues its writes.
+	ctx := t.Context()
+	env := newTestEnv(t)
+	s := env.newStore(t, true)
+
+	// Queue 25 blocks of 100 bytes, which fill two batches of ten and leave five.
+	for i := range 25 {
+		data := []byte(strings.Repeat(strconv.Itoa(i%10), 99) + string(rune('a'+i)))
+		if _, _, err := s.PutBlock(ctx, data, leafOpts); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const linger = 400 * time.Millisecond
+	remote := &sizedStore{
+		StoreOps: newInmemBlockStore(),
+		limits:   block.BatchLimits{Bytes: 1000, Blocks: 10, Workers: 1, Linger: linger},
+		failAt:   2,
+	}
+
+	// The first full batch uploads, then the second fails and repeats alone.
+	start := time.Now()
+	if err := s.Upload(ctx, remote); err == nil {
+		t.Fatal("expected the second batch to fail")
+	}
+	if status, _ := s.GetStatus(); status.Pending != 15 || status.Uploaded != 10 {
+		t.Fatalf("after failure: pending %d, uploaded %d, want 15 and 10", status.Pending, status.Uploaded)
+	}
+
+	// The retry uploads the second full batch at once.
+	uploadCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- s.Upload(uploadCtx, remote) }()
+	waitStatus(t, s, func(st Status) bool { return st.Pending == 5 })
+	if sizes := remote.getBatches(); !slices.Equal(sizes, []int{10, 10, 10}) {
+		t.Fatalf("batches %v, want 10, the failed 10 and its retry", sizes)
+	}
+
+	// The rest of five uploads only after the linger time.
+	waitStatus(t, s, func(st Status) bool { return st.Pending == 0 })
+	if waited := time.Since(start); waited < linger {
+		t.Fatalf("the short batch uploaded after %v, before its linger time", waited)
+	}
+	if sizes := remote.getBatches(); !slices.Equal(sizes, []int{10, 10, 10, 5}) {
+		t.Fatalf("batches %v, want a final batch of 5", sizes)
+	}
+	cancel()
+	<-done
 }

@@ -9,6 +9,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -38,6 +39,23 @@ const (
 	entryDir = "entries/"
 )
 
+const (
+	// packPayloadBytes bounds the block bytes of a pack an upload builds. It is
+	// half the packfile ceiling, which leaves room for the refs, the index and
+	// the encoding around the block data.
+	packPayloadBytes = writer.DefaultMaxPackBytes / 2
+	// packMaxBlocks bounds the blocks of a pack an upload builds. A pack of
+	// packPayloadBytes holds it at blocks averaging 2 KiB, so the bytes bound
+	// first. The packfile policy's smaller count is the wire limit of
+	// Spacewave Cloud, which a bucket pack never crosses.
+	packMaxBlocks = 16384
+	// packUploads bounds the packs an upload writes at once. Each holds about
+	// three copies of its blocks in memory while it writes.
+	packUploads = 3
+	// packLinger is how long a short pack of settled blocks waits for more.
+	packLinger = 30 * time.Second
+)
+
 // ErrPackImmutable is returned when removing a block from a PackStore.
 var ErrPackImmutable = errors.New("bucket packfiles do not remove blocks")
 
@@ -51,9 +69,12 @@ var ErrPackImmutable = errors.New("bucket packfiles do not remove blocks")
 // use to find the pack of a block. The entry is written after the packfile, so
 // a listed entry names a complete packfile.
 //
-// Reads use the entries this store wrote or listed. A lookup that finds
-// nothing, or finds a packfile deleted, lists the entries again, which finds
-// the packfiles other writers added or merged since.
+// Reads use the entries this store wrote or listed. The first read lists the
+// entries, and a background routine lists them again every refresh interval,
+// which finds the packfiles other writers added or merged since. A read that
+// finds no block does not list: a block missing from every known packfile is
+// missing, or in a packfile the next refresh finds. A read that finds a
+// packfile deleted lists the entries at once.
 //
 // After each write a background routine merges small packfiles, as
 // compact describes. Reclaim drops dead blocks when that saves money on the
@@ -76,6 +97,15 @@ type PackStore struct {
 	packs *packfile_store.PackfileStore
 	// compactor runs compact after writes.
 	compactor *routine.RoutineContainer
+	// refresher lists the entries every refreshInterval once a read started it.
+	refresher *routine.RoutineContainer
+	// refreshInterval is the time between two listings of the refresher.
+	refreshInterval time.Duration
+	// refreshOnce starts the refresher at the first read.
+	refreshOnce sync.Once
+	// loaded is set once a listing completed, which makes the entries the
+	// bucket's own.
+	loaded atomic.Bool
 
 	// bcast guards entries and writes.
 	bcast broadcast.Broadcast
@@ -101,6 +131,12 @@ type PackStore struct {
 	passWrites uint64
 }
 
+// DefaultRefreshInterval is the time between two listings of a PackStore's
+// packfile entries. Each listing costs one request per thousand entries, so a
+// minute bounds the cost of an idle reader while it finds another device's
+// packfiles within the minute.
+const DefaultRefreshInterval = time.Minute
+
 // compactBackoff spaces the retries of a failed compaction pass.
 var compactBackoff = &backoff.Backoff{
 	BackoffKind: backoff.BackoffKind_BackoffKind_EXPONENTIAL,
@@ -119,6 +155,10 @@ type PackStoreOptions struct {
 	// KeepPacks stops compaction and reclaim, so the store only ever adds
 	// packfiles.
 	KeepPacks bool
+	// RefreshInterval is the time between two listings of the packfile
+	// entries, which find the packfiles other writers added. Zero uses
+	// DefaultRefreshInterval.
+	RefreshInterval time.Duration
 }
 
 // NewPackStore builds a packfile block store on the bucket. opts may be nil.
@@ -132,6 +172,10 @@ func NewPackStore(le *logrus.Entry, client *Client, bucket, prefix string, opts 
 	if pricing == nil {
 		pricing = PricingForEndpoint(client.endpoint)
 	}
+	refresh := opts.RefreshInterval
+	if refresh <= 0 {
+		refresh = DefaultRefreshInterval
+	}
 	s := &PackStore{
 		le:        le,
 		client:    client,
@@ -144,18 +188,26 @@ func NewPackStore(le *logrus.Entry, client *Client, bucket, prefix string, opts 
 			le.WithField("routine", "pack-compaction"),
 			routine.WithRetry(compactBackoff),
 		),
+		refresher: routine.NewRoutineContainerWithLogger(
+			le.WithField("routine", "pack-refresh"),
+			routine.WithRetry(compactBackoff),
+		),
+		refreshInterval: refresh,
 	}
 
 	// Read the known packfiles and start compaction.
 	s.packs = packfile_store.NewPackfileStore(s.openPack, nil)
 	s.compactor.SetRoutine(s.runCompaction)
 	s.compactor.SetContext(context.Background(), false)
+	s.refresher.SetRoutine(s.runRefresh)
 	return s
 }
 
-// Close stops compaction and releases the open packfile readers.
+// Close stops compaction and the refresh and releases the open packfile
+// readers.
 func (s *PackStore) Close() {
 	s.compactor.ClearContext()
+	s.refresher.ClearContext()
 	s.packs.Close()
 }
 
@@ -190,11 +242,17 @@ func (s *PackStore) PutBlock(ctx context.Context, data []byte, opts *block.PutOp
 	return ref, false, nil
 }
 
+// GetBatchLimits returns the batch that fills a pack, so an upload writes few
+// large packs instead of many small ones.
+func (s *PackStore) GetBatchLimits() block.BatchLimits {
+	return block.BatchLimits{Bytes: packPayloadBytes, Blocks: packMaxBlocks, Workers: packUploads, Linger: packLinger}
+}
+
 // PutBlockBatch writes the batch as one packfile and its entry.
 //
-// The batch must fit one packfile: at most writer.DefaultMaxBlocksPerPack
-// blocks and writer.DefaultMaxPackBytes bytes. Tombstones are rejected. Every
-// block is written again, so none is reported as existing.
+// The batch must fit one packfile: at most writer.DefaultMaxPackBytes bytes.
+// Tombstones are rejected. Every block is written again, so none is reported
+// as existing.
 func (s *PackStore) PutBlockBatch(ctx context.Context, batch []*block.PutBatchEntry) ([]bool, error) {
 	// Write the batch as one immutable packfile.
 	i := 0
@@ -331,23 +389,58 @@ func (s *PackStore) Sync(context.Context) (bool, error) {
 	return true, nil
 }
 
-// lookup runs find against the known packfiles. When find reports a miss or a
-// deleted packfile, it lists the entries, which finds the packfiles other
-// writers added and drops the ones merged away, and runs find again.
+// lookup runs find against the known packfiles, which the first lookup lists.
+// A miss is final. When find reports a deleted packfile, lookup lists the
+// entries, which drops the packfiles merged away and finds their merged
+// packfile, and runs find again.
 func (s *PackStore) lookup(ctx context.Context, find func() (bool, error)) error {
-	// Look for the block in the currently known packfiles.
+	// Load the packfile entries before the first lookup and keep them fresh.
+	if err := s.loadEntries(ctx); err != nil {
+		return err
+	}
+	s.refreshOnce.Do(func() { s.refresher.SetContext(context.Background(), false) })
+
+	// Look for the block in the known packfiles.
 	listed := s.listings.Load()
 	found, err := find()
-	if found || (err != nil && !errors.Is(err, ErrNotFound)) {
+	if found || err == nil || !errors.Is(err, ErrNotFound) {
 		return err
 	}
 
-	// Refresh packfile entries after a miss and repeat the lookup.
+	// Refresh packfile entries after a deleted packfile and repeat the lookup.
 	if err := s.listEntries(ctx, listed); err != nil {
 		return err
 	}
 	_, err = find()
 	return err
+}
+
+// loadEntries lists the packfile entries unless a listing completed.
+func (s *PackStore) loadEntries(ctx context.Context) error {
+	for !s.loaded.Load() {
+		if err := s.listEntries(ctx, s.listings.Load()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// runRefresh lists the packfile entries every refreshInterval until ctx ends.
+// The routine's backoff retries a failed listing.
+func (s *PackStore) runRefresh(ctx context.Context) error {
+	timer := time.NewTimer(s.refreshInterval)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return context.Canceled
+		case <-timer.C:
+		}
+		if err := s.listEntries(ctx, s.listings.Load()); err != nil {
+			return err
+		}
+		timer.Reset(s.refreshInterval)
+	}
 }
 
 // listEntries lists the packfile entries, reads the new ones, and drops the
@@ -415,6 +508,7 @@ func (s *PackStore) listEntries(ctx context.Context, listed uint64) error {
 		return entry == nil
 	})
 	s.updateEntries(entries, slices.Collect(maps.Keys(known)))
+	s.loaded.Store(true)
 	return nil
 }
 
@@ -480,5 +574,6 @@ func (t *rangeTransport) Fetch(ctx context.Context, off int64, length int) ([]by
 // _ is a type assertion
 var (
 	_ block.StoreOps           = (*PackStore)(nil)
+	_ block.BatchSizer         = (*PackStore)(nil)
 	_ packfile_store.Transport = (*rangeTransport)(nil)
 )
