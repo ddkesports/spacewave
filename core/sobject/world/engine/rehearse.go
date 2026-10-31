@@ -28,10 +28,10 @@ type RehearsalEngine interface {
 // drops them; Commit returns ErrRehearsalCommit.
 func (e *soEngine) NewRehearsalTransaction(ctx context.Context) (world.Tx, error) {
 	// Fork the newest World with buffered writes.
-	if e.bengine == nil {
+	if e.admitted == nil {
 		return nil, errors.New("the world engine is not ready")
 	}
-	btx, err := e.bengine.ForkBlockTransaction(ctx, true)
+	btx, err := e.admitted.ForkBlockTransaction(ctx, true)
 	if err != nil {
 		return nil, err
 	}

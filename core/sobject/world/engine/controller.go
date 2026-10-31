@@ -63,6 +63,11 @@ type Controller struct {
 	// writeBcast is broadcast after each change of the installed World. The
 	// storage reclaim routine schedules a pass after each broadcast.
 	writeBcast broadcast.Broadcast
+	// reinstallMtx guards reinstallHooks, which are called under the writer
+	// lock with the World seqno after failed writes are dropped. They outlive
+	// the engine.
+	reinstallMtx   sync.Mutex
+	reinstallHooks []*reinstallHook
 }
 
 // NewController constructs a new World Engine controller.
@@ -234,12 +239,19 @@ func (c *Controller) executeWorld(
 		return sobject.ErrEmptyTransformConfig
 	}
 
-	// Bind the head to the block store.
+	// Bind the head to the block store, once for readers and once for
+	// writers, which fork from the admitted World ahead of the durable one.
 	blkEngine, err := c.buildBlkEngine(ctx, le, so, headRef, transformConf)
 	if err != nil {
 		return err
 	}
 	defer blkEngine.Release()
+	admitted, err := c.buildBlkEngine(ctx, le, so, headRef, transformConf)
+	if err != nil {
+		return err
+	}
+	defer admitted.Release()
+	blkEngine.admitted = admitted.bengine
 
 	// Log the bound root and read the World sequence number.
 	if c.conf.GetVerbose() {
@@ -282,7 +294,7 @@ func (c *Controller) executeWorld(
 
 	// Publish the engine for the lifetime of this World.
 	le.WithField("world-seqno", seqno).Info("world engine ready")
-	if err := c.setWriter(ctx, engine); err != nil {
+	if err := c.setWriter(ctx, engine, seqno); err != nil {
 		return err
 	}
 	served := &servedEngine{engine: wengine}
@@ -396,13 +408,15 @@ func (c *Controller) withdraw(served *servedEngine) {
 
 // setWriter sets the served engine under the writer lock. The engine it
 // replaces settles no further: its writes ended with it.
-func (c *Controller) setWriter(ctx context.Context, e *soEngine) error {
-	// Swap the writer under the writer lock.
+func (c *Controller) setWriter(ctx context.Context, e *soEngine, seqno uint64) error {
+	// Swap the writer under the writer lock and report its World to the
+	// reinstall hooks, since writes of the engine before it may have failed.
 	unlock, err := c.writeMtx.Lock(ctx, "set-writer")
 	if err != nil {
 		return err
 	}
 	c.writer = e
+	c.callReinstall(seqno)
 	unlock()
 	return nil
 }

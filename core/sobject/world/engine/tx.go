@@ -5,6 +5,7 @@ import (
 	"errors"
 	fmt "fmt"
 	"slices"
+	"sync"
 
 	"github.com/s4wave/spacewave/core/sobject"
 	"github.com/s4wave/spacewave/db/block"
@@ -39,6 +40,17 @@ type soEngineWriteTx struct {
 	batch *block.PendingBatch
 	// clock times the stages of the write.
 	clock *commitClock
+	// seqno is the World seqno after the write, set at admission.
+	seqno uint64
+	// durablePos is the durable head's position of the World after the
+	// write, which readers see once the durable head reaches it.
+	durablePos uint64
+	// reinstalled is the seqno of the World the engine reinstalled after the
+	// write's publication failed.
+	reinstalled uint64
+	// admission is set once CommitAdmit returns it. Discard then leaves the
+	// write to the admission's Release.
+	admission *soAdmission
 }
 
 // newSoEngineWriteTx constructs a new shared object engine tx.
@@ -60,20 +72,62 @@ func newSoEngineWriteTx(
 	}
 }
 
-// Commit persists the candidate blocks, adds the transaction to the operation
-// set and installs the World after it. When no other operation arrived since
-// the fork, the candidate is that World; otherwise replay computes it. A
-// SharedObject that publishes its state commits the blocks, the operation and
-// the accepted World in one physical transaction: Commit releases the writer
-// lock once the publication admits the write and the engine installs its
-// World, so the next write forks from it, then waits for the receipt and
-// returns its error. A write is acknowledged only after its receipt.
+// Commit commits the write at admission, then waits until it is durable and
+// readers see it. A write is acknowledged only after its receipt.
 func (t *soEngineWriteTx) Commit(ctx context.Context) error {
-	// Keep candidate cleanup and writer release bound to every return path.
+	adm, err := t.CommitAdmit(ctx)
+	if err != nil {
+		return err
+	}
+	defer adm.Release()
+	_, err = adm.WaitDurable(ctx)
+	return err
+}
+
+// CommitAdmit persists the candidate blocks, adds the transaction to the
+// operation set and installs the World after it for writers. When no other
+// operation arrived since the fork, the candidate is that World; otherwise
+// replay computes it. A SharedObject that publishes its state commits the
+// blocks, the operation and the accepted World in one physical transaction:
+// CommitAdmit releases the writer lock and returns once the publication
+// admits the write and the engine installs its World, so the next write forks
+// from it. The Admission waits for the receipt. Without a publication the
+// write is durable when CommitAdmit returns.
+func (t *soEngineWriteTx) CommitAdmit(ctx context.Context) (world.Admission, error) {
+	// Admit the write.
 	ctx, task := trace.NewTask(ctx, "alpha/so-engine/write-tx/commit")
 	defer task.End()
+	err := t.admit(ctx)
+
+	// A pending publication waits in the Admission.
+	if err == nil && t.receipt != nil {
+		t.admission = &soAdmission{t: t}
+		return t.admission, nil
+	}
+
+	// Otherwise finish here. A failed placement still reports the receipt's
+	// failure first, since queueOperation may report only what followed it.
 	defer t.Discard()
 	defer t.clock.finish(t.eng.c.le)
+	if t.receipt != nil {
+		if rerr := t.waitReceipt(ctx); rerr != nil {
+			return nil, fmt.Errorf("world publication receipt: %w", rerr)
+		}
+	}
+	if err == nil {
+		waitCtx, cancel := t.eng.detach(ctx)
+		err = t.eng.waitDurable(waitCtx, t.durablePos)
+		cancel()
+	}
+	if err != nil {
+		return nil, err
+	}
+	return world.DurableAdmission(t.seqno), nil
+}
+
+// admit adds the operation and installs the World after it, then releases
+// the writer lock. It records the World seqno and its durable position.
+func (t *soEngineWriteTx) admit(ctx context.Context) error {
 	t.clock.end(stageCallback)
 
 	// Close the operation buffer before publishing its candidate blocks.
@@ -91,7 +145,9 @@ func (t *soEngineWriteTx) Commit(ctx context.Context) error {
 	txBatch := t.GetTxBatch()
 	txns := txBatch.GetTxs()
 	if len(txns) == 0 {
-		return nil
+		var err error
+		t.seqno, err = t.eng.admitted.GetSeqno(ctx)
+		return err
 	}
 
 	// Commit every block generated for the candidate world root.
@@ -174,19 +230,16 @@ func (t *soEngineWriteTx) Commit(ctx context.Context) error {
 	err = t.eng.queueOperation(taskCtx, opData, t.fork, t.clock)
 	t.clock.end(stageAdvance)
 
-	// Wait for the publication outside the writer lock. Its failure is the
-	// write's result, since queueOperation may report only what followed it.
+	// Record the World after the write and release the writer lock.
+	if err == nil {
+		t.seqno, err = t.eng.admitted.GetSeqno(ctx)
+		t.durablePos = t.eng.durablePos()
+	}
 	t.unlockWriteMtx()
 	if err != nil {
-		err = fmt.Errorf("queue World operation: %w", err)
+		return fmt.Errorf("queue World operation: %w", err)
 	}
-	if t.receipt == nil {
-		return err
-	}
-	if rerr := t.waitReceipt(ctx); rerr != nil {
-		return fmt.Errorf("world publication receipt: %w", rerr)
-	}
-	return err
+	return nil
 }
 
 // waitReceipt waits for the publication to resolve, finishes the borrow of the
@@ -220,7 +273,7 @@ func (t *soEngineWriteTx) waitReceipt(ctx context.Context) error {
 	err = receipt.Err()
 	batch.Complete(err)
 	if err != nil {
-		t.eng.reinstall(ctx)
+		t.reinstalled = t.eng.reinstall(ctx)
 		return err
 	}
 	t.candidateRoot = nil
@@ -257,6 +310,13 @@ func (t *soEngineWriteTx) publish(ctx context.Context, publisher sobject.StatePu
 	store, ok := t.eng.so.GetBlockStore().(block.AtomicPublisher)
 	if head == nil || !ok || !store.SupportsAtomicPublication() {
 		return nil, t.writeBlocks(ctx)
+	}
+
+	// Read the seqno of the World before the write, which a failed receipt
+	// reinstalls.
+	before, err := t.eng.admitted.GetSeqno(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	// Borrow the candidate blocks and collect the pending replay save.
@@ -299,7 +359,7 @@ func (t *soEngineWriteTx) publish(ctx context.Context, publisher sobject.StatePu
 	held := t.fork.state.GetHeadRef().CloneVT()
 	held.BucketId = t.eng.so.GetBlockStore().GetID()
 	t.receipt, t.batch = receipt, batch
-	t.eng.admit(receipt, held)
+	t.eng.admit(receipt, held, before)
 	t.fork.published = true
 	return receipt, nil
 }
@@ -328,6 +388,15 @@ func (t *soEngineWriteTx) ApplyWorldOp(ctx context.Context, op world.Operation, 
 // Can be called unlimited times.
 // Always call Discard or Commit when done with a tx.
 func (t *soEngineWriteTx) Discard() {
+	// An admitted write ends with its Admission.
+	if t.admission != nil {
+		return
+	}
+	t.discard()
+}
+
+// discard drops the candidate and releases the write.
+func (t *soEngineWriteTx) discard() {
 	// Drop the candidate and let the next writer start.
 	t.WorldState.Discard()
 	t.btx.Discard()
@@ -348,5 +417,52 @@ func (t *soEngineWriteTx) Discard() {
 	}
 }
 
+// soAdmission is the Admission of a write whose publication was admitted.
+type soAdmission struct {
+	t *soEngineWriteTx
+	// wait waits once for the durable result.
+	wait     sync.Once
+	waitedAt uint64
+	waitErr  error
+	// release releases the write once.
+	release sync.Once
+}
+
+// Seqno returns the World seqno after the write.
+func (a *soAdmission) Seqno() uint64 {
+	return a.t.seqno
+}
+
+// WaitDurable waits for the receipt, then for the durable head to reach the
+// write, and returns its seqno. A failed write returns once the engine
+// reinstalled the World before it, with that World's seqno. Later calls
+// return the first result.
+func (a *soAdmission) WaitDurable(ctx context.Context) (uint64, error) {
+	a.wait.Do(func() {
+		t := a.t
+		if err := t.waitReceipt(ctx); err != nil {
+			a.waitedAt, a.waitErr = t.reinstalled, fmt.Errorf("world publication receipt: %w", err)
+			return
+		}
+		waitCtx, cancel := t.eng.detach(ctx)
+		defer cancel()
+		a.waitedAt, a.waitErr = t.seqno, t.eng.waitDurable(waitCtx, t.durablePos)
+	})
+	return a.waitedAt, a.waitErr
+}
+
+// Release releases the write and its receipt. The receipt is released once it
+// resolves.
+func (a *soAdmission) Release() {
+	a.release.Do(func() {
+		a.t.discard()
+		a.t.clock.finish(a.t.eng.c.le)
+	})
+}
+
 // _ is a type assertion
-var _ world.Tx = (*soEngineWriteTx)(nil)
+var (
+	_ world.Tx             = (*soEngineWriteTx)(nil)
+	_ world.AdmitCommitter = (*soEngineWriteTx)(nil)
+	_ world.Admission      = (*soAdmission)(nil)
+)

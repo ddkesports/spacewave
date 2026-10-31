@@ -32,6 +32,10 @@ type Engine = world.Engine
 type blkEngine struct {
 	// bengine serves the World rooted at cursor.
 	bengine *world_block.Engine
+	// admitted, when set, serves the admitted World writers fork from, ahead
+	// of the durable World bengine serves to readers. Its own blkEngine owns
+	// it.
+	admitted *world_block.Engine
 	// bcast guards transaction admission and release.
 	bcast broadcast.Broadcast
 	// transactions counts read snapshots holding the engine open. Guarded by bcast.
@@ -186,8 +190,13 @@ type soEngine struct {
 	so sobject.SharedObject
 	// block owns transaction admission and the block engine lifetime.
 	block *blkEngine
-	// bengine serves the replayed World and forks write candidates.
+	// bengine serves the durable World to readers and watchers.
 	bengine *world_block.Engine
+	// admitted serves the admitted World, which write candidates fork from.
+	// It is bengine when the engine has a single head.
+	admitted *world_block.Engine
+	// durable installs the admitted Worlds in bengine as they become durable.
+	durable durableHead
 	// replay computes the World from the operation set, guarded by the
 	// controller's writer lock.
 	replay *replayer
@@ -246,10 +255,14 @@ func newSoEngine(lifetime context.Context, c *Controller, so sobject.SharedObjec
 		so:             so,
 		block:          engine,
 		bengine:        engine.bengine,
+		admitted:       engine.admitted,
 		replay:         replay,
 		backfillChoice: ccontainer.NewCContainer(false),
 		backfillState:  ccontainer.NewCContainerVT[*BackfillState](nil),
 		stableWake:     make(chan struct{}, 1),
+	}
+	if e.admitted == nil {
+		e.admitted = e.bengine
 	}
 	e.backfill = routine.NewStateRoutineContainer[bool](
 		nil,
@@ -335,7 +348,7 @@ func (e *soEngine) NewTransaction(ctx context.Context, write bool) (world.Tx, er
 	{
 		taskCtx, task := trace.NewTask(ctx, "alpha/so-engine/new-transaction/fork-block-transaction")
 		var err error
-		btx, err = e.bengine.ForkBlockTransaction(taskCtx, true)
+		btx, err = e.admitted.ForkBlockTransaction(taskCtx, true)
 		task.End()
 		if err != nil {
 			unlockWriteMtx()
@@ -722,13 +735,16 @@ func (e *soEngine) updateEngineState(ctx context.Context, state *InnerState) err
 		ref = &bucket.ObjectRef{}
 	}
 	ref.BucketId = e.so.GetBlockStore().GetID()
-	installed := !e.bengine.GetRootRef().EqualVT(ref)
+	installed := !e.admitted.GetRootRef().EqualVT(ref)
 	if installed {
-		if err := e.bengine.SetRootRef(ctx, ref); err != nil {
+		if err := e.admitted.SetRootRef(ctx, ref); err != nil {
 			return err
 		}
 		e.c.notifyWrite()
 	}
+
+	// Readers see it once the publications admitted before it are durable.
+	e.queueDurable(ref)
 
 	// Hold nothing while the pending publications hold the World.
 	if e.pending() {
@@ -802,7 +818,11 @@ func (e *soEngine) applyHold(ctx context.Context, hold *rootHold) error {
 	}
 
 	// Admit it; the caller records what it holds.
-	e.admit(receipt, e.retained)
+	seqno, err := e.admitted.GetSeqno(ctx)
+	if err != nil {
+		return err
+	}
+	e.admit(receipt, e.retained, seqno)
 	go receipt.Release()
 	return nil
 }

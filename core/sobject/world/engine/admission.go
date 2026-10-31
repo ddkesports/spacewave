@@ -2,6 +2,7 @@ package sobject_world_engine
 
 import (
 	"context"
+	"slices"
 
 	"github.com/s4wave/spacewave/core/sobject"
 	"github.com/s4wave/spacewave/db/block"
@@ -32,13 +33,17 @@ type writeAdmission struct {
 	retained *bucket.ObjectRef
 	// retainedRoots are the retained roots held before the publication.
 	retainedRoots []*RetainedRoot
+	// seqno is the seqno of the World installed before the publication.
+	seqno uint64
 }
 
 // admit records a publication admitted with receipt, then records its replay
 // save and its World as held, so the writes after it fork from that World and
-// chain their publications after it. The caller holds the writer lock and
-// passes the World the publication holds under the accepted World root.
-func (e *soEngine) admit(receipt *block.PublicationReceipt, held *bucket.ObjectRef) {
+// chain their publications after it. seqno is the seqno of the installed
+// World. A failed receipt is settled when it resolves, without waiting for
+// its writer. The caller holds the writer lock and passes the World the
+// publication holds under the accepted World root.
+func (e *soEngine) admit(receipt *block.PublicationReceipt, held *bucket.ObjectRef, seqno uint64) {
 	e.admissions = append(e.admissions, &writeAdmission{
 		receipt:       receipt,
 		base:          e.replay.base,
@@ -47,9 +52,25 @@ func (e *soEngine) admit(receipt *block.PublicationReceipt, held *bucket.ObjectR
 		baseUnheld:    e.replay.baseUnheld,
 		retained:      e.retained,
 		retainedRoots: e.retainedRoots,
+		seqno:         seqno,
 	})
 	e.retained = held
 	e.replay.saved()
+	go e.watchReceipt(receipt)
+}
+
+// watchReceipt advances the durable head once receipt resolves, and
+// reinstalls the World from before it when it failed.
+func (e *soEngine) watchReceipt(receipt *block.PublicationReceipt) {
+	select {
+	case <-receipt.Done():
+	case <-e.lifetime.Done():
+		return
+	}
+	if receipt.Err() != nil {
+		_ = e.reinstall(e.lifetime)
+	}
+	e.promoteDurable()
 }
 
 // lastReceipt returns the receipt of the last admitted publication, which the
@@ -66,8 +87,9 @@ func (e *soEngine) lastReceipt() *block.PublicationReceipt {
 // settle drops the admissions whose receipts resolved, in admission order. A
 // failed receipt fails every later admission through After, so settle drops
 // them all, restores the replay save, the held head and the held retained
-// roots from before the first, and records their operations as failed. The
-// caller holds the writer lock.
+// roots from before the first, records their operations as failed and calls
+// the reinstall hooks with the seqno of the World before the first, before a
+// later write can be admitted. The caller holds the writer lock.
 func (e *soEngine) settle() {
 	for len(e.admissions) != 0 {
 		// Stop at the first unresolved receipt.
@@ -93,6 +115,7 @@ func (e *soEngine) settle() {
 		e.replay.unsave(adm.base, adm.span, adm.spanLen, adm.baseUnheld)
 		e.retained, e.retainedRoots = adm.retained, adm.retainedRoots
 		e.admissions = nil
+		e.c.callReinstall(adm.seqno)
 	}
 }
 
@@ -114,18 +137,19 @@ func (e *soEngine) pending() bool {
 	return len(e.admissions) != 0
 }
 
-// reinstall settles the failed publication and installs the World from before
-// it. A write whose receipt failed calls it before returning, so the next
-// attempt, which reruns at once, finds that World installed. A failure to
-// reinstall is logged; the watcher installs the World at the next state
-// change. It ends with the engine's lifetime, not the write's context.
-func (e *soEngine) reinstall(ctx context.Context) {
+// reinstall settles the failed publication, installs the World from before
+// it and returns that World's seqno. The receipt's watcher calls it, and a
+// write whose receipt failed calls it before returning, so the next attempt,
+// which reruns at once, finds that World installed. A failure to reinstall is
+// logged; the watcher installs the World at the next state change. It ends
+// with the engine's lifetime, not the write's context.
+func (e *soEngine) reinstall(ctx context.Context) uint64 {
 	// Take the writer lock the failed write released.
 	ctx, cancel := e.detach(ctx)
 	defer cancel()
 	unlockWriteMtx, err := e.c.writeMtx.Lock(ctx, "reinstall")
 	if err != nil {
-		return
+		return 0
 	}
 	defer unlockWriteMtx()
 
@@ -137,6 +161,8 @@ func (e *soEngine) reinstall(ctx context.Context) {
 	if err != nil && ctx.Err() == nil {
 		e.c.le.WithError(err).Warn("failed to reinstall the World after a failed publication")
 	}
+	seqno, _ := e.admitted.GetSeqno(ctx)
+	return seqno
 }
 
 // admittedState settles the resolved receipts and returns the admitted state,
@@ -184,4 +210,40 @@ func (c *Controller) stale(ctx context.Context, so sobject.SharedObject, snap so
 		}
 	}
 	return false, nil
+}
+
+// reinstallHook is a registered reinstall hook.
+type reinstallHook struct {
+	fn func(seqno uint64)
+}
+
+// OnReinstall calls fn with the World seqno when failed writes are dropped,
+// before a later write is admitted, and when a new engine opens in this
+// controller. fn runs under the writer lock.
+func (e *soEngine) OnReinstall(fn func(seqno uint64)) func() {
+	return e.c.onReinstall(fn)
+}
+
+// onReinstall registers fn until the returned func is called.
+func (c *Controller) onReinstall(fn func(seqno uint64)) func() {
+	h := &reinstallHook{fn: fn}
+	c.reinstallMtx.Lock()
+	c.reinstallHooks = append(slices.Clip(c.reinstallHooks), h)
+	c.reinstallMtx.Unlock()
+	return func() {
+		c.reinstallMtx.Lock()
+		c.reinstallHooks = slices.DeleteFunc(slices.Clone(c.reinstallHooks), func(r *reinstallHook) bool { return r == h })
+		c.reinstallMtx.Unlock()
+	}
+}
+
+// callReinstall calls the reinstall hooks with seqno. The caller holds the
+// writer lock.
+func (c *Controller) callReinstall(seqno uint64) {
+	c.reinstallMtx.Lock()
+	hooks := c.reinstallHooks
+	c.reinstallMtx.Unlock()
+	for _, h := range hooks {
+		h.fn(seqno)
+	}
 }

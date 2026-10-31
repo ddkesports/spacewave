@@ -266,7 +266,7 @@ func (e *soEngine) backfillRoots(ctx context.Context) ([]*block.BlockRef, uint64
 		return nil, 0, err
 	}
 	defer unlockWriteMtx()
-	seqno, err := e.bengine.GetSeqno(ctx)
+	seqno, err := e.admitted.GetSeqno(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -406,7 +406,7 @@ func (e *soEngine) ReplayFrom(ctx context.Context, root *block.BlockRef, apply b
 	if _, err := e.install(ctx, snap, nil, false); err != nil {
 		return report, errors.Wrap(err, "install replayed World")
 	}
-	report.Head = e.bengine.GetRootRef().GetRootRef().Clone()
+	report.Head = e.admitted.GetRootRef().GetRootRef().Clone()
 	return report, nil
 }
 
