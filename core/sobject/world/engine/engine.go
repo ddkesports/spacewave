@@ -243,9 +243,8 @@ type soEngine struct {
 	// the checkpoint routine has not taken, and stableWake wakes the routine.
 	stableNext atomic.Pointer[stableCheckpoint]
 	stableWake chan struct{}
-	// stableBusy is set with the page view from when a checkpoint names its
-	// World until the routine adopts or drops it, so one World is named at a
-	// time.
+	// stableBusy is set from when a checkpoint names its World until the
+	// routine adopts or drops it, so one World is named at a time.
 	stableBusy atomic.Bool
 }
 
