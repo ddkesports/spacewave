@@ -10,14 +10,16 @@
 \* Before the switch the head r0 and the block o it references sit in the
 \* bucket with upload markers pending. Commit 1 writes the root n1, which
 \* references o; commit 2 writes n2, which references n1 and o. A failed drain
-\* sets the buffer's drainErr, which nothing clears until the backend restarts.
-\* A restart may remount with SQL primary off when Rollback holds: commits then
+\* write requeues its batch at the head of the queue, backs off and returns the
+\* error, so Sync fails and a later drain retries the batch. A restart may remount with SQL primary off when Rollback holds: commits then
 \* write to the bucket, and the account GC cleanup and eviction run again. The
 \* GC sweeps bucket blocks its ref graph cannot reach from either head;
 \* the graph records the references only of blocks written to the bucket.
 \*
 \* Not modeled: peers, the decoded cache, which holds only blocks already read,
-\* and a statement split across packets, which the buffer retries whole.
+\* a statement split across packets, which the buffer retries whole, the order
+\* of the queue, which no durable head observes since Sync waits for it to
+\* empty, and the reader pin poison, which loses no block.
 
 EXTENDS Naturals
 
@@ -26,8 +28,6 @@ EXTENDS Naturals
 AckDurable == TRUE
 \* Rollback: a restart may turn SQL primary off.
 Rollback == FALSE
-\* Retry: a failed drain leaves the buffer usable once SQL answers again.
-Retry == FALSE
 
 MaxCommit == 2
 Root == <<"r0", "n1", "n2">>
@@ -45,17 +45,16 @@ VARIABLES
   mem,      \* the engine's published head
   dur,      \* the durable head in s4db
   buf,      \* blocks the engine's BufferedStore holds
-  poisoned, \* the buffer's drainErr is set
   dbUp,     \* MariaDB answers
   rows,     \* rows MariaDB holds durably
   acked,    \* rows MariaDB acknowledged but has not made durable
   local,    \* blocks in the local bucket
   marker,   \* blocks with an upload marker pending
   edges     \* references the bucket's ref graph records
-vars == <<mode, mem, dur, buf, poisoned, dbUp, rows, acked, local, marker, edges>>
+vars == <<mode, mem, dur, buf, dbUp, rows, acked, local, marker, edges>>
 
 Init ==
-  /\ mode = "sql" /\ mem = 0 /\ dur = 0 /\ buf = {} /\ poisoned = FALSE
+  /\ mode = "sql" /\ mem = 0 /\ dur = 0 /\ buf = {}
   /\ dbUp = TRUE /\ rows = {} /\ acked = {}
   /\ local = {"r0", "o"} /\ marker = {"r0", "o"}
   /\ edges = {<<"r0", "o">>}
@@ -67,10 +66,10 @@ Store(S) ==
   ELSE acked' = acked \cup (S \ rows) /\ UNCHANGED rows
 
 \* A commit writes its root: into the buffer under SQL primary, into the
-\* bucket, with its marker and graph edges, otherwise. A poisoned buffer
-\* refuses the write.
+\* bucket, with its marker and graph edges, otherwise. The buffer accepts it
+\* while a failed drain waits to retry.
 Commit ==
-  /\ mem < MaxCommit /\ ~poisoned
+  /\ mem < MaxCommit
   /\ LET b == RootOf(mem + 1) IN
      IF mode = "sql"
      THEN buf' = buf \cup {b} /\ UNCHANGED <<local, marker, edges>>
@@ -78,23 +77,22 @@ Commit ==
           /\ edges' = edges \cup {<<b, c>> : c \in Refs[b]}
           /\ UNCHANGED buf
   /\ mem' = mem + 1
-  /\ UNCHANGED <<mode, dur, poisoned, dbUp, rows, acked>>
+  /\ UNCHANGED <<mode, dur, dbUp, rows, acked>>
 
-\* drainNextBatch: PutBlockBatch inserts the buffer, or fails and sets
-\* drainErr; the blocks stay buffered either way until inserted.
+\* drainNextBatch: PutBlockBatch inserts the buffer and removes it. A failed
+\* write requeues the batch, so the blocks stay buffered, and that drain's
+\* Sync fails; the stutter after a failed Drain is its back-off.
 Drain ==
-  /\ buf # {} /\ ~poisoned
-  /\ IF dbUp
-     THEN Store(buf) /\ buf' = {} /\ UNCHANGED poisoned
-     ELSE poisoned' = ~Retry /\ UNCHANGED <<buf, rows, acked>>
+  /\ buf # {} /\ dbUp
+  /\ Store(buf) /\ buf' = {}
   /\ UNCHANGED <<mode, mem, dur, dbUp, local, marker, edges>>
 
 \* syncHeadLocked: once the buffer drained, the SQL store's Sync returns at
 \* once, and commitFn writes the head to s4db.
 Sync ==
-  /\ buf = {} /\ ~poisoned /\ dur < mem
+  /\ buf = {} /\ dur < mem
   /\ dur' = mem
-  /\ UNCHANGED <<mode, mem, buf, poisoned, dbUp, rows, acked, local, marker, edges>>
+  /\ UNCHANGED <<mode, mem, buf, dbUp, rows, acked, local, marker, edges>>
 
 \* The uploader copies a marked block from the bucket to SQL.
 Upload ==
@@ -102,7 +100,7 @@ Upload ==
   /\ \E b \in marker \cap local :
        /\ Store({b})
        /\ marker' = marker \ {b}
-  /\ UNCHANGED <<mode, mem, dur, buf, poisoned, dbUp, local, edges>>
+  /\ UNCHANGED <<mode, mem, dur, buf, dbUp, local, edges>>
 
 \* Eviction, off under SQL primary, drops an uploaded block from the bucket.
 Evict ==
@@ -110,7 +108,7 @@ Evict ==
   /\ \E b \in local \ marker :
        /\ b \in rows \cup acked
        /\ local' = local \ {b}
-  /\ UNCHANGED <<mode, mem, dur, buf, poisoned, dbUp, rows, acked, marker, edges>>
+  /\ UNCHANGED <<mode, mem, dur, buf, dbUp, rows, acked, marker, edges>>
 
 \* The account GC cleanup, off under SQL primary, sweeps bucket blocks the
 \* graph cannot reach from the durable head or the engine's pinned head, with
@@ -124,20 +122,20 @@ Sweep ==
   /\ local \ GraphReach # {}
   /\ local' = local \cap GraphReach
   /\ marker' = marker \cap GraphReach
-  /\ UNCHANGED <<mode, mem, dur, buf, poisoned, dbUp, rows, acked, edges>>
+  /\ UNCHANGED <<mode, mem, dur, buf, dbUp, rows, acked, edges>>
 
 \* MariaDB crashes, losing the rows it had not made durable, and restarts.
 DbCrash ==
   /\ dbUp' = FALSE /\ acked' = {}
-  /\ UNCHANGED <<mode, mem, dur, buf, poisoned, rows, local, marker, edges>>
+  /\ UNCHANGED <<mode, mem, dur, buf, rows, local, marker, edges>>
 DbRestart ==
   /\ ~dbUp /\ dbUp' = TRUE
-  /\ UNCHANGED <<mode, mem, dur, buf, poisoned, rows, acked, local, marker, edges>>
+  /\ UNCHANGED <<mode, mem, dur, buf, rows, acked, local, marker, edges>>
 
 \* The backend crashes or restarts: it loses the buffer and the commits after
 \* the durable head, and remounts, with SQL primary off when Rollback holds.
 Restart ==
-  /\ mem' = dur /\ buf' = {} /\ poisoned' = FALSE
+  /\ mem' = dur /\ buf' = {}
   /\ mode' \in IF Rollback THEN {"sql", "local"} ELSE {"sql"}
   /\ UNCHANGED <<dur, dbUp, rows, acked, local, marker, edges>>
 
@@ -158,7 +156,8 @@ DurableStored == Reach(dur) \subseteq Stored
 PublishedReadable == Reach(mem) \subseteq buf \cup Stored
 
 \* Liveness, under the fairness below: once MariaDB stays up, the durable
-\* head keeps catching up with the published one, without a restart.
+\* head keeps catching up with the published one, without a restart. Fairness
+\* on Sync stands for a caller that retries a failed Sync.
 FairSpec == Spec /\ WF_vars(Drain) /\ WF_vars(Sync) /\ WF_vars(DbRestart)
 CatchesUp == <>[]dbUp => []<>(dur = mem)
 ====
