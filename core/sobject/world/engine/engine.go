@@ -769,7 +769,10 @@ func (e *soEngine) updateEngineState(ctx context.Context, state *InnerState) err
 	// Drop the kept pages no live World reaches: the durable head and the
 	// Worlds it has yet to install are live beside the admitted head. The
 	// queue is read before the durable head, so a World promoted between the
-	// two reads is in one of them.
+	// two reads is in one of them. Write holds keep both live in the Go tests
+	// too, except between a receipt resolving and its promotion, a gap no test
+	// reaches deterministically; SQLPrimary.tla fails QueuedReadable or
+	// ReadersDurable without either input.
 	if pages := e.replay.pages; pages != nil {
 		heads := append(e.queuedDurableRoots(), ref.GetRootRef())
 		heads = append(heads, e.bengine.GetRootRef().GetRootRef())
