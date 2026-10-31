@@ -113,7 +113,7 @@ func TestClient(t *testing.T) {
 	ctx := context.Background()
 	srv := startTestServer(t)
 	bucket := t.TempDir()
-	c, err := NewClient(Config{Addr: srv.addr, User: "user", Password: "pass", HostKey: ssh.FingerprintSHA256(srv.key.PublicKey()), Conns: 2})
+	c, err := NewClient(Config{Addr: srv.addr, User: "user", Password: "pass", HostKey: string(ssh.MarshalAuthorizedKey(srv.key.PublicKey())), Conns: 2})
 	if err != nil {
 		t.Fatal(err)
 	}

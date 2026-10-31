@@ -12,12 +12,15 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// newHostKeyCallback returns the callback that verifies the server's host key.
-// A pin is a "SHA256:..." fingerprint or an authorized_keys style public key
-// line, and the server must show exactly that key. Without a pin the callback
+// newHostKeyCallback returns the callback that verifies the server's host key,
+// and the host key algorithms to offer, nil for the defaults. A pin is a
+// "SHA256:..." fingerprint or an authorized_keys style public key line, and the
+// server must show exactly that key. A fingerprint does not name the key's
+// type, so the server may show another of its keys and fail the pin; a public
+// key line restricts the handshake to its own type. Without a pin the callback
 // trusts the first key it sees and requires the same one afterwards, so a
 // reconnect cannot be redirected to another server.
-func newHostKeyCallback(pin string) (ssh.HostKeyCallback, error) {
+func newHostKeyCallback(pin string) (ssh.HostKeyCallback, []string, error) {
 	// Ignore the whitespace around a pin copied from a file.
 	pin = strings.TrimSpace(pin)
 
@@ -28,16 +31,16 @@ func newHostKeyCallback(pin string) (ssh.HostKeyCallback, error) {
 				return errors.Errorf("ssh host key of %s is %s, not the pinned key", host, got)
 			}
 			return nil
-		}, nil
+		}, nil, nil
 	}
 
 	// Pin a public key.
 	if pin != "" {
 		want, _, _, _, err := ssh.ParseAuthorizedKey([]byte(pin))
 		if err != nil {
-			return nil, errors.Wrap(err, "parse the pinned ssh host key")
+			return nil, nil, errors.Wrap(err, "parse the pinned ssh host key")
 		}
-		return pinned(want), nil
+		return pinned(want), algorithms(want), nil
 	}
 
 	// Trust the first key seen.
@@ -51,7 +54,16 @@ func newHostKeyCallback(pin string) (ssh.HostKeyCallback, error) {
 			return nil
 		}
 		return pinned(first)(host, remote, key)
-	}, nil
+	}, nil, nil
+}
+
+// algorithms returns the host key algorithms that sign with a key of key's
+// type.
+func algorithms(key ssh.PublicKey) []string {
+	if key.Type() == ssh.KeyAlgoRSA {
+		return []string{ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256}
+	}
+	return []string{key.Type()}
 }
 
 // pinned returns the callback that accepts exactly the key want.

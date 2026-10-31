@@ -10,8 +10,10 @@ type Config struct {
 	User string
 	// Password is the login password.
 	Password string
-	// HostKey pins the server's SSH host key: the "SHA256:..." fingerprint ssh
-	// prints, or an authorized_keys style public key line. Empty trusts the
+	// HostKey pins the server's SSH host key: an authorized_keys style public
+	// key line, which also limits the handshake to that key's type, or the
+	// "SHA256:..." fingerprint ssh prints, which fails when the server shows
+	// another of its keys. Empty trusts the
 	// first key the server shows and requires the same one on every later
 	// connection of the Client.
 	HostKey string

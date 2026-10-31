@@ -278,8 +278,10 @@ type FtpsLocation struct {
 	// backend holds, zero for 4, each carrying many requests at once;
 	// ConnsPerLogin is ignored.
 	Sftp bool `protobuf:"varint,8,opt,name=sftp,proto3" json:"sftp,omitempty"`
-	// HostKey pins the SFTP server's SSH host key, as the "SHA256:..."
-	// fingerprint ssh prints or an authorized_keys style public key line. Empty
+	// HostKey pins the SFTP server's SSH host key, as an authorized_keys style
+	// public key line, which also limits the handshake to that key's type, or as
+	// the "SHA256:..." fingerprint ssh prints, which fails when the server shows
+	// another of its keys. Empty
 	// trusts the first key the server shows and requires the same one on every
 	// later connection of the backend while it runs.
 	HostKey string `protobuf:"bytes,9,opt,name=host_key,json=hostKey,proto3" json:"hostKey,omitempty"`

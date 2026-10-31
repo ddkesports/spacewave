@@ -128,7 +128,7 @@ func NewClient(conf Config) (*Client, error) {
 	}
 
 	// Verify the server by its host key.
-	hostKey, err := newHostKeyCallback(conf.HostKey)
+	hostKey, algos, err := newHostKeyCallback(conf.HostKey)
 	if err != nil {
 		return nil, err
 	}
@@ -137,10 +137,11 @@ func NewClient(conf Config) (*Client, error) {
 	c := &Client{
 		conf: conf,
 		sshConf: &ssh.ClientConfig{
-			User:            conf.User,
-			Auth:            []ssh.AuthMethod{ssh.Password(conf.Password)},
-			HostKeyCallback: hostKey,
-			Timeout:         dialTimeout,
+			User:              conf.User,
+			Auth:              []ssh.AuthMethod{ssh.Password(conf.Password)},
+			HostKeyCallback:   hostKey,
+			HostKeyAlgorithms: algos,
+			Timeout:           dialTimeout,
 		},
 	}
 	for range conf.Conns {
