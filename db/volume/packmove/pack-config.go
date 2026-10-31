@@ -21,6 +21,9 @@ type PackConfig struct {
 	// WorldStoreID is the bucket ID of the World's block store. Pack leaves
 	// alone the blocks the reference graph reaches from any other root.
 	WorldStoreID string
+	// SQL is the World's rows in a SQL block store, which PackSQL packs; Pack
+	// ignores it.
+	SQL SQLRows
 	// Packer receives the packs.
 	Packer BlockPacker
 	// LogPath is the pack log, created when missing. A log from an earlier

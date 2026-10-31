@@ -10,6 +10,9 @@ import (
 	"os"
 	"time"
 
+	block_store_sql "github.com/s4wave/spacewave/db/block/store/sql"
+	"golang.org/x/sync/errgroup"
+
 	"github.com/aperturerobotics/cli"
 	"github.com/dustin/go-humanize"
 	block_store_s3 "github.com/s4wave/spacewave/db/block/store/s3"
@@ -42,6 +45,14 @@ type packArgs struct {
 	uploads int
 	// skipRest leaves out the count of keys outside the block range.
 	skipRest bool
+	// sqlLog, when set, also packs the SQL block store's rows the volume
+	// lacks, logging them there.
+	sqlLog string
+	// sql locates the SQL block store, sqlPort its port and sqlStoreID its
+	// block store id.
+	sql        block_store_sql.Config
+	sqlPort    uint
+	sqlStoreID string
 }
 
 // newDebugVolumePackCommand builds the command that packs a volume's World
@@ -60,7 +71,9 @@ func newDebugVolumePackCommand() *cli.Command {
 			"committed block key, so a stopped run resumes where it ended and volume-switch finds the blocks it missed. " +
 			"The credentials come from " + packKeyIDEnv + " and " + packKeyEnv + ". It also counts the keys outside the block " +
 			"range and the bytes of their keys and values, which size the file volume-switch writes. " +
-			"The upload rate is limited by --bytes-per-second; the command does not watch the backend's load.",
+			"The upload rate is limited by --bytes-per-second; the command does not watch the backend's load. " +
+			"With --sql-log it also packs, beside the volume's blocks, the rows of the SQL block store the volume lacks, " +
+			"reading the password from " + sqlPasswordEnv + "; run it with the backend stopped.",
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "world-store", Usage: "the bucket ID of the World's block store, p/<provider>/<account>/blk/<id>", Destination: &args.worldStore, Required: true},
 			&cli.StringFlag{Name: "log", Usage: "the pack log, created when missing and resumed when present", Destination: &args.logPath, Required: true},
@@ -72,6 +85,15 @@ func newDebugVolumePackCommand() *cli.Command {
 			&cli.IntFlag{Name: "pack-mib", Usage: "block data per pack in MiB; zero uses half the pack limit", Destination: &args.packMiB},
 			&cli.IntFlag{Name: "uploads", Usage: "packs uploading at once", Value: 8, Destination: &args.uploads},
 			&cli.BoolFlag{Name: "skip-rest", Usage: "do not count the keys outside the block range", Destination: &args.skipRest},
+			&cli.StringFlag{Name: "sql-log", Usage: "also pack the SQL block store's rows the volume lacks, with this log", Destination: &args.sqlLog},
+			&cli.StringFlag{Name: "sql-host", Usage: "with --sql-log, the database host", Destination: &args.sql.Host},
+			&cli.UintFlag{Name: "sql-port", Usage: "with --sql-log, the database port; zero uses 3306", Destination: &args.sqlPort},
+			&cli.StringFlag{Name: "sql-database", Usage: "with --sql-log, the database name", Destination: &args.sql.Database},
+			&cli.StringFlag{Name: "sql-user", Usage: "with --sql-log, the database user", Destination: &args.sql.User},
+			&cli.StringFlag{Name: "sql-table", Usage: "with --sql-log, the blocks table", Value: "blocks", Destination: &args.sql.Table},
+			&cli.BoolFlag{Name: "sql-tls", Usage: "with --sql-log, connect with TLS", Value: true, Destination: &args.sql.TLS},
+			&cli.StringFlag{Name: "sql-tls-cert-sha256", Usage: "with --sql-log, the hex SHA-256 of the server certificate to trust", Destination: &args.sql.TLSCertSHA256},
+			&cli.StringFlag{Name: "sql-store-id", Usage: "with --sql-log, the block store id of the World's rows", Destination: &args.sqlStoreID},
 		},
 		Action: func(c *cli.Context) error {
 			if c.NArg() != 1 {
@@ -134,9 +156,52 @@ func packVolumeFile(ctx context.Context, path string, args *packArgs, w io.Write
 			fmt.Fprintf(w, "%s: %s\n", time.Since(start).Round(time.Second), formatPackProgress(p))
 		},
 	}
-	progress, err := packmove.Pack(ctx, cfg)
-	fmt.Fprintf(w, "%s: %s\n", time.Since(start).Round(time.Second), formatPackProgress(progress))
-	return err
+	if args.sqlLog == "" {
+		progress, err := packmove.Pack(ctx, cfg)
+		fmt.Fprintf(w, "%s: %s\n", time.Since(start).Round(time.Second), formatPackProgress(progress))
+		return err
+	}
+
+	// Open the SQL block store's rows.
+	args.sql.Port = uint32(args.sqlPort) //nolint:gosec // a port fits.
+	args.sql.Password = os.Getenv(sqlPasswordEnv)
+	args.sql.MaxConns = 4
+	if args.sql.Host == "" || args.sql.Database == "" || args.sql.User == "" || args.sqlStoreID == "" {
+		return errors.New("--sql-log needs --sql-host, --sql-database, --sql-user and --sql-store-id")
+	}
+	db, err := block_store_sql.Open(&args.sql)
+	if err != nil {
+		return err
+	}
+	rows := block_store_sql.NewStore(logrus.NewEntry(logrus.New()), db, args.sql.Table, args.sqlStoreID)
+	defer rows.Close()
+
+	// Pack the rows with their own log and progress lines.
+	sqlCfg := cfg
+	sqlCfg.SQL = rows
+	sqlCfg.LogPath = args.sqlLog
+	var sqlLast time.Time
+	sqlCfg.Progress = func(p packmove.PackProgress) {
+		if time.Since(sqlLast) < copyReportInterval {
+			return
+		}
+		sqlLast = time.Now()
+		fmt.Fprintf(w, "%s: sql: %s\n", time.Since(start).Round(time.Second), formatPackProgress(p))
+	}
+
+	// Pack the volume and the rows together.
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		progress, err := packmove.Pack(gctx, cfg)
+		fmt.Fprintf(w, "%s: volume done: %s\n", time.Since(start).Round(time.Second), formatPackProgress(progress))
+		return err
+	})
+	g.Go(func() error {
+		progress, err := packmove.PackSQL(gctx, sqlCfg)
+		fmt.Fprintf(w, "%s: sql done: %s\n", time.Since(start).Round(time.Second), formatPackProgress(progress))
+		return err
+	})
+	return g.Wait()
 }
 
 // formatPackProgress describes the work of a pack.

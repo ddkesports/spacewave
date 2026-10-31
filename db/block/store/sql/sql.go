@@ -339,6 +339,33 @@ func (s *Store) GetBlockExistsBatch(ctx context.Context, refs []*block.BlockRef)
 	return exists, nil
 }
 
+// ListHashes returns up to limit row keys of the store after the key after,
+// in key order; nil after lists from the first. A row key is the marshaled
+// hash of the block.
+func (s *Store) ListHashes(ctx context.Context, after []byte, limit int) ([][]byte, error) {
+	// Read the next keys from the primary key; an empty key sorts first, where
+	// a NULL would match nothing.
+	if after == nil {
+		after = []byte{}
+	}
+	rows, err := s.db.QueryContext(ctx, "SELECT hash FROM "+s.table+" WHERE store_id = ? AND hash > ? ORDER BY hash LIMIT ?", s.storeID, after, limit) // #nosec G202 -- NewStore quotes the table.
+	if err != nil {
+		return nil, errors.Wrap(err, "list blocks")
+	}
+	defer rows.Close()
+
+	// Collect them in order.
+	var keys [][]byte
+	for rows.Next() {
+		var key []byte
+		if err := rows.Scan(&key); err != nil {
+			return nil, errors.Wrap(err, "list blocks")
+		}
+		keys = append(keys, key)
+	}
+	return keys, errors.Wrap(rows.Err(), "list blocks")
+}
+
 // GetStoredBlockBatch returns each block the store holds with its refs, a
 // thousand per query, and nil for a block it does not hold. withData false
 // leaves Data out and reads only the refs. A NULL refs column leaves

@@ -49,22 +49,12 @@ func Pack(ctx context.Context, cfg PackConfig) (PackProgress, error) {
 	}
 
 	// Resume from the log.
-	log, state, err := openPackLog(cfg.LogPath)
+	run, err := startRun(ctx, cfg)
 	if err != nil {
-		return PackProgress{}, errors.Wrap(err, "open pack log")
+		return PackProgress{}, err
 	}
-	defer func() { _ = log.close() }()
-	run := &packRun{cfg: cfg, log: log, state: state}
-	run.progress = PackProgress{
-		Packs: state.packs, Blocks: state.blocks, Bytes: state.bytes, Bad: state.bad,
-		Resumed: state.blocks, Outside: outside.Len(), OutsideBytes: outside.Bytes(),
-	}
-	if cfg.BytesPerSecond > 0 {
-		run.limiter = rate.NewLimiter(rate.Limit(cfg.BytesPerSecond), int(min(cfg.BytesPerSecond, 1<<30))) //nolint:gosec // bounded above.
-	}
-	if err := run.resolvePending(ctx); err != nil {
-		return run.progress, err
-	}
+	defer func() { _ = run.log.close() }()
+	run.update(func(p *PackProgress) { p.Outside, p.OutsideBytes = outside.Len(), outside.Bytes() })
 
 	// Read the blocks after the log's last key.
 	reader := &batchReader{src: cfg.Source, prefix: cfg.Keys.GetBlockFullPrefix(), after: run.state.lastKey, packBytes: cfg.PackBytes, outside: outside}
@@ -72,14 +62,86 @@ func Pack(ctx context.Context, cfg PackConfig) (PackProgress, error) {
 		reader.packBytes = DefaultPackBytes
 	}
 
-	// Read the next batch while the last uploads, and measure the keys outside
-	// the block range beside them.
+	// Measure the keys outside the block range beside the pack.
+	var side func(context.Context) error
+	if !cfg.SkipRest {
+		side = func(ctx context.Context) error {
+			_, err := MeasureRest(ctx, cfg.Source, cfg.Keys, run.setRest)
+			return err
+		}
+	}
+	err = run.pipe(ctx, reader.next, side)
+	return run.snapshot(), err
+}
+
+// PackSQL writes the blocks of cfg.SQL that cfg.Source does not hold, in row
+// key order, as packs in cfg.Packer, so the packs and Pack's together hold
+// every block either store holds. Its log at cfg.LogPath is separate from
+// Pack's and resumes the same way. A row whose data does not match its hash is
+// recorded as bad; a row with unknown refs is packed without them and counted
+// in PackProgress.Untracked. Run it with no writer beside it: a block that
+// moves into the volume during the run may be packed twice, which KeepPacks
+// tolerates.
+func PackSQL(ctx context.Context, cfg PackConfig) (PackProgress, error) {
+	// Check the volume's format.
+	if err := requireFormat(ctx, cfg); err != nil {
+		return PackProgress{}, err
+	}
+	if cfg.SQL == nil {
+		return PackProgress{}, errors.New("pack-sql needs the SQL block store")
+	}
+
+	// Resume from the log.
+	run, err := startRun(ctx, cfg)
+	if err != nil {
+		return PackProgress{}, err
+	}
+	defer func() { _ = run.log.close() }()
+
+	// Read the rows after the log's last key.
+	reader := &sqlBatchReader{rows: cfg.SQL, src: cfg.Source, prefix: cfg.Keys.GetBlockFullPrefix(), after: run.state.lastKey, packBytes: cfg.PackBytes}
+	if reader.packBytes <= 0 {
+		reader.packBytes = DefaultPackBytes
+	}
+	err = run.pipe(ctx, reader.next, nil)
+	return run.snapshot(), err
+}
+
+// startRun opens the log at cfg.LogPath and finishes the batch a killed run
+// left pending. The caller closes the run's log.
+func startRun(ctx context.Context, cfg PackConfig) (*packRun, error) {
+	// Replay the log.
+	log, state, err := openPackLog(cfg.LogPath)
+	if err != nil {
+		return nil, errors.Wrap(err, "open pack log")
+	}
+	run := &packRun{cfg: cfg, log: log, state: state}
+	run.progress = PackProgress{Packs: state.packs, Blocks: state.blocks, Bytes: state.bytes, Bad: state.bad, Resumed: state.blocks}
+
+	// Pace the upload.
+	if cfg.BytesPerSecond > 0 {
+		run.limiter = rate.NewLimiter(rate.Limit(cfg.BytesPerSecond), int(min(cfg.BytesPerSecond, 1<<30))) //nolint:gosec // bounded above.
+	}
+
+	// Finish the pending batch.
+	if err := run.resolvePending(ctx); err != nil {
+		_ = log.close()
+		return nil, err
+	}
+	return run, nil
+}
+
+// pipe reads batches from next until it returns nil and uploads them with
+// cfg.Uploads uploads at once, the next batch reading while the last
+// uploads. side, when set, runs beside them and fails the pipe with its error.
+func (r *packRun) pipe(ctx context.Context, next func(context.Context) (*packBatch, error), side func(context.Context) error) error {
+	// Number the batches in the order they are read.
 	batches := make(chan *packBatch, batchesAhead)
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		defer close(batches)
 		for seq := uint64(0); ; seq++ {
-			batch, err := reader.next(gctx)
+			batch, err := next(gctx)
 			if err != nil || batch == nil {
 				return err
 			}
@@ -91,24 +153,24 @@ func Pack(ctx context.Context, cfg PackConfig) (PackProgress, error) {
 			}
 		}
 	})
-	for range max(cfg.Uploads, 1) {
+
+	// Upload them.
+	for range max(r.cfg.Uploads, 1) {
 		g.Go(func() error {
 			for batch := range batches {
-				if err := run.upload(gctx, batch); err != nil {
+				if err := r.upload(gctx, batch); err != nil {
 					return err
 				}
 			}
 			return nil
 		})
 	}
-	if !cfg.SkipRest {
-		g.Go(func() error {
-			_, err := MeasureRest(gctx, cfg.Source, cfg.Keys, run.setRest)
-			return err
-		})
+
+	// Run the side work.
+	if side != nil {
+		g.Go(func() error { return side(gctx) })
 	}
-	err = g.Wait()
-	return run.snapshot(), err
+	return g.Wait()
 }
 
 // packRun holds the state of one Pack.
