@@ -15,13 +15,12 @@ import (
 //
 // The returned references keep bytes readable even if later fetches or other
 // readers evict them from the resident cache before the caller copies them.
-// exact limits each fetch to the uncovered gap, as index-tail reads need.
-// Otherwise the planner may widen fetches for read-ahead.
-func (e *PackReader) fetchSpans(ctx context.Context, start, end int64, exact bool) ([]*span, error) {
+// The planner may widen fetches for read-ahead.
+func (e *PackReader) fetchSpans(ctx context.Context, start, end int64) ([]*span, error) {
 	// Retain each completed interval before advancing to the next gap.
 	var spans []*span
 	for cur := start; cur < end; {
-		sp, err := e.fetchRange(ctx, cur, end, exact)
+		sp, err := e.fetchRange(ctx, cur, end)
 		if err != nil {
 			return nil, err
 		}
@@ -38,16 +37,14 @@ func (e *PackReader) fetchSpans(ctx context.Context, start, end int64, exact boo
 // Concurrent callers for overlapping offsets fold onto the same in-flight
 // fetch via the loading map, guaranteeing one transport call per uncovered
 // span. Transport work belongs to the PackReader, so canceling the caller
-// that starts a fetch does not cancel another caller waiting for it. exact
-// selects the gap-clipped index planner instead of the adaptive planner.
-func (e *PackReader) fetchRange(ctx context.Context, off, readEnd int64, exact bool) (*span, error) {
+// that starts a fetch does not cancel another caller waiting for it.
+func (e *PackReader) fetchRange(ctx context.Context, off, readEnd int64) (*span, error) {
 	// Record the requested interval and reject canceled demand before fetching.
 	ctx, task := trace.NewTask(ctx, "provider/spacewave/packfile/range-fetch")
 	defer task.End()
 	trace.Log(ctx, "pack-id", e.packID)
 	trace.Logf(ctx, "target-offset", "%d", off)
 	trace.Logf(ctx, "target-end", "%d", readEnd)
-	trace.Logf(ctx, "exact", "%t", exact)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -85,11 +82,7 @@ func (e *PackReader) fetchRange(ctx context.Context, off, readEnd int64, exact b
 		}
 
 		// Plan a transport window within the uncovered gap.
-		if exact {
-			key = e.planExactFetchLocked(off, readEnd)
-		} else {
-			key = e.planFetchLocked(off, readEnd, block.ReadAhead(ctx))
-		}
+		key = e.planFetchLocked(off, readEnd, block.ReadAhead(ctx))
 		if key.size == 0 {
 			return
 		}
@@ -129,7 +122,7 @@ func (e *PackReader) fetchRange(ctx context.Context, off, readEnd int64, exact b
 		trace.Log(ctx, "role", "leader")
 		trace.Logf(ctx, "range-offset", "%d", key.off)
 		trace.Logf(ctx, "range-size", "%d", key.size)
-		e.startFetch(key, load, gate, promote, exact)
+		e.startFetch(key, load, gate, promote)
 	}
 	if !started {
 		trace.Log(ctx, "role", "waiter")
@@ -160,7 +153,7 @@ func (e *PackReader) fetchRange(ctx context.Context, off, readEnd int64, exact b
 // startFetch runs one transport request under the PackReader lifetime. A
 // non-nil promote marks a background fetch, which the gate admits after
 // foreground fetches unless promote closes first.
-func (e *PackReader) startFetch(key fetchKey, load *fetchLoad, gate *demandGate, promote <-chan struct{}, indexTail bool) {
+func (e *PackReader) startFetch(key fetchKey, load *fetchLoad, gate *demandGate, promote <-chan struct{}) {
 	startOwnerWork(func() {
 		// Hold the reader open until this job finishes.
 		defer e.finishOwnerWork()
@@ -190,11 +183,7 @@ func (e *PackReader) startFetch(key fetchKey, load *fetchLoad, gate *demandGate,
 			}
 			if err == nil && sp != nil {
 				e.insertSpanLocked(sp)
-				if indexTail {
-					notifyDone = e.recordIndexTailFetchLocked(key, len(data))
-				} else {
-					notifyDone = e.recordFetchLocked(key, len(data))
-				}
+				notifyDone = e.recordFetchLocked(key, len(data))
 				writeback = e.prepareWritebackLocked(sp.off, sp.end())
 			}
 			if notifyDone == nil {
@@ -341,29 +330,6 @@ func (e *PackReader) recordSparseTargetLocked(off, end int64) {
 	e.lastTargetOff = off
 	e.lastTargetEnd = end
 	e.lastTargetSet = true
-}
-
-// planExactFetchLocked clips index reads to the currently uncovered gap.
-func (e *PackReader) planExactFetchLocked(off, readEnd int64) fetchKey {
-	// Locate the uncovered byte interval containing the requested offset.
-	gapStart, gapEnd, ok := e.findGapLocked(off)
-	if !ok || gapEnd <= gapStart {
-		return fetchKey{}
-	}
-
-	// Clip the index-tail fetch to the uncovered interval.
-	start := max(off, gapStart)
-	end := min(readEnd, gapEnd)
-	if end <= start {
-		end = start + 1
-	}
-	if end > gapEnd {
-		end = gapEnd
-	}
-	if end <= start {
-		return fetchKey{}
-	}
-	return fetchKey{off: start, size: int(end - start)}
 }
 
 // recordFetchLocked notes a completed fetch for adaptive sizing.

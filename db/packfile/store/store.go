@@ -199,6 +199,14 @@ func (s *PackfileStore) SetRangeCacheMaxBytes(maxBytes int64) {
 	s.budget.reclaim()
 }
 
+// SetIndexEntryLimit sets the parsed index entries every engine may hold
+// together. Above it the least recently used indexes drop and reload on their
+// next use. Zero or negative keeps every index loaded.
+func (s *PackfileStore) SetIndexEntryLimit(entries int64) {
+	s.budget.indexLimit.Store(entries)
+	s.budget.reclaimIndexes()
+}
+
 // SetStatsChangedCallback sets a callback invoked after observable stats change.
 func (s *PackfileStore) SetStatsChangedCallback(fn func()) {
 	// Save the stats callback and snapshot the open readers.

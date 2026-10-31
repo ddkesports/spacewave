@@ -79,26 +79,29 @@ func (s *PackStore) indexPending(ctx context.Context, width int, pack, batch tim
 	return eg.Wait()
 }
 
-// indexPack reads the index tail of a pack with one request that ends at the
-// end of the object, and writes its block keys to the index. It returns the
-// keys written and the bytes read.
+// indexPack reads the index tail of a pack backwards from the end of the
+// object, and writes its block keys to the index. It returns the keys written
+// and the bytes read.
 func (s *PackStore) indexPack(ctx context.Context, entry *packfile.PackfileEntry, batch time.Duration) (uint64, uint64, error) {
+	// Read the index tail, counting the bytes fetched.
 	id := entry.GetId()
 	size := entry.GetSizeBytes()
-	n, err := packfile.IndexSuffixSize(entry.GetBlockCount(), size)
+	var read uint64
+	tail, err := packfile.ReadIndexTail(ctx, size, func(ctx context.Context, off int64, length int) ([]byte, error) {
+		read += uint64(length) //nolint:gosec // length is a nonnegative read length.
+		return s.client.GetObjectRange(ctx, s.bucket, s.prefix+packDir+id, off, length)
+	})
 	if err != nil {
-		return 0, 0, err
+		return 0, read, err
 	}
-	suffix, err := s.client.GetObjectRange(ctx, s.bucket, s.prefix+packDir+id, int64(size-n), int(n)) //nolint:gosec // the pack size is a stored object size.
-	if err != nil {
-		return 0, 0, err
-	}
+
+	// Write the tail's block keys to the index in paced batches.
 	keys, err := s.index.writeKeys(ctx, id, func(yield func([]byte) error) error {
-		return packfile.ScanIndexSuffix(suffix, size, func(ie *kvfile.IndexEntry) error {
+		return packfile.ScanIndexTail(tail, size, func(ie *kvfile.IndexEntry) error {
 			return yield(ie.GetKey())
 		})
 	}, func(ctx context.Context) error { return sleep(ctx, batch) })
-	return keys, uint64(len(suffix)), err
+	return keys, read, err
 }
 
 // sleep waits d or until ctx ends.
