@@ -55,13 +55,15 @@ func CheckReplacements(ctx context.Context, src block.StoreOps, from, to *block.
 // CheckExisted compares the record's Existed list for a write from the root
 // from to the root to against the trees in src. puts holds, by MarshalString,
 // each page the interval put, true when the put found it stored, as Net takes
-// it. A page is written when a put stored it afresh, or found it within the
-// old tree, since that put was counted; any other page the new tree reaches
-// already existed. The applier reads Existed for the
-// live pages it gives a count change: those in Kept, the unlisted children of
-// the Replaced pages, and the old root. Each such page the new tree reaches,
-// other than its root, must be in Existed exactly when no written page names
-// it, since only then was its edge from the new tree counted already.
+// it. A page is written when a put stored it afresh. A page a put found,
+// within the old tree or outside it, is the stored page, whose edges were
+// counted when it was first stored, so any page the new tree reaches that no
+// written page names already existed. The applier reads Existed for the live
+// pages it gives a count change: those in Kept, the unlisted children of the
+// Replaced pages of the old tree, and the old root. Each such page the new
+// tree reaches, other than its root, must be in Existed exactly when no
+// written page names it, since only then was its edge from the new tree
+// counted already.
 func CheckExisted(ctx context.Context, src block.StoreOps, from, to *block.BlockRef, rep *block.Replacements, puts map[string]bool) error {
 	// Index the existed list and the listed pages.
 	existed := make(map[string]struct{}, len(rep.Existed))
@@ -80,21 +82,24 @@ func CheckExisted(ctx context.Context, src block.StoreOps, from, to *block.Block
 			written[key] = struct{}{}
 		}
 	}
+
+	// Gather the pages of the old tree, whose edges were counted.
+	old := make(map[string]struct{})
 	var oldRoots []*block.BlockRef
 	if !from.GetEmpty() {
 		oldRoots = append(oldRoots, from)
 	}
 	err := block.WalkGraph(ctx, src, oldRoots, 0, func(ref *block.BlockRef, _ *block.StoredBlock) error {
-		if puts[ref.MarshalString()] {
-			written[ref.MarshalString()] = struct{}{}
-		}
+		old[ref.MarshalString()] = struct{}{}
 		return nil
 	})
 	if err != nil {
 		return errors.Wrap(err, "walk the old tree")
 	}
 
-	// Gather the pages the applier gives a count change.
+	// Gather the pages the applier gives a count change. A listed page the
+	// interval stored and dropped named its children by edges no put
+	// counted, so freeing it takes nothing from them.
 	checked := make(map[string]struct{})
 	for _, ref := range rep.Kept {
 		checked[ref.MarshalString()] = struct{}{}
@@ -103,6 +108,9 @@ func CheckExisted(ctx context.Context, src block.StoreOps, from, to *block.Block
 		checked[from.MarshalString()] = struct{}{}
 	}
 	err = block.WalkGraph(ctx, src, rep.Replaced, 0, func(ref *block.BlockRef, stored *block.StoredBlock) error {
+		if _, isOld := old[ref.MarshalString()]; !isOld {
+			return block.ErrSkipRefs
+		}
 		for _, child := range stored.Refs {
 			if _, isListed := listed[child.MarshalString()]; !isListed {
 				checked[child.MarshalString()] = struct{}{}

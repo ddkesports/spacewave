@@ -111,6 +111,20 @@ func TestReplacementsMatchDiff(t *testing.T) {
 		}
 	}
 
+	// checkJoin joins steps, all written through r from the root from, and
+	// compares the joined record with the diff and the puts.
+	checkJoin := func(name string, r *recording, from *block.BlockRef, steps block.ReplacementSteps) {
+		joined := steps.Join()
+		found := puts(r)
+		rep := joined.Net(found)
+		if err := block_mock.CheckReplacements(ctx, store, from, joined.To, rep); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if err := block_mock.CheckExisted(ctx, store, from, joined.To, rep, found); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+
 	// Edit the leaf in place.
 	from := chain("edit")
 	r := open(from)
@@ -175,6 +189,29 @@ func TestReplacementsMatchDiff(t *testing.T) {
 		p.FollowRef(1, nil).SetRefAtCursor(copied, true)
 	}
 	check("copy", r, from, copied, copied)
+
+	// Replace mid with a pair of new pages that each name the same new leaf:
+	// the leaf takes its first holder without a count, and is held for the
+	// other.
+	from = chain("share")
+	r = open(from)
+	shared := block_mock.NewExample("shared new leaf")
+	sharedData, err := shared.MarshalVT()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sharedRef, err := block.BuildBlockRef(sharedData, &block.PutOpts{HashType: from.GetHash().GetHashType()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.mid.ClearAllRefs()
+	r.mid.SetBlock(&block_mock.Pair{Msg: "shares"}, true)
+	for i, msg := range []string{"share a", "share b"} {
+		p := r.mid.FollowRef(uint32(i+1), nil) // #nosec G115 -- i is 0 or 1.
+		p.SetBlock(&block_mock.Pair{Msg: msg}, true)
+		p.FollowRef(1, nil).SetBlock(block_mock.NewExample("shared new leaf"), true)
+	}
+	check("share", r, from, sharedRef)
 
 	// Two writes in one interval: the first write's pages die in the second.
 	from = chain("twice")
@@ -276,14 +313,61 @@ func TestReplacementsMatchDiff(t *testing.T) {
 		t.Fatalf("join: original first %v, root %v, x %v", steps.Original(first), steps.Original(from), steps.Original(x))
 	}
 
-	// The joined record matches the diff and the puts.
-	joined := steps.Join()
-	found := puts(r)
-	rep := joined.Net(found)
-	if err := block_mock.CheckReplacements(ctx, store, from, joined.To, rep); err != nil {
-		t.Fatalf("join: %v", err)
+	checkJoin("join", r, from, steps)
+
+	// Return the leaf to its first value through x: the loop's x leaf dies,
+	// and the first leaf, written back, is the stored page again.
+	from = chain("loop")
+	r = open(from)
+	midBlk, _ = r.mid.GetBlock()
+	leaf = r.mid.FollowRef(1, midBlk.(*block_mock.SubBlock).GetExamplePtr())
+	if _, err := block_mock.UnmarshalExample(ctx, leaf); err != nil {
+		t.Fatal(err)
 	}
-	if err := block_mock.CheckExisted(ctx, store, from, joined.To, rep, found); err != nil {
-		t.Fatalf("join: %v", err)
+	steps = nil
+	for _, msg := range []string{"x", "loop"} {
+		leaf.SetBlock(block_mock.NewExample(msg), true)
+		to, _, err := r.tx.Write(ctx, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		steps = append(steps, r.log.Take(to))
 	}
+	checkJoin("loop", r, from, steps)
+
+	// Copy a parent of the leaf, dirty the leaf through the copy, and drop
+	// the copy: the untouched parent still names the leaf, so the record
+	// leaves the leaf alone.
+	from = chain("copied")
+	r = open(from)
+	midBlk, _ = r.mid.GetBlock()
+	copied = midBlk.(*block_mock.SubBlock).GetExamplePtr().Clone()
+	rootBlk, _ = r.root.GetBlock()
+	rootBlk.(*block_mock.SubBlock).ExamplePtr = nil
+	r.root.ClearAllRefs()
+	r.root.SetBlock(&block_mock.Pair{Msg: "copied"}, true)
+	r.root.SetRef(1, r.mid)
+	cp := r.root.FollowRef(2, nil)
+	cp.SetBlock(&block_mock.Pair{Msg: "copy"}, true)
+	cp.FollowRef(1, nil).SetRefAtCursor(copied, true)
+	to, _, err := r.tx.Write(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	steps = block.ReplacementSteps{r.log.Take(to)}
+	leaf = cp.FollowRef(1, copied)
+	if _, err := block_mock.UnmarshalExample(ctx, leaf); err != nil {
+		t.Fatal(err)
+	}
+	leaf.SetBlock(block_mock.NewExample("copied"), true)
+	r.root.ClearRef(2)
+	rootBlk, _ = r.root.GetBlock()
+	rootBlk.(*block_mock.Pair).Right = nil
+	r.root.MarkDirty()
+	to, _, err = r.tx.Write(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	steps = append(steps, r.log.Take(to))
+	checkJoin("copied", r, from, steps)
 }

@@ -404,8 +404,8 @@ func addDeadlistHolds(ctx context.Context, blocks block.StoreOps, rg *block_gc.R
 //
 // A writer marks Counted each entry it can prove the store held before its
 // interval began, such as a page of the old tree written back. Such an entry
-// gains no count, and it never stands in for the parent of a found entry: a
-// found child of a marked entry counts on its own, which can only over-count.
+// gains no count, and the put finding it stored makes it the found parent of
+// each found entry it names, whose edge from it the store counted.
 //
 // A marked entry the put finds absent was freed after the writer's proof, so
 // the put stores it afresh and its edges to its children are new: no record
@@ -432,7 +432,7 @@ func (v *Volume) addExistedHolds(ctx context.Context, blocks block.StoreOps, rg 
 	// its first entry decides.
 	found := make(map[string]bool, len(entries))
 	kept := make(map[string]bool)
-	var listed, revived []*block.PutBatchEntry
+	var listed, marked, revived []*block.PutBatchEntry
 	for i, e := range entries {
 		if e.Tombstone {
 			continue
@@ -444,6 +444,7 @@ func (v *Volume) addExistedHolds(ctx context.Context, blocks block.StoreOps, rg 
 		switch {
 		case e.Counted && existed[i]:
 			kept[key] = true
+			marked = append(marked, e)
 		case e.Counted:
 			found[key] = false
 			listed = append(listed, e)
@@ -455,8 +456,8 @@ func (v *Volume) addExistedHolds(ctx context.Context, blocks block.StoreOps, rg 
 	}
 
 	// Count each found entry once per new parent, or once with no parent in
-	// the batch, and each entry stored afresh once per new parent holding
-	// roots.
+	// the batch, where a marked entry found stored is a parent; and each entry
+	// stored afresh once per new parent holding roots.
 	parents := make(map[string]int, len(listed))
 	var holds []string
 	for _, e := range listed {
@@ -474,6 +475,13 @@ func (v *Volume) addExistedHolds(ctx context.Context, blocks block.StoreOps, rg 
 			}
 			if isNew {
 				holds = append(holds, key)
+			}
+		}
+	}
+	for _, e := range marked {
+		for _, child := range e.Refs {
+			if key := block_gc.BlockIRI(child); found[key] {
+				parents[key]++
 			}
 		}
 	}

@@ -10,7 +10,9 @@ import (
 // TestResolveDeathsSharedPage applies two records to a page X that two Worlds
 // share. World A replaces X's child C, which writes X again: X loses a count
 // and lives, so C lives, and X's other child D gains the new X's edge. World
-// B then drops X: X and C free, and D loses B's X and lives.
+// B then drops X: X and C free, and D loses B's X and lives. Two more records
+// drop a page under a freeing and a living parent, and one under two freeing
+// parents, which loses a count for each.
 func TestResolveDeathsSharedPage(t *testing.T) {
 	// Store A at rootA -> X -> {C, D}, and B at rootB -> X, with X counted.
 	ctx := t.Context()
@@ -84,4 +86,35 @@ func TestResolveDeathsSharedPage(t *testing.T) {
 	// B drops X: X and C free, and D loses B's X.
 	fates = apply(rootB, &block.Replacements{Replaced: []*block.BlockRef{rootB}, Removed: []*block.BlockRef{x}})
 	check(fates, map[*block.BlockRef]bool{rootB: true, x: true, c: true, d: false}, map[*block.BlockRef]uint64{d: 0})
+
+	// Store E at rootE -> {P, Q} with P and Q naming S, and F at rootF -> Q:
+	// Q and S each count one more holder.
+	rootE, rootF, p, q, sp := page("root e"), page("root f"), page("p"), page("q"), page("s")
+	for _, e := range [][2]*block.BlockRef{{rootE, p}, {rootE, q}, {rootF, q}, {p, sp}, {q, sp}} {
+		if err := rg.AddBlockRef(ctx, e[0], e[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := rg.AddHolds(ctx, []string{BlockIRI(q), BlockIRI(sp)}); err != nil {
+		t.Fatal(err)
+	}
+
+	// E drops its tree: P frees and Q lives, so S loses P's edge alone and
+	// lives, whichever parent the walk reaches it through first.
+	fates = apply(rootE, &block.Replacements{Replaced: []*block.BlockRef{rootE}, Removed: []*block.BlockRef{p, q}})
+	check(fates, map[*block.BlockRef]bool{rootE: true, p: true, q: false, sp: false}, map[*block.BlockRef]uint64{q: 0, sp: 0})
+
+	// Store G at rootG -> {U, W} with both naming V, which counts one more
+	// holder. G drops its tree: both parents free, so V frees too.
+	rootG, u, w, v := page("root g"), page("u"), page("w"), page("v")
+	for _, e := range [][2]*block.BlockRef{{rootG, u}, {rootG, w}, {u, v}, {w, v}} {
+		if err := rg.AddBlockRef(ctx, e[0], e[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := rg.AddHolds(ctx, []string{BlockIRI(v)}); err != nil {
+		t.Fatal(err)
+	}
+	fates = apply(rootG, &block.Replacements{Replaced: []*block.BlockRef{rootG}, Removed: []*block.BlockRef{u, w}})
+	check(fates, map[*block.BlockRef]bool{rootG: true, u: true, w: true, v: true}, nil)
 }

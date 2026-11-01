@@ -73,9 +73,16 @@ func TestIntervalPutsCountSharedPages(t *testing.T) {
 		return entries
 	}
 
-	// name puts entries and names the World they end at head.
+	// name puts entries with a replay hold over the World they end at, as
+	// the engine's naming put carries one, and names that World head.
 	name := func(entries []*block.PutBatchEntry) {
 		t.Helper()
+		data := []byte("hold " + entries[0].Ref.MarshalString())
+		hold, err := block.BuildBlockRef(data, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries = append(entries, &block.PutBatchEntry{Ref: hold, Data: data, Refs: []*block.BlockRef{entries[0].Ref}, RefsKnown: true, HoldsRoots: true})
 		roots := []block.NamedRoot{{Name: "head", Ref: entries[0].Ref}}
 		if err := v.SetBucketRoots(ctx, "bucket", entries, roots); err != nil {
 			t.Fatal(err)
@@ -83,16 +90,18 @@ func TestIntervalPutsCountSharedPages(t *testing.T) {
 	}
 
 	// The old World holds leaf p. Writing p', then p again, names the old
-	// World again: its pages are original and gain no count.
+	// World again: its leaf is original and its root is found under the
+	// found hold and the same owner edge, so neither gains a count.
 	old := world("p")
 	p := scratchLeaf(t, scratch, old)
 	name([]*block.PutBatchEntry{scratchEntry(t, scratch, old, p), scratchEntry(t, scratch, p)})
+	rootHolds, leafHolds := readHolds(t, v, old), readHolds(t, v, p)
 	name(interval(old, "p'", "p"))
-	if n := readHolds(t, v, p); n != 0 {
-		t.Fatalf("written back leaf holds=%d, want 0", n)
+	if n := readHolds(t, v, p); n != leafHolds {
+		t.Fatalf("written back leaf holds=%d, want %d", n, leafHolds)
 	}
-	if n := readHolds(t, v, old); n != 0 {
-		t.Fatalf("written back root holds=%d, want 0", n)
+	if n := readHolds(t, v, old); n != rootHolds {
+		t.Fatalf("written back root holds=%d, want %d", n, rootHolds)
 	}
 
 	// Another World holds leaf q. An interval creates q, drops it and creates
