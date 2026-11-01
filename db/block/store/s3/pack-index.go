@@ -14,6 +14,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/s4wave/spacewave/db/kvtx"
 	"github.com/s4wave/spacewave/db/packfile"
+	"golang.org/x/sync/errgroup"
 )
 
 // The local KV a PackStore keeps its pack index in holds three kinds of rows:
@@ -120,15 +121,73 @@ func newPackIndex(store kvtx.Store) *packIndex {
 	}
 }
 
+// loadReaders is the number of read transactions that read the cached entries
+// at once. Each entry is a value of its own in the KV store, one random read,
+// so a cold start that reads them one at a time waits on the disk once per
+// pack while every lookup waits behind it.
+const loadReaders = 16
+
 // load reads the pack table and the cached entries.
 func (x *packIndex) load(ctx context.Context) ([]*packfile.PackfileEntry, error) {
-	tx, err := x.store.NewTransaction(ctx, false)
+	// Read the pack table and the ids of the cached entries from the index.
+	rows, ids, err := x.loadTable(ctx)
 	if err != nil {
 		return nil, err
 	}
+
+	// Read the entries in parallel, each reader in its own read transaction.
+	// A pack removed since the table read has no entry and is skipped.
+	read := make([]*packfile.PackfileEntry, len(ids))
+	var next atomic.Int64
+	eg, egCtx := errgroup.WithContext(ctx)
+	for range min(loadReaders, len(ids)) {
+		eg.Go(func() error {
+			tx, err := x.store.NewTransaction(egCtx, false)
+			if err != nil {
+				return err
+			}
+			defer tx.Discard()
+			for i := int(next.Add(1) - 1); i < len(ids); i = int(next.Add(1) - 1) {
+				id := ids[i]
+				value, found, err := tx.Get(egCtx, []byte(indexEntryPrefix+id))
+				if err != nil {
+					return errors.Wrap(err, "read cached entry")
+				}
+				entry := &packfile.PackfileEntry{}
+				if !found || entry.UnmarshalVT(value) != nil || entry.GetId() != id {
+					continue
+				}
+				read[i] = entry
+			}
+			return nil
+		})
+	}
+	if err := eg.Wait(); err != nil {
+		return nil, err
+	}
+
+	// Register the entries in key order.
+	entries := make([]*packfile.PackfileEntry, 0, len(read))
+	for _, entry := range read {
+		if entry == nil {
+			continue
+		}
+		entries = append(entries, entry)
+		x.register(entry.GetId(), rows[entry.GetId()], entry)
+	}
+	return entries, nil
+}
+
+// loadTable reads the pack table and the ids of the packs in it that have a
+// cached entry, in key order. It reads only the index, no entry values.
+func (x *packIndex) loadTable(ctx context.Context) (map[string]packRow, []string, error) {
+	tx, err := x.store.NewTransaction(ctx, false)
+	if err != nil {
+		return nil, nil, err
+	}
 	defer tx.Discard()
 
-	// Read the pack table.
+	// Read the pack table, whose rows are a few bytes each.
 	rows := make(map[string]packRow)
 	err = tx.ScanPrefix(ctx, []byte(indexPackPrefix), func(key, value []byte) error {
 		row, err := unmarshalPackRow(value)
@@ -139,29 +198,22 @@ func (x *packIndex) load(ctx context.Context) ([]*packfile.PackfileEntry, error)
 		return nil
 	})
 	if err != nil {
-		return nil, errors.Wrap(err, "read pack table")
+		return nil, nil, errors.Wrap(err, "read pack table")
 	}
 
-	// Read the entries of the packs in the table.
-	var entries []*packfile.PackfileEntry
-	err = tx.ScanPrefix(ctx, []byte(indexEntryPrefix), func(key, value []byte) error {
+	// List the cached entries of the packs in the table.
+	var ids []string
+	err = tx.ScanPrefixKeys(ctx, []byte(indexEntryPrefix), func(key []byte) error {
 		id := string(key[len(indexEntryPrefix):])
-		row, ok := rows[id]
-		if !ok {
-			return nil
+		if _, ok := rows[id]; ok {
+			ids = append(ids, id)
 		}
-		entry := &packfile.PackfileEntry{}
-		if err := entry.UnmarshalVT(slices.Clone(value)); err != nil || entry.GetId() != id {
-			return nil
-		}
-		entries = append(entries, entry)
-		x.register(id, row, entry)
 		return nil
 	})
 	if err != nil {
-		return nil, errors.Wrap(err, "read cached entries")
+		return nil, nil, errors.Wrap(err, "list cached entries")
 	}
-	return entries, nil
+	return rows, ids, nil
 }
 
 // register adds a persisted pack to the table.
