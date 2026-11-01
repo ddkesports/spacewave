@@ -6,7 +6,9 @@
 // follows exactly one blank line, and no paragraph exceeds eight statements. The
 // check reads the staged blobs and reports only functions with a changed line of
 // their own, so touching a legacy function brings that function up to shape
-// without demanding a repository-wide cleanup. Function literals are checked
+// without demanding a repository-wide cleanup. In a merge, a changed line is one
+// that differs from every parent, so the merge answers only for its
+// resolutions. Function literals are checked
 // separately from the function that declares them. Generated files and test
 // files are omitted.
 //
@@ -45,13 +47,20 @@ func main() {
 		os.Exit(2)
 	}
 
+	// Read the commits a merge in progress brings in.
+	merged, err := mergeHeads()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+
 	// Check each file's staged contents against its changed lines.
 	failed := false
 	for name := range strings.SplitSeq(names, "\x00") {
 		if name == "" {
 			continue
 		}
-		problems, err := checkFile(name)
+		problems, err := checkFile(name, merged)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(2)
@@ -80,15 +89,33 @@ func git(args ...string) (string, error) {
 	return stdout.String(), nil
 }
 
+// mergeHeads returns the commits a merge in progress brings in, or nil outside
+// a merge.
+func mergeHeads() ([]string, error) {
+	// Find MERGE_HEAD, which lists one commit per line.
+	path, err := git("rev-parse", "--git-path", "MERGE_HEAD")
+	if err != nil {
+		return nil, err
+	}
+	b, err := os.ReadFile(strings.TrimSpace(path))
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return strings.Fields(string(b)), nil
+}
+
 // checkFile returns the line-prefixed violations in the changed functions of
-// one staged file.
-func checkFile(name string) ([]string, error) {
+// one staged file, where merged lists the commits a merge brings in.
+func checkFile(name string, merged []string) ([]string, error) {
 	// Read the staged blob and the lines the commit changes in it.
 	blob, err := git("show", ":"+name)
 	if err != nil {
 		return nil, err
 	}
-	changed, err := changedLines(name)
+	changed, err := changedLines(name, merged)
 	if err != nil {
 		return nil, err
 	}
@@ -126,10 +153,37 @@ func checkFile(name string) ([]string, error) {
 	return problems, nil
 }
 
-// changedLines returns the new-file line numbers a staged diff adds or modifies.
-func changedLines(name string) (map[int]bool, error) {
+// changedLines returns the new-file line numbers the staged file adds or
+// modifies against HEAD and against every commit in merged. A line taken
+// unchanged from any parent is that parent's change, not the commit's.
+func changedLines(name string, merged []string) (map[int]bool, error) {
+	// Mark the lines that differ from HEAD.
+	changed, err := diffLines(name)
+	if err != nil {
+		return nil, err
+	}
+
+	// Keep only the lines that also differ from each merged commit.
+	for _, rev := range merged {
+		other, err := diffLines(name, rev)
+		if err != nil {
+			return nil, err
+		}
+		for n := range changed {
+			if !other[n] {
+				delete(changed, n)
+			}
+		}
+	}
+	return changed, nil
+}
+
+// diffLines returns the new-file line numbers of the staged diff of name
+// against rev, or against HEAD when rev is omitted.
+func diffLines(name string, rev ...string) (map[int]bool, error) {
 	// Read the staged diff without context lines.
-	diff, err := git("diff", "--cached", "-U0", "--no-color", "--", name)
+	args := append([]string{"diff", "--cached", "-U0", "--no-color"}, rev...)
+	diff, err := git(append(args, "--", name)...)
 	if err != nil {
 		return nil, err
 	}
