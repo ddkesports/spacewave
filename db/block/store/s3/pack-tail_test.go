@@ -73,9 +73,19 @@ func TestPackStoreMergesTail(t *testing.T) {
 	bucket.objects[tail] = good
 	bucket.mtx.Unlock()
 
+	// A restarted writer that has not read yet merges into the tail the
+	// first store left.
+	restarted := NewPackStore(logrus.NewEntry(logrus.New()), client, "bucket", "p/", opts)
+	t.Cleanup(restarted.Close)
+	again := putBlocks(t, restarted, "again", 1)
+	if got := packs(); len(got) != 3 {
+		t.Fatalf("bucket holds %d packfiles after a restarted write; want 3", len(got))
+	}
+
 	// A fresh store reads every block from the packfiles that remain.
 	fresh := newTestPackStore(t, client)
 	checkBlocks(t, fresh, "block", refs)
 	checkBlocks(t, fresh, "more", more)
 	checkBlocks(t, fresh, "late", late)
+	checkBlocks(t, fresh, "again", again)
 }

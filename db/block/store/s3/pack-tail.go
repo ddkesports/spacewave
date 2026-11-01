@@ -41,6 +41,16 @@ func (s *PackStore) mergeTail(ctx context.Context, batch []*block.PutBatchEntry)
 		return false, nil
 	}
 
+	// List the entries once, so a store that has only written sees the tail
+	// that an earlier process left. Without them the batch is written alone.
+	if err := s.loadEntries(ctx); err != nil {
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		s.le.WithError(err).Warn("write the batch without a tail merge: list the packfiles")
+		return false, nil
+	}
+
 	// Serialize with compaction, reclaim and other merges.
 	release, err := s.compactMtx.Lock(ctx)
 	if err != nil {
