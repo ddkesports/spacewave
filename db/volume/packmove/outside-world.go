@@ -126,7 +126,7 @@ func FindOutsideWorld(ctx context.Context, src kvtx.Store, keys *store_kvkey.KVK
 	}
 	w.seen = map[string]struct{}{w.world: {}}
 	var roots []string
-	err := readStable(ctx, src, func(tx kvtx.Tx) error {
+	err := ReadStable(ctx, src, func(tx kvtx.Tx) error {
 		var err error
 		roots, err = volume_kvtx.OpenRefGraph(kvtx.NewTxStore(tx)).GetOutgoingRefs(ctx, block_gc.NodeGCRoot)
 		return err
@@ -143,7 +143,7 @@ func FindOutsideWorld(ctx context.Context, src kvtx.Store, keys *store_kvkey.KVK
 		w.frontier = w.frontier[:at:at]
 		var targets [][]string
 		var size uint64
-		err := readStable(ctx, src, func(tx kvtx.Tx) error {
+		err := ReadStable(ctx, src, func(tx kvtx.Tx) error {
 			var err error
 			targets, size, err = expandNodes(ctx, tx, keys, chunk)
 			return err

@@ -112,7 +112,7 @@ func (r *sqlBatchReader) missing(ctx context.Context, keys [][]byte) ([]sqlRef, 
 
 	// Keep those the volume lacks.
 	var out []sqlRef
-	err := readStable(ctx, r.src, func(tx kvtx.Tx) error {
+	err := ReadStable(ctx, r.src, func(tx kvtx.Tx) error {
 		out = out[:0]
 		for _, ref := range refs {
 			key, err := ref.ref.MarshalVT()

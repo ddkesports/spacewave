@@ -24,7 +24,7 @@ func requireFormat(ctx context.Context, cfg PackConfig) error {
 // readVersion returns the volume's format version, or 0 when unset.
 func readVersion(ctx context.Context, store kvtx.Store, keys *store_kvkey.KVKey) (uint64, error) {
 	var version uint64
-	err := readStable(ctx, store, func(tx kvtx.Tx) error {
+	err := ReadStable(ctx, store, func(tx kvtx.Tx) error {
 		data, found, err := tx.Get(ctx, keys.GetFormatVersionKey())
 		if err != nil || !found {
 			version = 0

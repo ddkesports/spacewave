@@ -27,7 +27,7 @@ func MeasureRest(ctx context.Context, src kvtx.Store, keys *store_kvkey.KVKey, r
 		}
 		var chunk RestReport
 		var last []byte
-		err := readStable(ctx, src, func(tx kvtx.Tx) error {
+		err := ReadStable(ctx, src, func(tx kvtx.Tx) error {
 			var err error
 			chunk, last, err = countRest(ctx, tx, blocks, after)
 			return err

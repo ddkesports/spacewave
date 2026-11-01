@@ -57,7 +57,7 @@ type batchReader struct {
 func (r *batchReader) next(ctx context.Context) (*packBatch, error) {
 	// Read the batch from a snapshot the writer did not pass.
 	var batch *packBatch
-	err := readStable(ctx, r.src, func(tx kvtx.Tx) error {
+	err := ReadStable(ctx, r.src, func(tx kvtx.Tx) error {
 		var err error
 		batch, err = r.read(ctx, tx)
 		return err

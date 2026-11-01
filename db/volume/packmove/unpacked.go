@@ -52,7 +52,7 @@ func FindUnpacked(ctx context.Context, src kvtx.Store, keys *store_kvkey.KVKey, 
 	for {
 		// Read the next batch of keys from a snapshot the writer did not pass.
 		var batch [][]byte
-		err := readStable(ctx, src, func(tx kvtx.Tx) error {
+		err := ReadStable(ctx, src, func(tx kvtx.Tx) error {
 			var err error
 			batch, err = readBlockKeys(ctx, tx, prefix, after, unpackedBatch)
 			return err

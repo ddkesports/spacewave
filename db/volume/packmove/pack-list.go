@@ -89,7 +89,7 @@ func (r *listBatchReader) next(ctx context.Context) (*packBatch, error) {
 	// Read the batch from a snapshot the writer did not pass.
 	var batch *packBatch
 	var used int
-	err := readStable(ctx, r.src, func(tx kvtx.Tx) error {
+	err := ReadStable(ctx, r.src, func(tx kvtx.Tx) error {
 		var err error
 		batch, used, err = r.read(ctx, tx)
 		return err

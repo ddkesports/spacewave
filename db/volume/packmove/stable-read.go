@@ -7,7 +7,7 @@ import (
 	"github.com/s4wave/spacewave/db/kvtx"
 )
 
-// maxReadAttempts bounds how often readStable retries one read that a writer
+// maxReadAttempts bounds how often ReadStable retries one read that a writer
 // outran.
 const maxReadAttempts = 8
 
@@ -25,18 +25,18 @@ type staleTx interface {
 	Stale() bool
 }
 
-// readStable runs fn on a fresh snapshot of src and returns only when the
+// ReadStable runs fn on a fresh snapshot of src and returns only when the
 // writer did not pass the snapshot meanwhile.
 //
 // A handle open beside another process's writer holds no pin, so the writer may
 // reuse the pages and values of an old snapshot and a read of it can fail a
-// checksum, decode garbage or panic. readStable treats each of those as a torn
+// checksum, decode garbage or panic. ReadStable treats each of those as a torn
 // read: it discards the snapshot, refreshes the store and runs fn again, up to
 // maxReadAttempts times, and then returns the last failure. fn must keep its
 // results in variables it resets on entry, since it can run more than once,
 // and must not use the transaction after it returns. A store that cannot
 // refresh or report staleness, such as an in-memory one, runs fn once.
-func readStable(ctx context.Context, src kvtx.Store, fn func(tx kvtx.Tx) error) error {
+func ReadStable(ctx context.Context, src kvtx.Store, fn func(tx kvtx.Tx) error) error {
 	var last error
 	for range maxReadAttempts {
 		// Follow the writer before taking the snapshot.
