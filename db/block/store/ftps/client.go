@@ -1,5 +1,3 @@
-//go:build !tinygo
-
 // Package block_store_ftps stores the objects of a block_store_s3.PackStore
 // on an FTP server over explicit TLS (AUTH TLS), the protocol of
 // curl --ssl-reqd ftp://.

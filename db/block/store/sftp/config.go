@@ -1,5 +1,3 @@
-//go:build !tinygo
-
 package block_store_sftp
 
 // Config configures a Client.

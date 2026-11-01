@@ -1,5 +1,3 @@
-//go:build !tinygo
-
 package block_store_ftps
 
 import "crypto/tls"

@@ -122,15 +122,21 @@ func (p *placementState) fill(ctx context.Context, primary block.StoreOps, ref *
 		if err != nil {
 			return err
 		}
-		if !tracked[0] {
-			return block_store.CacheFill(ctx, primary, ref, stored)
-		}
 
-		// The read that refilled it keeps it from eviction, as a read
-		// served from the disk would, so the next pass cannot drop it.
-		if err := p.wb.Refill(ctx, ref, stored); err != nil {
+		// Account for every cached value, including a block whose graph was
+		// omitted during migration. An untracked fill also records child refs
+		// without taking ownership; eviction checks the target before dropping
+		// either value, including a fill served by a peer.
+		if tracked[0] {
+			err = p.wb.Refill(ctx, ref, stored)
+		} else {
+			err = p.wb.CacheFill(ctx, ref, stored)
+		}
+		if err != nil {
 			return err
 		}
+
+		// Keep a remote hit hot for the same interval as a local hit.
 		p.reads.add(ref.GetHash())
 		return nil
 	}

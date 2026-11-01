@@ -303,6 +303,25 @@ func (f *fallbackTest) waitHeld(ref *block.BlockRef) {
 	}
 }
 
+// waitResident waits for background fills to enter the resident byte count.
+func (f *fallbackTest) waitResident(want int64) {
+	// Wait on the writeback status, including its eviction accounting.
+	f.t.Helper()
+	ctx, cancel := context.WithTimeout(f.ctx, 10*time.Second)
+	defer cancel()
+	for {
+		status, changed := f.wb.GetStatus()
+		if status.ResidentBytes() == want {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			f.t.Fatalf("resident bytes = %d, want %d: %+v", status.ResidentBytes(), want, status)
+		case <-changed:
+		}
+	}
+}
+
 // read reads the block through the store's read chain.
 func (f *fallbackTest) read(ref *block.BlockRef, want []byte) {
 	f.t.Helper()

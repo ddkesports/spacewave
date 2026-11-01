@@ -1,5 +1,3 @@
-//go:build !tinygo
-
 // Package block_store_sftp stores the objects of a block_store_s3.PackStore on
 // an SFTP server.
 //
@@ -36,6 +34,18 @@ const DefaultConns = 4
 
 // dialTimeout bounds connecting and the SSH handshake.
 const dialTimeout = 30 * time.Second
+
+// maxDials bounds the handshakes in progress at once. OpenSSH's MaxStartups
+// starts refusing unauthenticated connections at 10 by default, so a client
+// with thousands of connections opens them a few at a time.
+const maxDials = 8
+
+// dialAttempts bounds the attempts of one dial, and dialBackoff is the wait
+// after the first failure, doubled after each later one.
+const (
+	dialAttempts = 6
+	dialBackoff  = 250 * time.Millisecond
+)
 
 // keepaliveInterval is the time between keepalive requests on an idle
 // connection, and keepaliveTimeout the wait for the answer. A connection that
@@ -76,6 +86,8 @@ type Client struct {
 	slots []*slot
 	// next counts calls, to pick the slot of the next.
 	next atomic.Uint32
+	// dials holds a token for each handshake in progress.
+	dials chan struct{}
 }
 
 // slot holds one SSH connection, dialed when first needed.
@@ -135,7 +147,8 @@ func NewClient(conf Config) (*Client, error) {
 
 	// Build the client with its empty slots.
 	c := &Client{
-		conf: conf,
+		dials: make(chan struct{}, maxDials),
+		conf:  conf,
 		sshConf: &ssh.ClientConfig{
 			User:              conf.User,
 			Auth:              []ssh.AuthMethod{ssh.Password(conf.Password)},
@@ -399,7 +412,10 @@ func (s *slot) connect(ctx context.Context) (*conn, error) {
 	// Dial a new one.
 	cn, err := s.c.dial(ctx)
 	if err != nil {
-		return nil, err
+		if ctx.Err() != nil {
+			return nil, err
+		}
+		return nil, &ConnectError{Err: err}
 	}
 	cn.slot = s
 	s.conn = cn
@@ -418,8 +434,35 @@ func (s *slot) reset(cn *conn) {
 }
 
 // dial connects, runs the SSH handshake and logs in, then starts the SFTP
-// session and the keepalive.
+// session and the keepalive. A server under load drops handshakes and refuses
+// sessions past its limits, so a failed attempt is retried with backoff.
 func (c *Client) dial(ctx context.Context) (*conn, error) {
+	// Wait for a turn to dial.
+	select {
+	case c.dials <- struct{}{}:
+	case <-ctx.Done():
+		return nil, context.Cause(ctx)
+	}
+	defer func() { <-c.dials }()
+
+	// Try until an attempt succeeds, the attempts run out or ctx ends.
+	wait := dialBackoff
+	for attempt := 1; ; attempt++ {
+		cn, err := c.dialOnce(ctx)
+		if err == nil || attempt == dialAttempts {
+			return cn, err
+		}
+		select {
+		case <-time.After(wait):
+		case <-ctx.Done():
+			return nil, context.Cause(ctx)
+		}
+		wait *= 2
+	}
+}
+
+// dialOnce makes one attempt to connect, log in and start the SFTP session.
+func (c *Client) dialOnce(ctx context.Context) (*conn, error) {
 	// Connect and run the handshake. The error names the server, never the
 	// credentials.
 	d := net.Dialer{Timeout: dialTimeout}

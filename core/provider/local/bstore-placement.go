@@ -2,13 +2,14 @@ package provider_local
 
 import (
 	"context"
+	"math"
+	"sync/atomic"
+	"time"
+
 	block_store_s3 "github.com/s4wave/spacewave/db/block/store/s3"
 	"github.com/s4wave/spacewave/db/kvtx"
 	kvtx_prefixer "github.com/s4wave/spacewave/db/kvtx/prefixer"
 	kvtx_volume "github.com/s4wave/spacewave/db/volume/common/kvtx"
-	"math"
-	"sync/atomic"
-	"time"
 
 	"github.com/aperturerobotics/util/ccontainer"
 	"github.com/aperturerobotics/util/keyed"

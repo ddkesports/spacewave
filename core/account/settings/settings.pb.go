@@ -285,6 +285,13 @@ type FtpsLocation struct {
 	// trusts the first key the server shows and requires the same one on every
 	// later connection of the backend while it runs.
 	HostKey string `protobuf:"bytes,9,opt,name=host_key,json=hostKey,proto3" json:"hostKey,omitempty"`
+	// FtpsPort, when not zero with Sftp set, also reaches the directory over
+	// FTPS on this port, with the same host and netrc logins. Each call goes to
+	// whichever protocol has fewer calls in flight, so the faster one carries
+	// more of them, and calls go over FTPS alone for a few seconds after SFTP
+	// fails to connect. The FTPS sessions follow ConnsPerLogin and the FTPS
+	// default for MaxConns, which counts the SSH connections.
+	FtpsPort uint32 `protobuf:"varint,10,opt,name=ftps_port,json=ftpsPort,proto3" json:"ftpsPort,omitempty"`
 }
 
 func (x *FtpsLocation) Reset() {
@@ -354,6 +361,13 @@ func (x *FtpsLocation) GetHostKey() string {
 		return x.HostKey
 	}
 	return ""
+}
+
+func (x *FtpsLocation) GetFtpsPort() uint32 {
+	if x != nil {
+		return x.FtpsPort
+	}
+	return 0
 }
 
 // SqlLocation locates a MySQL-compatible database that holds blocks. It only
@@ -1420,6 +1434,7 @@ func (m *FtpsLocation) CloneVT() *FtpsLocation {
 	r.ConnsPerLogin = m.ConnsPerLogin
 	r.Sftp = m.Sftp
 	r.HostKey = m.HostKey
+	r.FtpsPort = m.FtpsPort
 	if len(m.unknownFields) > 0 {
 		r.unknownFields = slices.Clone(m.unknownFields)
 	}
@@ -2141,6 +2156,9 @@ func (this *FtpsLocation) EqualVT(that *FtpsLocation) bool {
 		return false
 	}
 	if this.HostKey != that.HostKey {
+		return false
+	}
+	if this.FtpsPort != that.FtpsPort {
 		return false
 	}
 	return string(this.unknownFields) == string(that.unknownFields)
@@ -3468,6 +3486,11 @@ func (x *FtpsLocation) MarshalProtoJSON(s *json.MarshalState) {
 		s.WriteObjectField("hostKey")
 		s.WriteString(x.HostKey)
 	}
+	if x.FtpsPort != 0 || s.HasField("ftpsPort") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("ftpsPort")
+		s.WriteUint32(x.FtpsPort)
+	}
 	s.WriteObjectEnd()
 }
 
@@ -3512,6 +3535,9 @@ func (x *FtpsLocation) UnmarshalProtoJSON(s *json.UnmarshalState) {
 		case "host_key", "hostKey":
 			s.AddField("host_key")
 			x.HostKey = s.ReadString()
+		case "ftps_port", "ftpsPort":
+			s.AddField("ftps_port")
+			x.FtpsPort = s.ReadUint32()
 		}
 	})
 }
@@ -5110,6 +5136,11 @@ func (m *FtpsLocation) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	if m.unknownFields != nil {
 		i = protobuf_go_lite.EncodeRawBytes(dAtA, i, m.unknownFields)
 	}
+	if m.FtpsPort != 0 {
+		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(m.FtpsPort))
+		i--
+		dAtA[i] = 0x50
+	}
 	if len(m.HostKey) > 0 {
 		i = protobuf_go_lite.EncodeString(dAtA, i, m.HostKey)
 		i--
@@ -6619,6 +6650,7 @@ func (m *FtpsLocation) SizeVT() (n int) {
 	n += protobuf_go_lite.SizeVarintNonZero(1, m.ConnsPerLogin)
 	n += protobuf_go_lite.SizeBoolNonZero(1, m.Sftp)
 	n += protobuf_go_lite.SizeStringNonEmpty(1, m.HostKey)
+	n += protobuf_go_lite.SizeVarintNonZero(1, m.FtpsPort)
 	n += len(m.unknownFields)
 	return n
 }
@@ -7389,6 +7421,10 @@ func (x *FtpsLocation) MarshalProtoText() string {
 	if x.HostKey != "" {
 		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "host_key")
 		protobuf_go_lite.TextWriteString(&sb, x.HostKey)
+	}
+	if x.FtpsPort != 0 {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "ftps_port")
+		protobuf_go_lite.TextWriteUint(&sb, x.FtpsPort)
 	}
 	return protobuf_go_lite.TextFinishMessage(&sb)
 }
@@ -8379,6 +8415,15 @@ func (m *FtpsLocation) UnmarshalVT(dAtA []byte) error {
 				return err
 			}
 			m.HostKey = v
+		case 10:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field FtpsPort", wireType)
+			}
+			m.FtpsPort = 0
+			m.FtpsPort, iNdEx, err = protobuf_go_lite.DecodeVarintUint32(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := protobuf_go_lite.Skip(dAtA[iNdEx:])

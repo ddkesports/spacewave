@@ -1,5 +1,3 @@
-//go:build !tinygo
-
 package provider_local
 
 import (
@@ -8,7 +6,6 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
-	"github.com/s4wave/spacewave/db/kvtx/hashmap"
 	"math/big"
 	"net"
 	"os"
@@ -17,9 +14,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/s4wave/spacewave/db/kvtx/hashmap"
+
 	ftpserver "github.com/fclairamb/ftpserverlib"
 	"github.com/pkg/errors"
 	"github.com/s4wave/spacewave/db/block"
+	block_store_writeback "github.com/s4wave/spacewave/db/block/store/writeback"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/afero"
 
@@ -80,9 +80,11 @@ func startFTPSTestServer(t *testing.T) (*ftpsTestServer, uint32, *tls.Config) {
 func (s *ftpsTestServer) GetSettings() (*ftpserver.Settings, error) {
 	return &ftpserver.Settings{Listener: s.listener, TLSRequired: ftpserver.MandatoryEncryption}, nil
 }
+
 func (s *ftpsTestServer) ClientConnected(ftpserver.ClientContext) (string, error) { return "test", nil }
 func (s *ftpsTestServer) ClientDisconnected(ftpserver.ClientContext)              {}
 func (s *ftpsTestServer) GetTLSConfig() (*tls.Config, error)                      { return s.tlsConf, nil }
+
 func (s *ftpsTestServer) AuthUser(_ ftpserver.ClientContext, user, pass string) (ftpserver.ClientDriver, error) {
 	if user != "user" || pass != "pass" {
 		return nil, errors.New("bad login")
@@ -135,7 +137,90 @@ func TestFTPSPlacementAndFallback(t *testing.T) {
 	if !f.packHolds(ref) {
 		t.Fatal("a fresh pack store lacks the uploaded block")
 	}
+
+	// An SFTP location whose server refuses connections lists the same packs
+	// over its FTPS port.
+	refused, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = refused.Close()
+	viaSFTP := location.CloneVT()
+	viaSFTP.Sftp, viaSFTP.Port, viaSFTP.FtpsPort = true, uint32(refused.Addr().(*net.TCPAddr).Port), port //nolint:gosec // a TCP port fits.
+	client, err := buildFTPSClient(logrus.NewEntry(logrus.New()), viaSFTP, tlsConf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	var listed int
+	if err := client.ListObjects(f.ctx, location.GetRoot(), location.GetPrefix(), func(string, int64) error {
+		listed++
+		return nil
+	}); err != nil || listed == 0 {
+		t.Fatalf("list over the FTPS port = %d packs, %v; want the uploaded pack", listed, err)
+	}
+
+	// Count a tracked read after eviction separately from a first cache fill.
+	f.tracked.track(ref)
 	f.read(ref, data)
+	f.waitResident(int64(len(data)))
+
+	// A migrated parent has no local graph entry. Its cache fill must retain
+	// child refs and enter the same resident budget as the evicted block.
+	parentData := []byte("parent only in an ftps pack")
+	parent, _, err := f.packs.PutBlock(f.ctx, parentData, &block.PutOpts{Refs: []*block.BlockRef{ref}, RefsKnown: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.read(parent, parentData)
+	wantResident := int64(len(data) + len(parentData))
+	f.waitResident(wantResident)
+
+	// A first-time fill preserves child refs without inflating Refills.
+	if status := f.status(); status.Refills != 1 {
+		t.Fatalf("refills = %d, want only the tracked block read after eviction", status.Refills)
+	}
+	stored, err := f.local.GetStoredBlock(f.ctx, parent)
+	if err != nil || stored == nil || !stored.RefsKnown || len(stored.Refs) != 1 || !stored.Refs[0].GetHash().CompareHash(ref.GetHash()) {
+		t.Fatalf("cached parent = %+v, %v; want its child ref", stored, err)
+	}
+
+	// A warm read needs neither the FTPS backend nor the SQL fallback.
+	func() {
+		packs := f.packs
+		f.packs = nil
+		defer func() { f.packs = packs }()
+		f.read(parent, parentData)
+	}()
+	if n := f.sql.reads.Load(); n != 0 {
+		t.Fatalf("warm read touched the SQL fallback %d times", n)
+	}
+
+	// Reopen writeback over the same volume: both cache values must remain
+	// accounted for and evictable, without having queued another upload.
+	vol := f.local.(ownedStore).Volume
+	markers, release, err := vol.AccessObjectStore(f.ctx, "test/markers", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	// Reload the counters from the saved eviction queue.
+	reopened, err := block_store_writeback.NewStore(f.ctx, f.local, vol, markers, "test/markers", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.wb, f.p.wb = reopened, reopened
+	if status := f.status(); status.Pending != 0 || status.ResidentBytes() != wantResident {
+		t.Fatalf("reopened status = %+v, want %d resident bytes and no uploads", status, wantResident)
+	}
+	if result := f.evict(); result.Evicted != 2 || f.held(ref) || f.held(parent) {
+		t.Fatalf("second eviction = %+v, want both cached values dropped", result)
+	}
+
+	// The next read fetches the parent again and accounts for its new copy.
+	f.read(parent, parentData)
+	f.waitResident(int64(len(parentData)))
 
 	// The pack sits where the pack tool writes its packs.
 	var packs []string
