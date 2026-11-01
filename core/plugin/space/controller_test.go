@@ -285,13 +285,24 @@ func createReadinessManifest(
 	ctx context.Context,
 	tb *testbed.Testbed,
 ) *bldr_manifest.ManifestRef {
+	t.Helper()
+	return createReadinessManifestRev(t, ctx, tb, 1)
+}
+
+// createReadinessManifestRev writes revision rev of the readiness manifest.
+func createReadinessManifestRev(
+	t *testing.T,
+	ctx context.Context,
+	tb *testbed.Testbed,
+	rev uint64,
+) *bldr_manifest.ManifestRef {
 	// Describe the readiness manifest.
 	t.Helper()
 	meta := bldr_manifest.NewManifestMeta(
 		pluginReadinessPluginID,
 		bldr_manifest.BuildType_DEV,
 		pluginReadinessPlatformID,
-		1,
+		rev,
 	)
 
 	// Stage the manifest until the test ends so the caller can adopt it.

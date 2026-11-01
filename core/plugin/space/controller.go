@@ -162,16 +162,14 @@ func (c *Controller) GetRequestedPluginIDsAndWaitCh() ([]string, <-chan struct{}
 	var waitCh <-chan struct{}
 	c.bcast.HoldLock(func(_ func(), getWaitCh func() <-chan struct{}) {
 		for entry := range c.resolvers {
-			if mid := entry.dir.GetManifestId(); !slices.Contains(ids, mid) {
-				ids = append(ids, mid)
-			}
+			ids = append(ids, entry.dir.GetManifestId())
 		}
 		waitCh = getWaitCh()
 	})
 
-	// Return the sorted IDs.
+	// Return the sorted IDs without repeats.
 	slices.Sort(ids)
-	return ids, waitCh
+	return slices.Compact(ids), waitCh
 }
 
 // FactoryOption configures a Space plugin controller factory.
@@ -428,6 +426,7 @@ func (c *Controller) runWorldWatchLoop(ctx context.Context, engineID string) err
 	// Release the process set and plugin references when the loop ends.
 	le := c.GetLogger()
 	refs := make(map[string]pluginReference)
+	hosted := &hostedManifests{}
 	defer func() {
 		c.processes.ClearContext()
 		for _, ref := range refs {
@@ -445,7 +444,7 @@ func (c *Controller) runWorldWatchLoop(ctx context.Context, engineID string) err
 		_ *block.Cursor,
 		_ uint64,
 	) (bool, error) {
-		c.reconcilePlugins(ctx, ws, refs)
+		c.reconcilePlugins(ctx, ws, refs, hosted)
 		c.processResolvers(ctx, ws)
 		c.reconcileProcesses(ctx, ws)
 		return true, nil
@@ -486,8 +485,9 @@ func (c *Controller) runWorldWatchLoop(ctx context.Context, engineID string) err
 
 // reconcilePlugins reads SpaceSettings from the world and reconciles
 // LoadPlugin directives for the demanded plugin_ids of the Space and the
-// account. A plugin on both lists keeps the Space's installation pin.
-func (c *Controller) reconcilePlugins(ctx context.Context, ws world.WorldState, refs map[string]pluginReference) {
+// account. A plugin on both lists keeps the Space's installation pin. A Space
+// hosted in a plugin loads an unpinned plugin from the manifests hosted selects.
+func (c *Controller) reconcilePlugins(ctx context.Context, ws world.WorldState, refs map[string]pluginReference, hosted *hostedManifests) {
 	// Read SpaceSettings from the World state.
 	le := c.GetLogger()
 	conf := c.GetConfig()
@@ -533,29 +533,45 @@ func (c *Controller) reconcilePlugins(ctx context.Context, ws world.WorldState, 
 		}
 	}
 
+	// Select the World's manifests for unpinned plugins of a hosted Space.
+	installs := settings.GetPluginInstallations()
+	if c.loadTarget != nil && slices.ContainsFunc(ids, func(pid string) bool {
+		return len(installs[pid].GetManifestKeys()) == 0
+	}) {
+		hosted.refresh(ctx, c, ws)
+	}
+
 	// Add a replacement demand before releasing the previous one. The scheduler
 	// retains the admitted worker while preparing this exact installation target.
 	for _, pid := range ids {
-		keys := settings.GetPluginInstallations()[pid].GetManifestKeys()
+		keys := installs[pid].GetManifestKeys()
+		var selected []*manifest.ManifestRef
+		if len(keys) == 0 && c.loadTarget != nil {
+			sel := hosted.byPlugin[pid]
+			keys, selected = sel.keys, sel.refs
+		}
 		previous, existed := refs[pid]
 		if existed && slices.Equal(previous.manifestKeys, keys) {
 			continue
 		}
 		demand := bldr_plugin.NewLoadPluginInstanced(pid, conf.GetSpaceId())
-		if len(keys) != 0 {
-			var selected []*manifest.ManifestRef
+		switch {
+		case len(selected) != 0:
+			demand = bldr_plugin.NewLoadPluginWithManifests(pid, conf.GetSpaceId(), selected...)
+		case len(keys) != 0:
+			var pinned []*manifest.ManifestRef
 			for _, key := range keys {
 				ref, err := space_world.LookupSpacePluginManifest(ctx, ws, pid, key)
 				if err != nil {
 					warnOnErrorUnlessCanceled(ctx, le, err, "failed to resolve installed plugin artifact")
 					continue
 				}
-				selected = append(selected, ref)
+				pinned = append(pinned, ref)
 			}
-			if len(selected) == 0 {
+			if len(pinned) == 0 {
 				continue
 			}
-			demand = bldr_plugin.NewLoadPluginWithManifests(pid, conf.GetSpaceId(), selected...)
+			demand = bldr_plugin.NewLoadPluginWithManifests(pid, conf.GetSpaceId(), pinned...)
 		}
 
 		// Add the LoadPlugin directive to the plugin bus.

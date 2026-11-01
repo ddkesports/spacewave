@@ -9,6 +9,7 @@ import (
 	manifest "github.com/s4wave/spacewave/bldr/manifest"
 	manifest_world "github.com/s4wave/spacewave/bldr/manifest/world"
 	"github.com/s4wave/spacewave/db/block"
+	"github.com/s4wave/spacewave/db/bucket"
 	bucket_lookup "github.com/s4wave/spacewave/db/bucket/lookup"
 	"github.com/s4wave/spacewave/db/world"
 	world_types "github.com/s4wave/spacewave/db/world/types"
@@ -65,8 +66,15 @@ func LookupSpacePluginManifest(ctx context.Context, ws world.WorldState, pluginI
 		return nil, errors.New("installed artifact does not match plugin identity")
 	}
 
+	return NewSpaceManifestRef(ctx, ws, built.GetMeta(), ref)
+}
+
+// NewSpaceManifestRef builds the ManifestRef a plugin host outside the Space
+// loads a Space World manifest by: ref moves to its canonical World location
+// and carries the World's bucket, so the host reads it without the Space bus.
+func NewSpaceManifestRef(ctx context.Context, ws world.WorldState, meta *manifest.ManifestMeta, ref *bucket.ObjectRef) (*manifest.ManifestRef, error) {
 	// Resolve the manifest object reference to its canonical World location.
-	ref, err = manifest_world.CanonicalizeManifestObjectRef(ctx, ws.AccessWorldState, ref)
+	ref, err := manifest_world.CanonicalizeManifestObjectRef(ctx, ws.AccessWorldState, ref)
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +89,7 @@ func LookupSpacePluginManifest(ctx context.Context, ws world.WorldState, pluginI
 			return nil, err
 		}
 	}
-	return manifest.NewManifestRef(built.GetMeta(), ref), nil
+	return manifest.NewManifestRef(meta, ref), nil
 }
 
 // LookupSpaceIndexObjectType returns the durable ObjectType selected by

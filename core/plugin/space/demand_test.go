@@ -10,6 +10,8 @@ import (
 	"github.com/aperturerobotics/controllerbus/controller"
 	"github.com/aperturerobotics/controllerbus/directive"
 	"github.com/aperturerobotics/util/broadcast"
+	bldr_manifest "github.com/s4wave/spacewave/bldr/manifest"
+	bldr_manifest_world "github.com/s4wave/spacewave/bldr/manifest/world"
 	bldr_plugin "github.com/s4wave/spacewave/bldr/plugin"
 	space_world "github.com/s4wave/spacewave/core/space/world"
 	space_world_ops "github.com/s4wave/spacewave/core/space/world/ops"
@@ -114,20 +116,107 @@ func TestPluginDemandLoadsOnlyDemandedPlugins(t *testing.T) {
 	}
 }
 
+// TestHostedSpaceLoadsWorldManifests checks that a Space hosted in a plugin,
+// whose loads go to a host that cannot read its World, names the World's
+// manifest in each unpinned load, replaces the load when a new manifest
+// arrives, and sends a plain load for a plugin with no manifest there.
+func TestHostedSpaceLoadsWorldManifests(t *testing.T) {
+	// Bound the test and build the testbed.
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	tb, err := testbed.Default(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(tb.Release)
+
+	// List the readiness plugin and one with no manifest.
+	if _, _, err := space_world_ops.SetSpaceSettings(
+		ctx,
+		tb.WorldState,
+		"",
+		space_world_ops.DefaultSpaceSettingsObjectKey,
+		&space_world.SpaceSettings{PluginIds: []string{"absent", pluginReadinessPluginID}},
+		true,
+		time.Now(),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	// Store the readiness manifest in a manifest store.
+	const storeKey = "test/plugin-manifests"
+	if _, err := bldr_manifest_world.CreateManifestStore(ctx, tb.WorldState, storeKey); err != nil {
+		t.Fatal(err)
+	}
+	storeManifest := func(objKey string, rev uint64) string {
+		t.Helper()
+		ref := createReadinessManifestRev(t, ctx, tb, rev)
+		if err := bldr_manifest_world.ExStoreManifestOp(
+			ctx, tb.WorldState, tb.Volume.GetPeerID(), objKey, []string{storeKey}, ref,
+		); err != nil {
+			t.Fatal(err)
+		}
+		return bldr_manifest.NewManifestArtifactKey(ref.GetManifestRef())
+	}
+	first := storeManifest("test/manifests/first", 1)
+
+	// Record the loads the hosted Space sends to its host.
+	loads := newLoadRecorder()
+	releaseLoads, err := tb.Bus.AddController(ctx, loads, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseLoads()
+
+	// Start the Space hosted on the testbed bus.
+	tb.StaticResolver.AddFactory(NewFactory(tb.Bus, WithLoadTarget(tb.Bus)))
+	_, _, spaceRef, err := StartControllerWithConfig(ctx, tb.Bus, &Config{
+		SpaceId:       "space-test",
+		VolumeId:      tb.EngineVolumeID,
+		ObjectStoreId: tb.EngineObjectStoreID,
+		EngineId:      tb.EngineID,
+		SessionPeerId: tb.Volume.GetPeerID().String(),
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer spaceRef.Release()
+
+	// Each plugin loads: the readiness plugin from the World's manifest.
+	loads.wait(ctx, t, []string{"absent", pluginReadinessPluginID})
+	loads.waitManifests(ctx, t, pluginReadinessPluginID, []string{first})
+	loads.waitManifests(ctx, t, "absent", nil)
+
+	// A newer revision replaces the load.
+	second := storeManifest("test/manifests/second", 2)
+	loads.waitManifests(ctx, t, pluginReadinessPluginID, []string{second})
+	loads.wait(ctx, t, []string{"absent", pluginReadinessPluginID})
+	if starts := loads.getStarts("absent"); starts != 1 {
+		t.Fatalf("absent loads started = %d, want 1", starts)
+	}
+}
+
 // loadRecorder resolves every LoadPlugin directive and records which plugins
 // have a live load.
 type loadRecorder struct {
-	// bcast guards live and starts.
+	// bcast guards live, starts and manifests.
 	bcast broadcast.Broadcast
 	// live counts the live loads by plugin ID.
 	live map[string]int
 	// starts counts the loads started by plugin ID.
 	starts map[string]int
+	// manifests is the artifact keys the last started load of each plugin ID
+	// names.
+	manifests map[string][]string
 }
 
 // newLoadRecorder constructs a loadRecorder.
 func newLoadRecorder() *loadRecorder {
-	return &loadRecorder{live: make(map[string]int), starts: make(map[string]int)}
+	return &loadRecorder{
+		live:      make(map[string]int),
+		starts:    make(map[string]int),
+		manifests: make(map[string][]string),
+	}
 }
 
 // wait waits until exactly want have a live load.
@@ -168,6 +257,30 @@ func (r *loadRecorder) getStarts(pluginID string) int {
 	return n
 }
 
+// waitManifests waits until the last load of pluginID names exactly want.
+func (r *loadRecorder) waitManifests(ctx context.Context, t *testing.T, pluginID string, want []string) {
+	t.Helper()
+	for {
+		// Snapshot the last load's manifests.
+		var got []string
+		var ch <-chan struct{}
+		r.bcast.HoldLock(func(_ func(), getWaitCh func() <-chan struct{}) {
+			got = r.manifests[pluginID]
+			ch = getWaitCh()
+		})
+		if slices.Equal(got, want) {
+			return
+		}
+
+		// Wait for the next change.
+		select {
+		case <-ctx.Done():
+			t.Fatalf("%s load manifests = %v, want %v", pluginID, got, want)
+		case <-ch:
+		}
+	}
+}
+
 // GetControllerInfo returns information about the controller.
 func (r *loadRecorder) GetControllerInfo() *controller.Info {
 	return controller.NewInfo(
@@ -198,11 +311,16 @@ func (r *loadRecorder) HandleDirective(
 		return nil, nil
 	}
 	pluginID := load.LoadPluginID()
+	var keys []string
+	for _, ref := range load.LoadPluginManifests() {
+		keys = append(keys, bldr_manifest.NewManifestArtifactKey(ref.GetManifestRef()))
+	}
 	return directive.R(directive.NewFuncResolver(func(ctx context.Context, _ directive.ResolverHandler) error {
 		// Mark the load live until the directive is released.
 		r.bcast.HoldLock(func(broadcast func(), _ func() <-chan struct{}) {
 			r.live[pluginID]++
 			r.starts[pluginID]++
+			r.manifests[pluginID] = keys
 			broadcast()
 		})
 		<-ctx.Done()
