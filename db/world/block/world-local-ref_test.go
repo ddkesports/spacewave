@@ -1,9 +1,10 @@
 package world_block_test
 
 import (
-	"context"
 	"testing"
 
+	"github.com/s4wave/spacewave/db/block"
+	"github.com/s4wave/spacewave/db/bucket"
 	"github.com/s4wave/spacewave/db/testbed"
 	"github.com/s4wave/spacewave/db/world"
 	world_block "github.com/s4wave/spacewave/db/world/block"
@@ -15,7 +16,7 @@ import (
 // walks and garbage collection reach the object's content.
 func TestBuildWorldStateFromCursorLocalObjectRef(t *testing.T) {
 	// Start the storage testbed.
-	ctx := context.Background()
+	ctx := t.Context()
 	le := logrus.NewEntry(logrus.New())
 	tb, err := testbed.NewTestbed(ctx, le)
 	if err != nil {
@@ -79,5 +80,31 @@ func TestBuildWorldStateFromCursorLocalObjectRef(t *testing.T) {
 	}
 	if ref.GetBucketId() != bucketID {
 		t.Fatalf("object ref bucket = %q, want %q", ref.GetBucketId(), bucketID)
+	}
+
+	// Empty roots use the same bucket normalization with or without a root pointer.
+	for _, test := range []struct {
+		key string
+		ref *bucket.ObjectRef
+	}{
+		{key: "empty-nil", ref: &bucket.ObjectRef{BucketId: bucketID}},
+		{key: "empty-pointer", ref: &bucket.ObjectRef{BucketId: bucketID, RootRef: &block.BlockRef{}}},
+	} {
+		empty, err := ws.CreateObject(ctx, test.key, test.ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		root, err := empty.(*world_block.ObjectState).GetRoot(ctx)
+		ref, _, refErr := empty.GetRootRef(ctx)
+		world.ReleaseObjectState(empty)
+		if err != nil || refErr != nil {
+			t.Fatalf("%s: root=%v ref=%v", test.key, err, refErr)
+		}
+		if root.GetRootRef().GetBucketId() != "" || ref.GetBucketId() != bucketID {
+			t.Fatalf("%s: stored=%v public=%v", test.key, root.GetRootRef(), ref)
+		}
+		if test.ref.GetBucketId() != bucketID {
+			t.Fatalf("%s: normalization mutated its input", test.key)
+		}
 	}
 }
