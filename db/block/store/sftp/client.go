@@ -37,6 +37,11 @@ const DefaultConns = 4
 // dialTimeout bounds connecting and the SSH handshake.
 const dialTimeout = 30 * time.Second
 
+// maxDials bounds the handshakes in progress at once. OpenSSH's MaxStartups
+// starts refusing unauthenticated connections at 10 by default, so a client
+// with thousands of connections opens them a few at a time.
+const maxDials = 8
+
 // keepaliveInterval is the time between keepalive requests on an idle
 // connection, and keepaliveTimeout the wait for the answer. A connection that
 // does not answer is closed, which fails the requests stuck on it.
@@ -76,6 +81,8 @@ type Client struct {
 	slots []*slot
 	// next counts calls, to pick the slot of the next.
 	next atomic.Uint32
+	// dials holds a token for each handshake in progress.
+	dials chan struct{}
 }
 
 // slot holds one SSH connection, dialed when first needed.
@@ -135,7 +142,8 @@ func NewClient(conf Config) (*Client, error) {
 
 	// Build the client with its empty slots.
 	c := &Client{
-		conf: conf,
+		dials: make(chan struct{}, maxDials),
+		conf:  conf,
 		sshConf: &ssh.ClientConfig{
 			User:              conf.User,
 			Auth:              []ssh.AuthMethod{ssh.Password(conf.Password)},
@@ -420,6 +428,14 @@ func (s *slot) reset(cn *conn) {
 // dial connects, runs the SSH handshake and logs in, then starts the SFTP
 // session and the keepalive.
 func (c *Client) dial(ctx context.Context) (*conn, error) {
+	// Wait for a turn to dial.
+	select {
+	case c.dials <- struct{}{}:
+	case <-ctx.Done():
+		return nil, context.Cause(ctx)
+	}
+	defer func() { <-c.dials }()
+
 	// Connect and run the handshake. The error names the server, never the
 	// credentials.
 	d := net.Dialer{Timeout: dialTimeout}
