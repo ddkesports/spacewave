@@ -110,6 +110,12 @@ type packIndex struct {
 	// version counts the changes to rows, so Indexed answers stay valid
 	// while it holds. Changed with mtx held.
 	version atomic.Uint64
+
+	// tableLoaded is closed once load has registered the pack table, before
+	// it reads the entries, or once load failed or found the cache empty.
+	// From then on Locate answers for every indexed pack while the entries
+	// are still loading.
+	tableLoaded chan struct{}
 }
 
 func newPackIndex(store kvtx.Store) *packIndex {
@@ -118,6 +124,8 @@ func newPackIndex(store kvtx.Store) *packIndex {
 		rows:    make(map[string]packRow),
 		pending: make(map[string]*packfile.PackfileEntry),
 		work:    make(chan struct{}, 1),
+
+		tableLoaded: make(chan struct{}),
 	}
 }
 
@@ -127,13 +135,25 @@ func newPackIndex(store kvtx.Store) *packIndex {
 // pack while every lookup waits behind it.
 const loadReaders = 16
 
-// load reads the pack table and the cached entries.
+// load reads the pack table and the cached entries. It registers the table
+// before it reads the entries, so a lookup can place a key in its pack and
+// read that pack's entry alone while the rest load. Call it once.
 func (x *packIndex) load(ctx context.Context) ([]*packfile.PackfileEntry, error) {
-	// Read the pack table, which names every pack that may have a cached entry.
+	tableLoaded := sync.OnceFunc(func() { close(x.tableLoaded) })
+	defer tableLoaded()
+
+	// Read the pack table, which names every pack that may have a cached
+	// entry, and register it.
 	rows, ids, err := x.loadTable(ctx)
 	if err != nil {
 		return nil, err
 	}
+	x.mtx.Lock()
+	for _, id := range ids {
+		x.registerRowLocked(id, rows[id])
+	}
+	x.mtx.Unlock()
+	tableLoaded()
 
 	// Read the entries in parallel, each reader in its own read transaction.
 	// A pack removed since the table read has no entry and is skipped.
@@ -166,10 +186,12 @@ func (x *packIndex) load(ctx context.Context) ([]*packfile.PackfileEntry, error)
 		return nil, err
 	}
 
-	// Register the entries in key order.
+	// Register the entries in key order, and forget the table rows of the
+	// packs with no entry, which the table named before they were removed.
 	entries := make([]*packfile.PackfileEntry, 0, len(read))
-	for _, entry := range read {
+	for i, entry := range read {
 		if entry == nil {
+			x.forgetRow(ids[i], rows[ids[i]])
 			continue
 		}
 		entries = append(entries, entry)
@@ -212,15 +234,66 @@ func (x *packIndex) loadTable(ctx context.Context) (map[string]packRow, []string
 func (x *packIndex) register(id string, row packRow, entry *packfile.PackfileEntry) {
 	x.mtx.Lock()
 	defer x.mtx.Unlock()
+	x.registerRowLocked(id, row)
+	if !row.indexed {
+		x.pending[id] = entry
+	}
+}
+
+// registerRowLocked adds a pack's row to the table. Call with mtx held.
+func (x *packIndex) registerRowLocked(id string, row packRow) {
 	x.rows[id] = row
 	x.version.Add(1)
 	for int(row.num) >= len(x.ids) {
 		x.ids = append(x.ids, "")
 	}
 	x.ids[row.num] = id
-	if !row.indexed {
-		x.pending[id] = entry
+}
+
+// forgetRow drops a pack's row from the in-memory table, keeping its number
+// taken.
+func (x *packIndex) forgetRow(id string, row packRow) {
+	x.mtx.Lock()
+	defer x.mtx.Unlock()
+	if x.rows[id] != row {
+		return
 	}
+	delete(x.rows, id)
+	x.version.Add(1)
+	if int(row.num) < len(x.ids) && x.ids[row.num] == id {
+		x.ids[row.num] = ""
+	}
+}
+
+// waitTable waits until load has registered the pack table, and reports
+// whether the table holds any pack. The caller makes sure a load runs.
+func (x *packIndex) waitTable(ctx context.Context) (bool, error) {
+	select {
+	case <-x.tableLoaded:
+	case <-ctx.Done():
+		return false, context.Cause(ctx)
+	}
+	x.mtx.RLock()
+	defer x.mtx.RUnlock()
+	return len(x.ids) != 0, nil
+}
+
+// readEntry reads the cached entry of pack id, or nil when it has none.
+func (x *packIndex) readEntry(ctx context.Context, id string) (*packfile.PackfileEntry, error) {
+	tx, err := x.store.NewTransaction(ctx, false)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Discard()
+	value, found, err := tx.Get(ctx, []byte(indexEntryPrefix+id))
+	if err != nil || !found {
+		return nil, err
+	}
+	entry := &packfile.PackfileEntry{}
+	if entry.UnmarshalVT(value) != nil || entry.GetId() != id {
+		return nil, nil
+	}
+	return entry, nil
 }
 
 // nextRow numbers a new pack. Call with mtx held.

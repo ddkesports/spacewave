@@ -436,7 +436,7 @@ func (s *PackStore) GetStoredBlock(ctx context.Context, ref *block.BlockRef) (*b
 		return nil, block.ErrEmptyBlockRef
 	}
 	var stored *block.StoredBlock
-	err := s.lookup(ctx, func() (bool, error) {
+	err := s.lookup(ctx, ref, func() (bool, error) {
 		var err error
 		stored, err = s.packs.GetStoredBlock(ctx, ref)
 		return stored != nil, err
@@ -447,7 +447,7 @@ func (s *PackStore) GetStoredBlock(ctx context.Context, ref *block.BlockRef) (*b
 // GetBlockExists checks the packfiles for the block.
 func (s *PackStore) GetBlockExists(ctx context.Context, ref *block.BlockRef) (bool, error) {
 	var exists bool
-	err := s.lookup(ctx, func() (bool, error) {
+	err := s.lookup(ctx, ref, func() (bool, error) {
 		var err error
 		exists, err = s.packs.GetBlockExists(ctx, ref)
 		return exists, err
@@ -458,7 +458,7 @@ func (s *PackStore) GetBlockExists(ctx context.Context, ref *block.BlockRef) (bo
 // GetBlockExistsBatch checks the packfiles for each block.
 func (s *PackStore) GetBlockExistsBatch(ctx context.Context, refs []*block.BlockRef) ([]bool, error) {
 	var exists []bool
-	err := s.lookup(ctx, func() (bool, error) {
+	err := s.lookup(ctx, nil, func() (bool, error) {
 		var err error
 		exists, err = s.packs.GetBlockExistsBatch(ctx, refs)
 		return err == nil && !slices.Contains(exists, false), err
@@ -469,7 +469,7 @@ func (s *PackStore) GetBlockExistsBatch(ctx context.Context, refs []*block.Block
 // StatBlock returns the block's metadata, or nil if the block is not found.
 func (s *PackStore) StatBlock(ctx context.Context, ref *block.BlockRef) (*block.BlockStat, error) {
 	var stat *block.BlockStat
-	err := s.lookup(ctx, func() (bool, error) {
+	err := s.lookup(ctx, ref, func() (bool, error) {
 		var err error
 		stat, err = s.packs.StatBlock(ctx, ref)
 		return stat != nil, err
@@ -494,9 +494,23 @@ func (s *PackStore) Sync(context.Context) (bool, error) {
 // packfile, and runs find again. It repeats while each listing drops a
 // packfile, so a reader crosses any number of tail merges that replace its
 // packfile while it lists, and stops when a listing drops none.
-func (s *PackStore) lookup(ctx context.Context, find func() (bool, error)) error {
-	// Load the packfile entries before the first lookup and keep them fresh.
-	if err := s.Preload(ctx); err != nil {
+//
+// While the cached entries load after a start, a lookup of ref first tries the
+// one pack the index places it in (lookupEarly), so the first commit, which
+// holds the writer, does not wait for every entry to load. A nil ref waits.
+func (s *PackStore) lookup(ctx context.Context, ref *block.BlockRef, find func() (bool, error)) error {
+	// Load the packfile entries before the first lookup and keep them fresh,
+	// trying the early lookup meanwhile.
+	if ref != nil && !s.loaded.Load() {
+		loaded := make(chan error, 1)
+		go func() { loaded <- s.Preload(ctx) }()
+		if found, err := s.lookupEarly(ctx, ref, find); found || err != nil {
+			return err
+		}
+		if err := <-loaded; err != nil {
+			return err
+		}
+	} else if err := s.Preload(ctx); err != nil {
 		return err
 	}
 
@@ -515,6 +529,44 @@ func (s *PackStore) lookup(ctx context.Context, find func() (bool, error)) error
 			return err
 		}
 	}
+}
+
+// lookupEarly runs find once the index places ref in a pack, after publishing
+// that pack's cached entry, while the other entries still load. It reports
+// false when the index holds no table, places ref nowhere, or find
+// misses: only a full load makes a miss final, so the caller waits for it.
+func (s *PackStore) lookupEarly(ctx context.Context, ref *block.BlockRef, find func() (bool, error)) (bool, error) {
+	h := ref.GetHash()
+	if s.index == nil || h == nil {
+		return false, nil
+	}
+	if ok, err := s.index.waitTable(ctx); err != nil || !ok {
+		return false, err
+	}
+	id, ok, err := s.index.Locate(ctx, packfile.BlockKey(h))
+	if err != nil || !ok {
+		return false, err
+	}
+
+	// Publish the pack's entry unless the load or an earlier lookup did.
+	var known bool
+	s.bcast.HoldLock(func(func(), func() <-chan struct{}) {
+		_, known = s.entries[id]
+	})
+	if !known {
+		entry, err := s.index.readEntry(ctx, id)
+		if err != nil || entry == nil {
+			return false, err
+		}
+		s.updateEntries([]*packfile.PackfileEntry{entry}, nil)
+	}
+
+	// A miss or a deleted pack falls back to the full load.
+	found, err := find()
+	if err != nil && errors.Is(err, ErrNotFound) {
+		return false, nil
+	}
+	return found, err
 }
 
 // Preload reads the cached packfile entries, or lists them when the cache is
