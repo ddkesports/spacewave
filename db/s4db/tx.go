@@ -340,6 +340,16 @@ func (t *Tx) Discard() {
 	}
 }
 
+// Stale reports whether another process has written a checkpoint newer than
+// the one this snapshot reads. A handle with no pin cannot stop the writer
+// reusing the pages of a snapshot two checkpoints old, so a read-only reader
+// that finds its snapshot stale discards what it read from it, refreshes and
+// reads again. A failed read of the superblock is reported as stale.
+func (t *Tx) Stale() bool {
+	sb, err := t.db.readSuper()
+	return err != nil || sb.gen > t.st.gen
+}
+
 // _ is a type assertion
 var (
 	_ kvtx.OrderedCommitTx = (*Tx)(nil)

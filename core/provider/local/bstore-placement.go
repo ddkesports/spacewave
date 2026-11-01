@@ -2,6 +2,10 @@ package provider_local
 
 import (
 	"context"
+	block_store_s3 "github.com/s4wave/spacewave/db/block/store/s3"
+	"github.com/s4wave/spacewave/db/kvtx"
+	kvtx_prefixer "github.com/s4wave/spacewave/db/kvtx/prefixer"
+	kvtx_volume "github.com/s4wave/spacewave/db/volume/common/kvtx"
 	"math"
 	"sync/atomic"
 	"time"
@@ -69,28 +73,39 @@ func (w *settingsWatch) next(ctx context.Context) (*account_settings.AccountSett
 }
 
 // nextBackend waits for the next settings change and returns the store's
-// placement and the storage backend holding it, or nil for both when the store
-// is on the account's own storage.
+// placement, the storage backend holding it and the SQL backend its reads fall
+// back to, or nil for all three when the store is on the account's own
+// storage. The fallback is nil when the placement names none.
 func (t *bstoreTracker) nextBackend(
 	ctx context.Context,
 	watch *settingsWatch,
-) (*account_settings.BlockStorePlacement, *account_settings.StorageBackend, error) {
+) (*account_settings.BlockStorePlacement, *account_settings.StorageBackend, *account_settings.StorageBackend, error) {
 	// Read the next settings change and resolve this store's backend.
 	settings, err := watch.next(ctx)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	// Resolve the placement and its storage backend for this store.
 	placement := settings.FindBlockStorePlacement(t.id)
 	if placement == nil {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	backend := settings.FindStorageBackend(placement.GetStorageBackendId())
 	if backend == nil {
-		return nil, nil, errors.Wrap(account_settings.ErrStorageBackendNotFound, placement.GetStorageBackendId())
+		return nil, nil, nil, errors.Wrap(account_settings.ErrStorageBackendNotFound, placement.GetStorageBackendId())
 	}
-	return placement, backend, nil
+
+	// Resolve the read fallback, which the settings validate as an SQL backend.
+	fallbackID := placement.GetFallbackStorageBackendId()
+	if fallbackID == "" {
+		return placement, backend, nil, nil
+	}
+	fallback := settings.FindStorageBackend(fallbackID)
+	if fallback == nil {
+		return nil, nil, nil, errors.Wrap(account_settings.ErrStorageBackendNotFound, fallbackID)
+	}
+	return placement, backend, fallback, nil
 }
 
 // uploadPolicy returns when a placement's cache settings upload its writes and
@@ -228,16 +243,37 @@ func (t *bstoreTracker) openBackendStore(
 	ctx context.Context,
 	backend *account_settings.StorageBackend,
 ) (backendStore, error) {
+	// An FTPS server logs in from its netrc file and has no credential Secret.
+	le := t.a.le.WithField("bstore-id", t.id)
+	if location := backend.GetFtps(); location != nil {
+		return buildFTPSBlockStore(le, location, nil, t.packIndexStore())
+	}
+
 	// Open the backend's bucket with its credential Secret.
 	creds, err := t.a.ReadStorageCredentials(ctx, backend)
 	if err != nil {
 		return nil, err
 	}
-	le := t.a.le.WithField("bstore-id", t.id)
 	if location := backend.GetSql(); location != nil {
 		return buildSQLBlockStore(ctx, le, location, t.id, creds)
 	}
 	return buildS3BlockStore(le, backend.GetS3(), t.id, creds)
+}
+
+// openFallbackStore opens the SQL backend the store reads after its own
+// backend misses, with the backend's credential Secret. The store is read only
+// to its callers and connects on its first read.
+func (t *bstoreTracker) openFallbackStore(
+	ctx context.Context,
+	backend *account_settings.StorageBackend,
+) (backendStore, error) {
+	// Open the fallback's table with its credential Secret.
+	creds, err := t.a.ReadStorageCredentials(ctx, backend)
+	if err != nil {
+		return nil, err
+	}
+	le := t.a.le.WithField("bstore-id", t.id).WithField("fallback", backend.GetId())
+	return buildSQLFallbackStore(le, backend.GetSql(), t.id, creds)
 }
 
 // swapRemote replaces the open backend store and closes the previous one.
@@ -272,4 +308,14 @@ var sqlMaxConns atomic.Int32
 // after the call; zero or less uses the store's default.
 func SetSQLMaxConns(n int) {
 	sqlMaxConns.Store(int32(max(n, 0))) // #nosec G115 -- pool sizes fit in int32.
+}
+
+// packIndexStore returns the account volume's key space for the pack index of
+// the block store's FTPS packs, or nil when the volume has no key/value store.
+func (t *bstoreTracker) packIndexStore() kvtx.Store {
+	kvVol, ok := t.a.vol.(kvtx_volume.KvtxVolume)
+	if !ok {
+		return nil
+	}
+	return kvtx_prefixer.NewPrefixer(kvVol.GetKvtxStore(), block_store_s3.PackIndexPrefix(t.id))
 }

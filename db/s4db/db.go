@@ -121,12 +121,15 @@ func open(s storage, opts Options) (*DB, error) {
 		return nil, err
 	}
 
-	// Follow other processes' commits and warm the cache.
-	db.tailer.SetRoutine(db.tailLoop)
-	db.tailer.SetContext(context.Background(), false)
-	db.warmer.SetRoutine(db.warm)
-	db.warmer.SetContext(context.Background(), false)
-	if opts.RelocateBudget > 0 {
+	// Follow other processes' commits and warm the cache. A read-only handle
+	// follows only when its reader calls Refresh.
+	if !opts.ReadOnly {
+		db.tailer.SetRoutine(db.tailLoop)
+		db.tailer.SetContext(context.Background(), false)
+		db.warmer.SetRoutine(db.warm)
+		db.warmer.SetContext(context.Background(), false)
+	}
+	if opts.RelocateBudget > 0 && !opts.ReadOnly {
 		db.compactor.SetRoutine((&compactor{db: db}).run)
 		db.compactor.SetContext(context.Background(), false)
 	}
@@ -136,16 +139,27 @@ func open(s storage, opts Options) (*DB, error) {
 // load creates the file if empty, takes a reader slot, and recovers state.
 func (db *DB) load() error {
 	// Create the file under the writer lock so concurrent openers agree. A
-	// single-process handle keeps the lock until the file closes.
-	if _, err := db.s.lock(lockWriter, true); err != nil {
-		return err
-	}
-	err := db.w.create()
-	if uerr := db.unlockFile(); err == nil {
-		err = uerr
-	}
-	if err != nil {
-		return err
+	// single-process handle keeps the lock until the file closes. A read-only
+	// handle takes no lock and leaves an empty file alone.
+	if db.opts.ReadOnly {
+		size, err := db.s.size()
+		if err != nil {
+			return err
+		}
+		if size == 0 {
+			return ErrNotDatabase
+		}
+	} else {
+		if _, err := db.s.lock(lockWriter, true); err != nil {
+			return err
+		}
+		err := db.w.create()
+		if uerr := db.unlockFile(); err == nil {
+			err = uerr
+		}
+		if err != nil {
+			return err
+		}
 	}
 
 	// Read the header.
@@ -153,22 +167,30 @@ func (db *DB) load() error {
 	if _, err := db.s.ReadAt(page, headerPage*pageSize); err != nil {
 		return err
 	}
+	var err error
 	if db.hdr, err = decodeHeader(page); err != nil {
 		return err
 	}
 
 	// Take a free slot, pin everything until the state is loaded, and
-	// watch the file.
-	if db.slot, err = takeSlot(db.s); err != nil {
-		return err
-	}
-	if err := db.writePin(pin{}); err != nil {
-		return err
-	}
-	if db.opts.SingleProcess {
+	// watch the file. A read-only handle has no slot, so it writes no pin
+	// and has nothing to watch.
+	switch {
+	case db.opts.ReadOnly:
+		db.slot = -1
 		db.watch = newStopWatcher()
-	} else if db.watch, err = db.s.watch(db.slot); err != nil {
-		return err
+	default:
+		if db.slot, err = takeSlot(db.s); err != nil {
+			return err
+		}
+		if err := db.writePin(pin{}); err != nil {
+			return err
+		}
+		if db.opts.SingleProcess {
+			db.watch = newStopWatcher()
+		} else if db.watch, err = db.s.watch(db.slot); err != nil {
+			return err
+		}
 	}
 
 	// Load the checkpoint and the log after it, verifying values the writer
@@ -181,7 +203,7 @@ func (db *DB) load() error {
 	if err != nil {
 		return err
 	}
-	if torn {
+	if torn && !db.opts.ReadOnly {
 		if st, err = db.cutTorn(st); err != nil {
 			return err
 		}
@@ -193,6 +215,9 @@ func (db *DB) load() error {
 	db.ownSeq.Store(st.seq)
 	db.ownGen.Store(st.gen)
 	db.flush.written(st.ckpt)
+	if db.opts.ReadOnly {
+		return nil
+	}
 	return db.writePin(db.localPin())
 }
 
@@ -499,6 +524,11 @@ func (db *DB) localPin() pin {
 // the published state, so a pin computed under pinMtx never rises above a
 // snapshot that starts later.
 func (db *DB) updatePin(ctx context.Context) error {
+	// A read-only handle has no slot to write.
+	if db.opts.ReadOnly {
+		return nil
+	}
+
 	// Exclude other pin writers.
 	release, err := db.pinMtx.Lock(ctx)
 	if err != nil {
@@ -578,6 +608,9 @@ func (db *DB) NewTransaction(ctx context.Context, write bool) (kvtx.Tx, error) {
 	if !write {
 		st, stripe := db.acquire()
 		return &Tx{db: db, st: st, stripe: stripe}, nil
+	}
+	if db.opts.ReadOnly {
+		return nil, ErrReadOnly
 	}
 
 	// Count the writer so Close waits for it, then take the writer lock and
@@ -663,9 +696,24 @@ func (db *DB) WaitSeq(ctx context.Context, seq uint64) error {
 	})
 }
 
+// tryWriterLock takes the writer lock without waiting. A read-only handle
+// never takes it.
+func (db *DB) tryWriterLock() (bool, error) {
+	if db.opts.ReadOnly {
+		return false, nil
+	}
+	return db.w.tryLock()
+}
+
 // Compact moves every value out of sparse pages and the file's tail,
 // checkpoints, and releases freed space.
 func (db *DB) Compact(ctx context.Context) error {
+	// A read-only handle writes nothing.
+	if db.opts.ReadOnly {
+		return ErrReadOnly
+	}
+
+	// Wait for the writers to go idle.
 	if err := db.lockIdle(ctx); err != nil {
 		return err
 	}
@@ -731,10 +779,11 @@ func (db *DB) Close() error {
 	db.w.punches.Wait()
 
 	// Flush and release freed space when no other process is writing. The
-	// flush raises the durability marks that bound the release.
+	// flush raises the durability marks that bound the release. A read-only
+	// handle writes nothing.
 	ctx := context.Background()
 	var err error
-	if ok, lerr := db.w.tryLock(); lerr == nil && ok {
+	if ok, lerr := db.tryWriterLock(); lerr == nil && ok {
 		if err = db.w.catchUp(ctx); err == nil {
 			err = db.Sync(ctx)
 		}
@@ -751,11 +800,13 @@ func (db *DB) Close() error {
 	if wait, _ := db.tailer.SetRoutine(nil); wait != nil {
 		<-wait
 	}
-	if _, werr := db.s.WriteAt(make([]byte, slotSize), int64(slotPage*pageSize+db.slot*slotSize)); err == nil {
-		err = werr
-	}
-	if serr := db.s.flushDurable(); err == nil {
-		err = serr
+	if !db.opts.ReadOnly {
+		if _, werr := db.s.WriteAt(make([]byte, slotSize), int64(slotPage*pageSize+db.slot*slotSize)); err == nil {
+			err = werr
+		}
+		if serr := db.s.flushDurable(); err == nil {
+			err = serr
+		}
 	}
 
 	// Mark the handle closed and wake waiters before the file goes away, so a

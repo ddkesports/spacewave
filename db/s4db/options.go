@@ -38,6 +38,17 @@ type Options struct {
 	// Families are key prefixes whose values Flows counts apart. A key
 	// counts under the first family it starts with.
 	Families [][]byte
+	// ReadOnly opens an existing file to read it beside a process that may
+	// be writing it, and never writes the file. The handle takes no writer
+	// lock and no reader slot, writes no pin, creates no file, recovers no
+	// log, cuts no torn tail, compacts nothing and refuses write
+	// transactions. It follows the writer only when Refresh is called.
+	//
+	// With no pin the writer may reuse pages and values a snapshot reads, so
+	// a read can fail its checksum or return an older state than Refresh
+	// published. Tx.Stale reports a snapshot the writer may have passed;
+	// discard a long read when it does, and retry on ErrCorrupt.
+	ReadOnly bool
 }
 
 // withDefaults returns o with zero fields set to their defaults.

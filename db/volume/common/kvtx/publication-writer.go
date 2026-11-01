@@ -492,6 +492,9 @@ func (w *publicationWriter) applyGroup(first *publicationRequest) (group []*publ
 		committed = err == nil
 	}
 	w.volume.settleDeferred(edits, committed)
+	if committed {
+		p.blocks.marks.committed()
+	}
 
 	// Preserve preflight rejections while assigning physical failure to
 	// accepted work. A request whose predecessor shared the group failed
