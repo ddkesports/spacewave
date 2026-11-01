@@ -129,7 +129,7 @@ const loadReaders = 16
 
 // load reads the pack table and the cached entries.
 func (x *packIndex) load(ctx context.Context) ([]*packfile.PackfileEntry, error) {
-	// Read the pack table and the ids of the cached entries from the index.
+	// Read the pack table, which names every pack that may have a cached entry.
 	rows, ids, err := x.loadTable(ctx)
 	if err != nil {
 		return nil, err
@@ -178,8 +178,10 @@ func (x *packIndex) load(ctx context.Context) ([]*packfile.PackfileEntry, error)
 	return entries, nil
 }
 
-// loadTable reads the pack table and the ids of the packs in it that have a
-// cached entry, in key order. It reads only the index, no entry values.
+// loadTable reads the pack table and the ids of its packs in key order. It
+// reads only the table, whose rows are a few bytes each, and no entry: listing
+// the entries' keys would read every entry's pages, bloom filter included,
+// once here and again in load, and load already skips a pack with no entry.
 func (x *packIndex) loadTable(ctx context.Context) (map[string]packRow, []string, error) {
 	tx, err := x.store.NewTransaction(ctx, false)
 	if err != nil {
@@ -187,31 +189,21 @@ func (x *packIndex) loadTable(ctx context.Context) (map[string]packRow, []string
 	}
 	defer tx.Discard()
 
-	// Read the pack table, whose rows are a few bytes each.
+	// Read the pack table in key order.
 	rows := make(map[string]packRow)
+	var ids []string
 	err = tx.ScanPrefix(ctx, []byte(indexPackPrefix), func(key, value []byte) error {
 		row, err := unmarshalPackRow(value)
 		if err != nil {
 			return err
 		}
-		rows[string(key[len(indexPackPrefix):])] = row
+		id := string(key[len(indexPackPrefix):])
+		rows[id] = row
+		ids = append(ids, id)
 		return nil
 	})
 	if err != nil {
 		return nil, nil, errors.Wrap(err, "read pack table")
-	}
-
-	// List the cached entries of the packs in the table.
-	var ids []string
-	err = tx.ScanPrefixKeys(ctx, []byte(indexEntryPrefix), func(key []byte) error {
-		id := string(key[len(indexEntryPrefix):])
-		if _, ok := rows[id]; ok {
-			ids = append(ids, id)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, nil, errors.Wrap(err, "list cached entries")
 	}
 	return rows, ids, nil
 }

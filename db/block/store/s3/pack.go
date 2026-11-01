@@ -496,15 +496,9 @@ func (s *PackStore) Sync(context.Context) (bool, error) {
 // packfile while it lists, and stops when a listing drops none.
 func (s *PackStore) lookup(ctx context.Context, find func() (bool, error)) error {
 	// Load the packfile entries before the first lookup and keep them fresh.
-	if err := s.loadEntries(ctx); err != nil {
+	if err := s.Preload(ctx); err != nil {
 		return err
 	}
-	s.refreshOnce.Do(func() {
-		s.refresher.SetContext(context.Background(), false)
-		if s.indexer != nil {
-			s.indexer.SetContext(context.Background(), false)
-		}
-	})
 
 	// Look for the block in the known packfiles, and list the entries again
 	// after each deleted packfile while the listings drop packfiles.
@@ -521,6 +515,24 @@ func (s *PackStore) lookup(ctx context.Context, find func() (bool, error)) error
 			return err
 		}
 	}
+}
+
+// Preload reads the cached packfile entries, or lists them when the cache is
+// empty, and starts the refresher, as the first lookup would. A mount calls it
+// in the background so the first read after a start, often a commit holding
+// the writer, does not wait behind a cold read of the entry cache. A lookup
+// that arrives during the load waits for it rather than starting another.
+func (s *PackStore) Preload(ctx context.Context) error {
+	if err := s.loadEntries(ctx); err != nil {
+		return err
+	}
+	s.refreshOnce.Do(func() {
+		s.refresher.SetContext(context.Background(), false)
+		if s.indexer != nil {
+			s.indexer.SetContext(context.Background(), false)
+		}
+	})
+	return nil
 }
 
 // loadEntries lists the packfile entries unless a listing completed.
