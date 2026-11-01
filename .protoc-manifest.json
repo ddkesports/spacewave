@@ -3915,7 +3915,7 @@
       ]
     },
     "github.com/s4wave/spacewave/sdk/k8s": {
-      "hash": "d70416f2c451f083338fee39d954856b67409e2c3eb0f7c435a55adf155af4e2",
+      "hash": "29ad5145e9a118d67cf10b84438e431c584d278bfde179e6dce651ef0e460f54",
       "generatedFiles": [
         "sdk/k8s/k8s.pb.go",
         "sdk/k8s/k8s.pb.ts",
