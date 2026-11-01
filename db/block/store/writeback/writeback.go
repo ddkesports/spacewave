@@ -133,12 +133,16 @@ func NewStore(
 		if err != nil {
 			return err
 		}
-		return scanQueue(ctx, tx, nil, func(entry queueEntry) error {
+		return scanQueue(ctx, tx, nil, func(item queueItem) error {
 			if pending == 0 {
-				oldest = entry.at
+				at, err := item.at()
+				if err != nil {
+					return err
+				}
+				oldest = at
 			}
 			pending++
-			pendingBytes += entry.size
+			pendingBytes += item.size()
 			return nil
 		})
 	})
@@ -490,8 +494,12 @@ func (s *Store) clear(ctx context.Context, batch []pendingBlock) error {
 		var floor []byte
 		floor, lowered = s.readFloor()
 		oldest, head = time.Time{}, []byte(queueEnd)
-		err = scanQueue(ctx, tx, floor, func(entry queueEntry) error {
-			oldest, head = entry.at, queueFloor(entry.at)
+		err = scanQueue(ctx, tx, floor, func(item queueItem) error {
+			at, err := item.at()
+			if err != nil {
+				return err
+			}
+			oldest, head = at, queueFloor(at)
 			return errScanDone
 		})
 		if errors.Is(err, errScanDone) {

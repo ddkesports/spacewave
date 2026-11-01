@@ -1,6 +1,7 @@
 package block_store_writeback
 
 import (
+	"bytes"
 	"context"
 	"slices"
 	"strconv"
@@ -443,7 +444,7 @@ func TestDroppedBlockWrittenAgainKeepsMarker(t *testing.T) {
 	}
 
 	// Read the batch as an upload does: the block is gone, so it is dropped.
-	head, err := s.scanHead(ctx, batchLimitsOf(nil))
+	head, err := s.scanHead(ctx, batchLimitsOf(nil), nil)
 	if err != nil || len(head.entries) != 1 {
 		t.Fatalf("scan = %d blocks, %v", len(head.entries), err)
 	}
@@ -453,9 +454,24 @@ func TestDroppedBlockWrittenAgainKeepsMarker(t *testing.T) {
 		t.Fatalf("upload chunk = %v, dropped %v", err, batch[0].dropped)
 	}
 
+	// A rescan of the unchanged queue reuses the parsed entry, not its mark.
+	same, err := s.scanHead(ctx, batchLimitsOf(nil), head)
+	if err != nil || len(same.entries) != 1 || same.entries[0].ref != batch[0].ref || same.entries[0].dropped {
+		t.Fatalf("rescan of the unchanged queue = %d blocks, %v", len(same.entries), err)
+	}
+
 	// The block is written again before the marker clears.
 	if _, _, err := s.PutBlock(ctx, []byte("swept"), leafOpts); err != nil {
 		t.Fatal(err)
+	}
+
+	// A scan reusing the earlier head reads the rewrite, not the dropped entry.
+	again, err := s.scanHead(ctx, batchLimitsOf(nil), head)
+	if err != nil || len(again.entries) != 1 {
+		t.Fatalf("rescan = %d blocks, %v", len(again.entries), err)
+	}
+	if got := again.entries[0]; got.dropped || bytes.Equal(got.value, batch[0].value) {
+		t.Fatalf("rescan reused the dropped entry: dropped %v", got.dropped)
 	}
 	if err := s.clear(ctx, batch); err != nil {
 		t.Fatal(err)
