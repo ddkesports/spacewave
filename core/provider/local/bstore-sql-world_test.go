@@ -385,7 +385,7 @@ func TestSQLWorldReservationLifecycle(t *testing.T) {
 	commit("after")
 
 	// Enough successful writes checkpoint without the page view.
-	for i := 0; i < 2*sobject.MinCheckpointOperations; i++ {
+	for i := range 2 * sobject.MinCheckpointOperations {
 		commit("checkpoint/" + strconv.Itoa(i))
 	}
 	durable, release, err := local.AccessSharedObjectState(ctx, nil)
