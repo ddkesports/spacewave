@@ -127,12 +127,17 @@ ReleasePin ==
       asks, recount, recountGen, lostAt, covered, next, watermarkOK, parent,
       nameLost, savedCursor, driveCursor, landed, rebuilding, restarted, applied,
       used, seq, savedNext, savedAdopted, driveNext, driveAdopted, adoptOK, restoreOK, orphanOK>>
-Advance(r) ==
-  /\ status[r] \in {"pending", "forfeited"} /\ seq[r] <= adopted /\ seq[r] <= pin
-  /\ \A q \in Pending : seq[q] < seq[r] => status[q] # "waiting"
-  /\ status' = [status EXCEPT ![r] = IF @ = "forfeited" THEN "absent" ELSE "due"]
-  /\ carried' = [carried EXCEPT ![r] = 0]
-  /\ watermarkOK' = (watermarkOK /\ seq[r] <= (IF adopted < pin THEN adopted ELSE pin))
+\* Go advance holds the writer lock across the eligible pending prefix.
+\* No caller can name, save or adopt between its individual moves.
+Advance ==
+  LET watermark == IF adopted < pin THEN adopted ELSE pin
+      moved == {r \in Pending : status[r] # "waiting" /\ seq[r] <= watermark /\
+                 \A q \in Pending : seq[q] < seq[r] => status[q] # "waiting"}
+  IN /\ moved # {}
+     /\ status' = [r \in Records |-> IF r \notin moved THEN status[r]
+                    ELSE IF status[r] = "forfeited" THEN "absent" ELSE "due"]
+     /\ carried' = [r \in Records |-> IF r \in moved THEN 0 ELSE carried[r]]
+     /\ watermarkOK' = (watermarkOK /\ \A r \in moved : seq[r] <= adopted /\ seq[r] <= pin)
   /\ UNCHANGED <<stored, durable, adopted, pin, gen, flight, snapshot, puts, asks, recount,
       recountGen, lostAt, covered, next, parent, nameLost, savedCursor,
       driveCursor, landed, rebuilding, restarted, applied, used, seq, savedNext,
@@ -263,8 +268,8 @@ Apply(r) ==
       recount, recountGen, lostAt, covered, next, watermarkOK, parent, nameLost,
       savedCursor, driveCursor, landed, rebuilding, restarted, used, seq,
       savedNext, savedAdopted, driveNext, driveAdopted, adoptOK, restoreOK, orphanOK>>
-Next == (\E q \in 0..MaxRecords, net \in BOOLEAN : Name(q, net)) \/ Lost \/ ReleasePin \/ CarrySaved \/ Unsave \/ RestoreDeadlists \/ FinishRecount
-  \/ (\E r \in Records : Resolve(r) \/ Adopt(r) \/ Advance(r) \/ Apply(r))
+Next == (\E q \in 0..MaxRecords, net \in BOOLEAN : Name(q, net)) \/ Lost \/ ReleasePin \/ Advance \/ CarrySaved \/ Unsave \/ RestoreDeadlists \/ FinishRecount
+  \/ (\E r \in Records : Resolve(r) \/ Adopt(r) \/ Apply(r))
   \/ (\E g \in Saves : LandSave(g) \/ Confirm(g)) \/ UNCHANGED vars
 Spec == Init /\ [][Next]_vars
 DurableNamesStored == {r \in Records : durable[r] # None} \subseteq stored
