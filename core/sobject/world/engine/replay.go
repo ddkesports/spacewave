@@ -681,10 +681,13 @@ func (r *replayer) holdSpan(ctx context.Context, hold *rootHold) error {
 
 // pendingSave returns the unsaved replay as parts of a publication: the span
 // block, the span root and the cursor head. The span also holds payloads, the
-// payloads of the published operation, which replay has not placed yet. It
+// payloads of the published operation, which replay has not placed yet.
+// candidate are the publication's borrowed candidate blocks, which hold the
+// payloads not yet stored; the publication puts every block payloads reach in
+// candidate, so the span's holds count on them without reading them. It
 // returns no parts when the replay is saved and payloads is empty. Call saved
 // once the publication commits.
-func (r *replayer) pendingSave(ctx context.Context, publisher sobject.StatePublisher, payloads []*block.BlockRef) ([]*block.PutBatchEntry, []block.NamedRoot, *block.AtomicHeadUpdate, error) {
+func (r *replayer) pendingSave(ctx context.Context, publisher sobject.StatePublisher, payloads []*block.BlockRef, candidate []*block.PutBatchEntry) ([]*block.PutBatchEntry, []block.NamedRoot, *block.AtomicHeadUpdate, error) {
 	// Name the head when the save falls too far behind it, then skip a saved
 	// replay with nothing more to hold.
 	if err := r.stallBase(ctx); err != nil {
@@ -708,7 +711,7 @@ func (r *replayer) pendingSave(ctx context.Context, publisher sobject.StatePubli
 	var roots []block.NamedRoot
 	switch {
 	case entry != nil:
-		entries, err = carryNamed(ctx, r.store(), []*block.PutBatchEntry{entry}, entry.Refs)
+		entries, err = carryNamed(ctx, r.store(), []*block.PutBatchEntry{entry}, candidate, entry.Refs)
 		if err != nil {
 			return nil, nil, nil, err
 		}

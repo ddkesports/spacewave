@@ -421,7 +421,7 @@ func (t *soEngineWriteTx) publish(ctx context.Context, publisher sobject.StatePu
 	}
 	saveEntries, roots, cursor := t.preparedSave, t.preparedRoots, t.preparedCursor
 	if !prepared {
-		saveEntries, roots, cursor, err = t.eng.replay.pendingSave(ctx, publisher, t.fork.payloads)
+		saveEntries, roots, cursor, err = t.eng.replay.pendingSave(ctx, publisher, t.fork.payloads, batch.Entries)
 		if err != nil {
 			batch.Complete(err)
 			return nil, err

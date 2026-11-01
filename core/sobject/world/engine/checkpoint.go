@@ -203,7 +203,7 @@ func (e *soEngine) nameWorld(ctx context.Context, world *InnerState, n int, heig
 	}
 
 	// Collect the pending save.
-	entries, roots, cursor, err := r.pendingSave(ctx, e.so.(sobject.StatePublisher), nil)
+	entries, roots, cursor, err := r.pendingSave(ctx, e.so.(sobject.StatePublisher), nil, nil)
 	if err != nil {
 		return nil, false, err
 	}

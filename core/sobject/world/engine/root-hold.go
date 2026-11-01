@@ -3,6 +3,7 @@ package sobject_world_engine
 import (
 	"context"
 	fmt "fmt"
+	"slices"
 
 	"github.com/pkg/errors"
 	"github.com/s4wave/spacewave/db/block"
@@ -138,7 +139,7 @@ func (h *rootHold) refBlock(ctx context.Context, name string, data []byte, refs 
 		return err
 	}
 	entry := &block.PutBatchEntry{Ref: ref, Data: data, Refs: refs, RefsKnown: true, HoldsRoots: holdsRoots}
-	if h.entries, err = carryNamed(ctx, h.store, append(h.entries, entry), refs); err != nil {
+	if h.entries, err = carryNamed(ctx, h.store, append(h.entries, entry), nil, refs); err != nil {
 		return err
 	}
 	h.roots = append(h.roots, block.NamedRoot{Name: name, Ref: ref})
@@ -146,21 +147,25 @@ func (h *rootHold) refBlock(ctx context.Context, name string, data []byte, refs 
 }
 
 // carryNamed appends to entries a put of each block refs names that store
-// holds and entries lack. A store that keeps shared counts counts a new block
-// as a holder only of the stored blocks its batch carries, since no record
-// lists a hold block's children, so a batch putting a new block that names
-// stored ones carries them. A block the store lacks needs nothing: a later put
-// stores it afresh under its holders. It reads one block per carried ref, and
-// nothing from a store without counts.
-func carryNamed(ctx context.Context, store block.StoreOps, entries []*block.PutBatchEntry, refs []*block.BlockRef) ([]*block.PutBatchEntry, error) {
+// holds and neither entries nor carried put. A store that keeps shared counts
+// counts a new block as a holder only of the stored blocks its batch carries,
+// since no record lists a hold block's children, so a batch putting a new block
+// that names stored ones carries them. carried are the other entries of the
+// same publication, such as its unpublished candidate blocks: the batch already
+// carries them, and the store cannot serve them before the publication writes
+// them, so reading one would ask peers for a block that exists nowhere yet. A
+// block the store lacks needs nothing: a later put stores it afresh under its
+// holders. It reads one block per carried ref, and nothing from a store
+// without counts.
+func carryNamed(ctx context.Context, store block.StoreOps, entries, carried []*block.PutBatchEntry, refs []*block.BlockRef) ([]*block.PutBatchEntry, error) {
 	// Skip a store without counts.
 	if !block.KeepsHoldCounts(store) {
 		return entries, nil
 	}
 
-	// Note the blocks entries already put.
-	put := make(map[string]struct{}, len(entries)+len(refs))
-	for _, e := range entries {
+	// Note the blocks the publication already puts.
+	put := make(map[string]struct{}, len(entries)+len(carried)+len(refs))
+	for _, e := range slices.Concat(entries, carried) {
 		put[e.Ref.MarshalString()] = struct{}{}
 	}
 
