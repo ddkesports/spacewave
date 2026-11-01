@@ -38,6 +38,17 @@ func (s *PackfileStore) publishManifest() {
 	s.current.Store(&ManifestSnapshot{store: s, entries: s.manifest.Copy(), ids: s.manifestIDs.Copy()})
 }
 
+// publishManifestDelta publishes a snapshot of the manifest that dropped and
+// added the given entries to the current one, carrying its locator split
+// across so a lookup need not scan the whole catalog. Call with bcast held.
+func (s *PackfileStore) publishManifestDelta(dropped, added []*manifestEntry) {
+	prev := s.current.Load()
+	s.publishManifest()
+	if packs := prev.unindexed.Load(); packs != nil {
+		s.current.Load().unindexed.Store(packs.derive(dropped, added))
+	}
+}
+
 // GetEntries materializes an explicitly requested complete catalog snapshot.
 func (v *ManifestSnapshot) GetEntries() []*packfile.PackfileEntry {
 	entries := make([]*packfile.PackfileEntry, 0, v.entries.Len())

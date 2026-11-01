@@ -726,12 +726,16 @@ func (s *PackStore) readEntry(ctx context.Context, id string) (*packfile.Packfil
 // the reader as a delta, so an upload costs the packs it changes rather than
 // the whole catalog. Every catalog change passes through here, so the reader's
 // manifest stays equal to entries. Publishing under the lock keeps concurrent
-// updates in order.
+// updates in order. The index forgets a removed pack only after the reader's
+// manifest drops it, since the reader trusts an indexed pack to stay indexed
+// while the manifest holds it.
 func (s *PackStore) updateEntries(add []*packfile.PackfileEntry, remove []string) {
 	if s.index != nil {
-		if err := s.index.remove(context.Background(), remove); err != nil {
-			s.le.WithError(err).Warn("drop packs from the index")
-		}
+		defer func() {
+			if err := s.index.remove(context.Background(), remove); err != nil {
+				s.le.WithError(err).Warn("drop packs from the index")
+			}
+		}()
 	}
 	s.bcast.HoldLock(func(func(), func() <-chan struct{}) {
 		for _, id := range remove {

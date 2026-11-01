@@ -655,6 +655,7 @@ func (s *PackfileStore) updateManifest(entries []*packfile.PackfileEntry, remove
 		return
 	}
 	var evicted []*PackReader
+	var dropped, added []*manifestEntry
 	s.bcast.HoldLock(func(broadcast func(), _ func() <-chan struct{}) {
 		// A full snapshot alone computes the missing IDs.
 		if replace {
@@ -686,6 +687,7 @@ func (s *PackfileStore) updateManifest(entries []*packfile.PackfileEntry, remove
 				s.manifest.Delete(old)
 				s.manifestIDs.Delete(old)
 				delete(s.manifestByID, id)
+				dropped = append(dropped, old)
 			}
 
 			// Detach the pack reader for draining outside the catalog locks.
@@ -726,6 +728,7 @@ func (s *PackfileStore) updateManifest(entries []*packfile.PackfileEntry, remove
 					remove(id)
 				}
 				s.manifest.Delete(old)
+				dropped = append(dropped, old)
 			}
 
 			// Index the accepted descriptor with its parsed bloom filter.
@@ -733,10 +736,11 @@ func (s *PackfileStore) updateManifest(entries []*packfile.PackfileEntry, remove
 			s.manifestByID[id] = item
 			s.manifest.Set(item)
 			s.manifestIDs.Set(item)
+			added = append(added, item)
 		}
 
 		// Wake catalog observers after publishing the manifest changes.
-		s.publishManifest()
+		s.publishManifestDelta(dropped, added)
 		broadcast()
 	})
 	s.mtx.Unlock()

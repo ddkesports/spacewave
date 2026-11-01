@@ -5,6 +5,7 @@ import (
 
 	"github.com/s4wave/spacewave/db/block/bloom"
 	"github.com/s4wave/spacewave/db/packfile"
+	"github.com/tidwall/btree"
 )
 
 // Locator places a block key in a pack without the bloom filters.
@@ -20,6 +21,9 @@ type Locator interface {
 	// Indexed reports whether Locate knows every key of the pack.
 	Indexed(packID string) bool
 	// Version changes whenever Indexed may answer differently for some pack.
+	// While a pack stays in the manifest, its answer turns only from false to
+	// true: the store refilters only the packs it last found unindexed, so a
+	// pack must leave the manifest before the locator forgets it.
 	Version() uint64
 }
 
@@ -33,14 +37,32 @@ func (s *PackfileStore) SetLocator(l Locator) {
 type unindexedPacks struct {
 	// version is the locator version the split was computed at.
 	version uint64
-	// open holds the packs the locator has not indexed, in lookup order.
-	open []*manifestEntry
+	// open holds the packs the locator had not indexed at version, in lookup
+	// order. It may also hold packs indexed since, which cost a filter test.
+	// It is immutable: a newer split copies it.
+	open *btree.BTreeG[*manifestEntry]
+}
+
+// derive returns the split of a snapshot that dropped and added packs to the
+// snapshot this split covers. An added pack is open until the next refilter.
+func (p *unindexedPacks) derive(dropped, added []*manifestEntry) *unindexedPacks {
+	open := p.open.Copy()
+	for _, item := range dropped {
+		open.Delete(item)
+	}
+	for _, item := range added {
+		open.Set(item)
+	}
+	return &unindexedPacks{version: p.version, open: open}
 }
 
 // unindexedPacks returns the snapshot's packs the locator has not indexed,
 // computing the split once per snapshot and locator version; concurrent
-// lookups wait for the one computing it. The version is read before the
-// split, so a change during it makes the next lookup recompute.
+// lookups wait for the one computing it. A newer version refilters only the
+// packs the last split left open, since an indexed pack stays indexed while it
+// is in the manifest; a snapshot without a split scans the whole catalog. The
+// version is read before the split, so a change during it makes the next
+// lookup recompute.
 func (v *ManifestSnapshot) unindexedPacks(loc Locator) *unindexedPacks {
 	// Reuse the split while the locator answers as it did.
 	version := loc.Version()
@@ -49,18 +71,31 @@ func (v *ManifestSnapshot) unindexedPacks(loc Locator) *unindexedPacks {
 	}
 	v.unindexedMtx.Lock()
 	defer v.unindexedMtx.Unlock()
-	if packs := v.unindexed.Load(); packs != nil && packs.version >= version {
-		return packs
+	prev := v.unindexed.Load()
+	if prev != nil && prev.version >= version {
+		return prev
 	}
 
-	// Collect the packs the locator has not indexed.
+	// Drop the packs indexed since the last split, or collect the open packs
+	// of the whole catalog when there is none.
 	packs := &unindexedPacks{version: version}
-	v.entries.Scan(func(item *manifestEntry) bool {
-		if !loc.Indexed(item.entry.GetId()) {
-			packs.open = append(packs.open, item)
-		}
-		return true
-	})
+	if prev != nil {
+		packs.open = prev.open.Copy()
+		prev.open.Scan(func(item *manifestEntry) bool {
+			if loc.Indexed(item.entry.GetId()) {
+				packs.open.Delete(item)
+			}
+			return true
+		})
+	} else {
+		packs.open = newManifestTree()
+		v.entries.Scan(func(item *manifestEntry) bool {
+			if !loc.Indexed(item.entry.GetId()) {
+				packs.open.Set(item)
+			}
+			return true
+		})
+	}
 	v.unindexed.Store(packs)
 	return packs
 }
@@ -100,14 +135,15 @@ func (s *PackfileStore) candidates(ctx context.Context, view *ManifestSnapshot, 
 	}
 
 	// Test the filters of the packs the locator has not indexed.
-	for _, item := range packs.open {
+	packs.open.Scan(func(item *manifestEntry) bool {
 		if found && item == out[0] {
-			continue
+			return true
 		}
 		if item.filter == nil || item.filter.TestKey(bloomKey) {
 			out = append(out, item)
 		}
-	}
+		return true
+	})
 	return out, nil
 }
 
