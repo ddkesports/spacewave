@@ -39,7 +39,12 @@ type ReadSet struct {
 	// recorded read clears memoChanges.
 	memoChanges *ChangeSet
 	memoTouched bool
-	// added closes when a read is recorded and is then replaced.
+	// version counts the recorded reads, so Touched keeps its answer only when
+	// no read was recorded while it checked unlocked.
+	version uint64
+	// added closes when a read is recorded, or is nil when no wait took it
+	// since the last read. Most reads come while a view evaluates, with no wait
+	// to wake, so the channel is made only for a wait.
 	added chan struct{}
 }
 
@@ -48,7 +53,6 @@ func NewReadSet() *ReadSet {
 	return &ReadSet{
 		keys:      make(map[string]struct{}),
 		endpoints: make(map[string]struct{}),
-		added:     make(chan struct{}),
 	}
 }
 
@@ -70,7 +74,7 @@ func (r *ReadSet) Touched(changes *ChangeSet) bool {
 		return touched
 	}
 	touched := r.touchedLocked(changes)
-	joined, added := r.joined.list, r.added
+	joined, version := r.joined.list, r.version
 	r.mtx.Unlock()
 
 	// Check the joined sets unlocked, each through its own memo.
@@ -80,7 +84,7 @@ func (r *ReadSet) Touched(changes *ChangeSet) bool {
 
 	// Keep the answer unless a read was recorded meanwhile.
 	r.mtx.Lock()
-	if r.added == added {
+	if r.version == version {
 		r.memoChanges, r.memoTouched = changes, touched
 	}
 	r.mtx.Unlock()
@@ -140,7 +144,7 @@ func (r *ReadSet) waitChange(ctx context.Context, w WorldWaitSeqno, afterSeqno u
 		// Capture the read signal before naming the reads, so a read recorded
 		// after they are named restarts the subscription.
 		r.mtx.Lock()
-		added := r.added
+		added := r.addedLocked()
 		r.mtx.Unlock()
 
 		// Name the reads for the change feed's index.
@@ -350,6 +354,18 @@ func (s *readSets) add(set *ReadSet) bool {
 // answer. The caller holds mtx.
 func (r *ReadSet) signalLocked() {
 	r.memoChanges = nil
-	close(r.added)
-	r.added = make(chan struct{})
+	r.version++
+	if r.added != nil {
+		close(r.added)
+		r.added = nil
+	}
+}
+
+// addedLocked returns the channel the next recorded read closes. The caller
+// holds mtx.
+func (r *ReadSet) addedLocked() <-chan struct{} {
+	if r.added == nil {
+		r.added = make(chan struct{})
+	}
+	return r.added
 }
