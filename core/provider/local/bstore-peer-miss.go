@@ -40,6 +40,17 @@ func newPeerMissSource(le *logrus.Entry, peers func() block.StoreOps) func() blo
 	}
 }
 
+// BeginReadOperation opens a read scope on the peers that keeps the miss log
+// and the read bound. The embedded store's own method would return the bare
+// peer scope, whose reads wait for a peer session indefinitely.
+func (p *peerMissLog) BeginReadOperation(ctx context.Context) (block.StoreOps, func(), error) {
+	scoped, release, err := p.StoreOps.BeginReadOperation(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	return &peerMissLog{StoreOps: scoped, le: p.le, seen: p.seen}, release, nil
+}
+
 // GetBlock logs the miss and reads the block from peers.
 func (p *peerMissLog) GetBlock(ctx context.Context, ref *block.BlockRef) ([]byte, bool, error) {
 	// Log the first miss of the block.
