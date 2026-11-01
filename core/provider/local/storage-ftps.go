@@ -64,6 +64,12 @@ func buildFTPSClient(location *account_settings.FtpsLocation, tlsConf *tls.Confi
 	}), nil
 }
 
+// ftpsReadWindow is the fewest bytes a block miss reads from a pack: one SFTP
+// packet. The packs hold blocks in key order, which is hash order, so the
+// bytes beside a block belong to unrelated blocks and a wider read only adds
+// transfer time to the miss.
+const ftpsReadWindow = 32 << 10
+
 // buildFTPSBlockStore opens the packfile store on the location's directory,
 // over FTPS or, when the location sets sftp, SFTP.
 // The store keeps every packfile: nothing compacts or deletes one, and it
@@ -75,8 +81,9 @@ func buildFTPSBlockStore(le *logrus.Entry, location *account_settings.FtpsLocati
 		return nil, err
 	}
 	return block_store_s3.NewPackStore(le, client, location.GetRoot(), location.GetPrefix(), &block_store_s3.PackStoreOptions{
-		KeepPacks: true,
-		Index:     index,
+		KeepPacks:  true,
+		Index:      index,
+		ReadWindow: ftpsReadWindow,
 	}), nil
 }
 

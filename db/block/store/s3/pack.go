@@ -103,6 +103,8 @@ type PackStore struct {
 	refresher *routine.RoutineContainer
 	// refreshInterval is the time between two listings of the refresher.
 	refreshInterval time.Duration
+	// readWindow is the pack readers' minimum fetch, or zero for their default.
+	readWindow int
 	// index is the entry cache and block location index in the local KV, or
 	// nil without one.
 	index *packIndex
@@ -179,6 +181,10 @@ type PackStoreOptions struct {
 	// with a pause between them. It takes no lock a read waits on. Until a
 	// pack is indexed, lookups test its bloom filter as without the index.
 	Index kvtx.Store
+	// ReadWindow is the fewest bytes one block miss fetches from a pack, and
+	// their alignment. Zero uses the pack reader's default, which suits
+	// HTTP range requests.
+	ReadWindow int
 }
 
 // NewPackStore builds a packfile block store on the bucket. opts may be nil.
@@ -214,6 +220,7 @@ func NewPackStore(le *logrus.Entry, client ObjectStore, bucket, prefix string, o
 			routine.WithRetry(compactBackoff),
 		),
 		refreshInterval: refresh,
+		readWindow:      opts.ReadWindow,
 	}
 
 	// Read the known packfiles and start compaction.
@@ -652,7 +659,9 @@ func (s *PackStore) updateEntries(add []*packfile.PackfileEntry, remove []string
 // openPack opens a reader over the ranges of packfile id.
 func (s *PackStore) openPack(id string, size int64) (*packfile_store.PackReader, error) {
 	transport := &rangeTransport{client: s.client, bucket: s.bucket, key: s.prefix + packDir + id}
-	return packfile_store.NewPackReader(id, size, transport), nil
+	eng := packfile_store.NewPackReader(id, size, transport)
+	eng.SetReadWindow(s.readWindow)
+	return eng, nil
 }
 
 // rangeTransport reads byte ranges of one packfile object.
