@@ -470,7 +470,6 @@ func (e *PackReader) insertSpanLocked(s *span) {
 	})
 	e.spans = slices.Insert(e.spans, i, s)
 	s.lru = e.lru.PushBack(s)
-	e.newest = s
 	e.chargeLocked(s.size)
 	e.touchSpanLocked(s)
 }
@@ -488,9 +487,6 @@ func (e *PackReader) removeSpanLocked(s *span) {
 	// Detach the resident span and return its bytes to the shared budget.
 	e.spans = slices.Delete(e.spans, i, i+1)
 	e.lru.Remove(s.lru)
-	if e.newest == s {
-		e.newest = nil
-	}
 	e.chargeLocked(-s.size)
 }
 
@@ -534,23 +530,19 @@ func (e *PackReader) collectSpansLocked(start, end int64) ([]*span, bool) {
 	return nil, false
 }
 
-// oldestEvictableLocked returns the least recently used span.
+// oldestEvictableLocked returns the least recently used span, or nil when the
+// reader holds none.
 //
-// The span inserted last is never returned: a caller that fetched it may not
-// have read it yet.
+// Every span is evictable: a fetch hands its span to its waiters and its
+// writeback directly, so dropping it from the store loses no reader's bytes.
+// Exempting each reader's newest span would let every pack ever read keep up to
+// one fetch window beyond the shared budget.
 func (e *PackReader) oldestEvictableLocked() *span {
-	// Find the oldest span in the resident LRU order.
 	front := e.lru.Front()
 	if front == nil {
 		return nil
 	}
-
-	// Protect the newest fetched span until a caller can consume it.
-	s := front.Value.(*span)
-	if s == e.newest {
-		return nil
-	}
-	return s
+	return front.Value.(*span)
 }
 
 // oldestEvictableSeq returns the LRU sequence of the reader's oldest

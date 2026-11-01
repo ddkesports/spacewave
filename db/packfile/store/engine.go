@@ -93,11 +93,10 @@ type PackReader struct {
 	writebackWindow        int64
 
 	// Span store. spans are sorted by offset and disjoint. lru orders the
-	// spans from least to most recently used. newest is the span inserted
-	// last, which eviction skips until a reader can consume it.
+	// spans from least to most recently used. A fetch hands its span to its
+	// waiters directly, so eviction may take any span, the newest included.
 	spans         []*span
 	lru           list.List
-	newest        *span
 	residentBytes int64
 	budget        *residentBudget
 	loading       map[fetchKey]*fetchLoad
@@ -214,7 +213,6 @@ func (e *PackReader) Close() {
 			// Release resident spans and return their bytes to the shared budget.
 			e.spans = nil
 			e.lru.Init()
-			e.newest = nil
 			e.chargeLocked(-e.residentBytes)
 			e.budget.detach(e)
 

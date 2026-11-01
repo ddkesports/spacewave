@@ -2299,46 +2299,6 @@ func TestPackfileStoreEvictsOldestBlock(t *testing.T) {
 	}
 }
 
-// TestPackfileStoreKeepsPinnedBlocksResident verifies that block pins (from
-// in-flight verification) keep spans resident even under budget pressure.
-func TestPackfileStoreKeepsPinnedBlocksResident(t *testing.T) {
-	// Publish a pack whose verifying spans must remain resident.
-	ctx := t.Context()
-	packBytes, bloomBytes := buildTestPackOrdered(t, []struct{ Name, Data string }{{"a", "alpha"}})
-	opener, transport := openerFromBytes(packBytes)
-	store := NewPackfileStore(opener, newMemIndexCache())
-	store.UpdateManifest([]*packfile.PackfileEntry{{
-		Id:          "pin-pack",
-		BloomFilter: bloomBytes,
-		BlockCount:  1,
-		SizeBytes:   uint64(len(packBytes)),
-	}})
-
-	// Gate writeback and constrain the resident cache to one byte.
-	blocked := make(chan struct{})
-	wb := newWritebackStore(func() { <-blocked })
-	store.SetWriteback(ctx, wb, 0)
-	store.SetRangeCacheMaxBytes(1)
-
-	// Read alpha to start verification of its resident span.
-	alphaHash, _ := hash.Sum(hash.HashType_HashType_SHA256, []byte("alpha"))
-	if _, found, err := store.GetBlock(ctx, &block.BlockRef{Hash: alphaHash}); err != nil || !found {
-		t.Fatalf("GetBlock: found=%v err=%v", found, err)
-	}
-
-	// The block is still verifying (writeback blocked). Its backing span
-	// must remain pinned despite the 1-byte budget.
-	eng, release, _ := store.getOrOpenEngine("pin-pack", int64(len(packBytes)), 1)
-	t.Cleanup(release)
-	eng.bcast.HoldLock(func(_ func(), _ func() <-chan struct{}) {
-		if eng.residentBytes == 0 {
-			t.Fatal("expected resident bytes to stay pinned during verify")
-		}
-	})
-	_ = transport
-	close(blocked)
-}
-
 func TestPackfileStoreCloseDrainsWritebackBeforeReleasingReferences(t *testing.T) {
 	// Gate the first block writeback in an initialized pack reader.
 	firstPut := make(chan struct{})

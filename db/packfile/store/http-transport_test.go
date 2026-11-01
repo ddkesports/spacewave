@@ -552,7 +552,7 @@ func seedSpan(e *PackReader, off int64, size int) {
 }
 
 // TestResidentBudgetEvictsAcrossReaders evicts the globally oldest span when
-// readers share one budget.
+// readers share one budget, including a reader's only span.
 func TestResidentBudgetEvictsAcrossReaders(t *testing.T) {
 	// Share one resident budget across two byte-backed readers.
 	transport := TransportFunc(func(_ context.Context, _ int64, size int) ([]byte, error) {
@@ -583,6 +583,15 @@ func TestResidentBudgetEvictsAcrossReaders(t *testing.T) {
 			t.Errorf("b spans = %d, want 1", len(b.spans))
 		}
 	})
+
+	// A third reader's span evicts the others' last spans, so readers that
+	// each hold one span still fit the budget.
+	c := NewPackReader("c", 1000, transport)
+	c.setBudget(budget)
+	seedSpan(c, 0, 200)
+	if used := budget.used.Load(); used != 200 {
+		t.Fatalf("budget used = %d, want 200", used)
+	}
 }
 
 // TestHTTPRangeReaderFullResponseFallbackStats accounts for servers that ignore Range.
