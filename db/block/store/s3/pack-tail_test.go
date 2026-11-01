@@ -2,7 +2,10 @@ package block_store_s3
 
 import (
 	"bytes"
+	"net/http"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/s4wave/spacewave/db/block"
@@ -107,4 +110,50 @@ func TestPackStoreMergesTail(t *testing.T) {
 	checkBlocks(t, fresh, "more", more)
 	checkBlocks(t, fresh, "late", late)
 	checkBlocks(t, fresh, "again", again)
+
+	// A reader whose listing predates a merge, and whose entry read finds the
+	// replaced entry deleted, lists again and finds the merged packfile.
+	bucket, client = newFakeBucket(t, nil)
+	writer := NewPackStore(logrus.NewEntry(logrus.New()), client, "bucket", "p/", opts)
+	t.Cleanup(writer.Close)
+	first := putBlocks(t, writer, "first", 1)
+	var merged atomic.Int32
+	mergeAfter := func(match func(r *http.Request) bool, count int32) {
+		var busy atomic.Bool
+		merged.Store(0)
+		bucket.mtx.Lock()
+		bucket.after = func(r *http.Request) {
+			if !match(r) || merged.Load() >= count || !busy.CompareAndSwap(false, true) {
+				return
+			}
+			defer busy.Store(false)
+			n := merged.Add(1)
+			putBlocks(t, writer, "merge"+strconv.Itoa(int(n)), 1)
+		}
+		bucket.mtx.Unlock()
+	}
+	entryDir := "p/" + entryDir
+	mergeAfter(func(r *http.Request) bool {
+		return r.URL.Query().Get("prefix") == entryDir
+	}, 1)
+	checkBlocks(t, newTestPackStore(t, client), "first", first)
+	if got := merged.Load(); got != 1 {
+		t.Fatalf("%d merges ran after the listing; want 1", got)
+	}
+
+	// A reader crosses more merges than any fixed bound: each entry it reads
+	// names a packfile a merge deletes before the reader reads the block.
+	mergeAfter(func(r *http.Request) bool {
+		return strings.HasPrefix(r.URL.Path, "/bucket/"+entryDir)
+	}, 8)
+	checkBlocks(t, newTestPackStore(t, client), "first", first)
+	if got := merged.Load(); got != 8 {
+		t.Fatalf("%d merges ran after entry reads; want 8", got)
+	}
+	bucket.mtx.Lock()
+	bucket.after = nil
+	bucket.mtx.Unlock()
+	if got := packs(); len(got) != 1 {
+		t.Fatalf("bucket holds %d packfiles after crossing merges; want 1", len(got))
+	}
 }

@@ -54,9 +54,6 @@ const (
 	// packUploads bounds the packs an upload writes at once. Each holds about
 	// three copies of its blocks in memory while it writes.
 	packUploads = 3
-	// lookupRelists is how many times a lookup lists the packfile entries
-	// again after finding its packfile deleted.
-	lookupRelists = 4
 	// packLinger is how long a short pack of settled blocks waits for more.
 	packLinger = 30 * time.Second
 )
@@ -141,6 +138,8 @@ type PackStore struct {
 	listMtx csync.Mutex
 	// listings counts the entry listings started.
 	listings atomic.Uint64
+	// dropped counts the packfile entries listings dropped.
+	dropped atomic.Uint64
 	// compactMtx serializes compaction and reclaim passes.
 	compactMtx csync.Mutex
 	// reclaimLoaded reports whether reclaimState was read from the bucket.
@@ -493,8 +492,9 @@ func (s *PackStore) Sync(context.Context) (bool, error) {
 // lookup runs find against the known packfiles, which the first lookup lists.
 // A miss is final. When find reports a deleted packfile, lookup lists the
 // entries, which drops the packfiles merged away and finds their merged
-// packfile, and runs find again, up to lookupRelists times, so a reader
-// crosses tail merges that replace its packfile again while it lists.
+// packfile, and runs find again. It repeats while each listing drops a
+// packfile, so a reader crosses any number of tail merges that replace its
+// packfile while it lists, and stops when a listing drops none.
 func (s *PackStore) lookup(ctx context.Context, find func() (bool, error)) error {
 	// Load the packfile entries before the first lookup and keep them fresh.
 	if err := s.loadEntries(ctx); err != nil {
@@ -508,9 +508,9 @@ func (s *PackStore) lookup(ctx context.Context, find func() (bool, error)) error
 	})
 
 	// Look for the block in the known packfiles, and list the entries again
-	// after each deleted packfile.
-	for range lookupRelists {
-		listed := s.listings.Load()
+	// after each deleted packfile while the listings drop packfiles.
+	for {
+		listed, dropped := s.listings.Load(), s.dropped.Load()
 		found, err := find()
 		if found || err == nil || !errors.Is(err, ErrNotFound) {
 			return err
@@ -518,9 +518,10 @@ func (s *PackStore) lookup(ctx context.Context, find func() (bool, error)) error
 		if err := s.listEntries(ctx, listed); err != nil {
 			return err
 		}
+		if s.dropped.Load() == dropped {
+			return err
+		}
 	}
-	_, err := find()
-	return err
 }
 
 // loadEntries lists the packfile entries unless a listing completed.
@@ -594,56 +595,98 @@ func (s *PackStore) listEntries(ctx context.Context, listed uint64) error {
 		}
 	})
 
-	// List packfile entries and identify new and removed packfiles.
+	// List until a listing reads every new entry it names. A tail merge
+	// writes the merged entry before it deletes the replaced one, so an entry
+	// that vanished after the listing means the listing predates the merged
+	// entry and may miss it.
+	read := make(map[string]*packfile.PackfileEntry)
+	var ids map[string]bool
+	for {
+		var vanished bool
+		ids, vanished, err = s.listOnce(ctx, known, read)
+		if err != nil {
+			return err
+		}
+		if !vanished {
+			break
+		}
+	}
+
+	// Index and publish the new entries the last listing holds, and drop the
+	// known entries it no longer holds.
+	var entries []*packfile.PackfileEntry
+	for id, entry := range read {
+		if !ids[id] {
+			continue
+		}
+		entries = append(entries, entry)
+		if s.index != nil {
+			if err := s.index.addListed(ctx, entry); err != nil {
+				return err
+			}
+		}
+	}
+	if s.index != nil {
+		if err := s.index.flush(ctx); err != nil {
+			return err
+		}
+	}
+	var removed []string
+	for id := range known {
+		if !ids[id] {
+			removed = append(removed, id)
+		}
+	}
+	s.updateEntries(entries, removed)
+	s.loaded.Store(true)
+	return nil
+}
+
+// listOnce lists the packfile entries and reads each one neither known nor in
+// read into read. It returns the listed ids, and whether a listed entry was
+// deleted before it could be read.
+func (s *PackStore) listOnce(ctx context.Context, known map[string]bool, read map[string]*packfile.PackfileEntry) (map[string]bool, bool, error) {
+	// List packfile entries and identify the new ones.
+	listed := make(map[string]bool, len(known))
 	var ids []string
 	dir := s.prefix + entryDir
-	err = s.client.ListObjects(ctx, s.bucket, dir, func(key string, _ int64) error {
+	err := s.client.ListObjects(ctx, s.bucket, dir, func(key string, _ int64) error {
 		id := strings.TrimPrefix(key, dir)
-		if known[id] {
-			delete(known, id)
-		} else {
+		listed[id] = true
+		if _, ok := read[id]; !known[id] && !ok {
 			ids = append(ids, id)
 		}
 		return nil
 	})
 	if err != nil {
-		return errors.Wrap(err, "list packfile entries")
+		return nil, false, errors.Wrap(err, "list packfile entries")
 	}
 
 	// Read new packfile entries with bounded concurrent requests.
 	entries := make([]*packfile.PackfileEntry, len(ids))
+	var vanished atomic.Bool
 	eg, egCtx := errgroup.WithContext(ctx)
 	eg.SetLimit(s.readConcurrency())
 	for i, id := range ids {
 		eg.Go(func() error {
 			entry, err := s.readEntry(egCtx, id)
 			if errors.Is(err, ErrNotFound) {
-				// A merge deleted the entry after the listing.
+				vanished.Store(true)
 				return nil
 			}
 			entries[i] = entry
-			if err == nil && entry != nil && s.index != nil {
-				err = s.index.addListed(egCtx, entry)
-			}
 			return err
 		})
 	}
 	if err := eg.Wait(); err != nil {
-		return err
+		return nil, false, err
 	}
-
-	// Drop entries deleted during listing and publish the refreshed manifest.
-	entries = slices.DeleteFunc(entries, func(entry *packfile.PackfileEntry) bool {
-		return entry == nil
-	})
-	if s.index != nil {
-		if err := s.index.flush(ctx); err != nil {
-			return err
+	for _, entry := range entries {
+		if entry != nil {
+			read[entry.GetId()] = entry
 		}
 	}
-	s.updateEntries(entries, slices.Collect(maps.Keys(known)))
-	s.loaded.Store(true)
-	return nil
+	return listed, vanished.Load(), nil
 }
 
 // readConcurrency returns the concurrent requests that read the packfile
@@ -692,6 +735,7 @@ func (s *PackStore) updateEntries(add []*packfile.PackfileEntry, remove []string
 		for _, id := range remove {
 			delete(s.entries, id)
 		}
+		s.dropped.Add(uint64(len(remove)))
 		for _, entry := range add {
 			s.entries[entry.GetId()] = entry
 		}
