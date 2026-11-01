@@ -81,7 +81,11 @@ var ErrPackImmutable = errors.New("bucket packfiles do not remove blocks")
 // After each write a background routine merges small packfiles, as
 // compact describes. Reclaim drops dead blocks when that saves money on the
 // service's price list. A store that keeps its packs does neither, so no
-// packfile it lists is ever rewritten or deleted.
+// packfile it lists is ever rewritten or deleted, except by a tail merge.
+//
+// With a tail merge size set, a short upload batch merges into the newest
+// packfile below that size, as mergeTail describes, so a store that keeps its
+// packs does not gather one small packfile per trickle of writes.
 type PackStore struct {
 	// le is the logger.
 	le *logrus.Entry
@@ -105,6 +109,11 @@ type PackStore struct {
 	refreshInterval time.Duration
 	// readWindow is the pack readers' minimum fetch, or zero for their default.
 	readWindow int
+	// linger is how long a short upload batch waits for more blocks.
+	linger time.Duration
+	// mergeTailBytes is the packfile size below which a short batch merges
+	// into the newest packfile, or zero to never merge.
+	mergeTailBytes int64
 	// index is the entry cache and block location index in the local KV, or
 	// nil without one.
 	index *packIndex
@@ -185,6 +194,13 @@ type PackStoreOptions struct {
 	// their alignment. Zero uses the pack reader's default, which suits
 	// HTTP range requests.
 	ReadWindow int
+	// Linger is how long a short upload batch of settled blocks waits for more
+	// blocks before it is written anyway. Zero uses packLinger.
+	Linger time.Duration
+	// MergeTailBytes merges a batch, when not zero, into the newest packfile
+	// smaller than this many bytes while the merged packfile fits one upload
+	// batch, and deletes the packfile it replaces, even with KeepPacks set.
+	MergeTailBytes int64
 }
 
 // NewPackStore builds a packfile block store on the bucket. opts may be nil.
@@ -221,6 +237,8 @@ func NewPackStore(le *logrus.Entry, client ObjectStore, bucket, prefix string, o
 		),
 		refreshInterval: refresh,
 		readWindow:      opts.ReadWindow,
+		linger:          cmp.Or(max(opts.Linger, 0), packLinger),
+		mergeTailBytes:  max(opts.MergeTailBytes, 0),
 	}
 
 	// Read the known packfiles and start compaction.
@@ -291,15 +309,34 @@ func (s *PackStore) PutBlock(ctx context.Context, data []byte, opts *block.PutOp
 // GetBatchLimits returns the batch that fills a pack, so an upload writes few
 // large packs instead of many small ones.
 func (s *PackStore) GetBatchLimits() block.BatchLimits {
-	return block.BatchLimits{Bytes: packPayloadBytes, Blocks: packMaxBlocks, Workers: packUploads, Linger: packLinger}
+	return block.BatchLimits{Bytes: packPayloadBytes, Blocks: packMaxBlocks, Workers: packUploads, Linger: s.linger}
 }
 
-// PutBlockBatch writes the batch as one packfile and its entry.
+// PutBlockBatch writes the batch as one packfile and its entry, or merges it
+// into the newest small packfile, as mergeTail describes.
 //
 // The batch must fit one packfile: at most writer.DefaultMaxPackBytes bytes.
 // Tombstones are rejected. Every block is written again, so none is reported
 // as existing.
 func (s *PackStore) PutBlockBatch(ctx context.Context, batch []*block.PutBatchEntry) ([]bool, error) {
+	// Reject tombstones before writing anything.
+	for _, entry := range batch {
+		if entry.Tombstone {
+			return nil, ErrPackImmutable
+		}
+	}
+
+	// Merge a short batch into the newest small packfile when one fits.
+	if s.mergeTailBytes > 0 {
+		merged, err := s.mergeTail(ctx, batch)
+		if err != nil {
+			return nil, err
+		}
+		if merged {
+			return make([]bool, len(batch)), nil
+		}
+	}
+
 	// Write the batch as one immutable packfile.
 	i := 0
 	entry, err := s.writePack(ctx, func() (*hash.Hash, *block.StoredBlock, error) {
@@ -309,22 +346,23 @@ func (s *PackStore) PutBlockBatch(ctx context.Context, batch []*block.PutBatchEn
 		}
 		entry := batch[i]
 		i++
-		if entry.Tombstone {
-			return nil, nil, ErrPackImmutable
-		}
 		return entry.Ref.GetHash(), &block.StoredBlock{Data: entry.Data, Refs: entry.Refs, RefsKnown: true}, nil
 	})
 	if err != nil || entry == nil {
 		return nil, err
 	}
 
-	// Publish the new packfile entry and wake compaction watchers.
+	s.published(entry)
+	return make([]bool, len(batch)), nil
+}
+
+// published lists a packfile this store wrote and wakes compaction watchers.
+func (s *PackStore) published(entry *packfile.PackfileEntry) {
 	s.updateEntries([]*packfile.PackfileEntry{entry}, nil)
 	s.bcast.HoldLock(func(broadcast func(), _ func() <-chan struct{}) {
 		s.writes++
 		broadcast()
 	})
-	return make([]bool, len(batch)), nil
 }
 
 // writePack writes the blocks next yields as one packfile, then its entry.

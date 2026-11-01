@@ -5,8 +5,10 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"math"
 	"net"
 	"strconv"
+	"time"
 
 	"github.com/s4wave/spacewave/db/kvtx"
 
@@ -84,10 +86,16 @@ func buildFTPSClient(le *logrus.Entry, location *account_settings.FtpsLocation, 
 // transfer time to the miss.
 const ftpsReadWindow = 32 << 10
 
+// ftpsLinger is how long a short upload batch waits for more blocks. A
+// location keeps every packfile, so a short batch written early stays a small
+// packfile for good; waiting lets a trickle of writes fill one.
+const ftpsLinger = time.Hour
+
 // buildFTPSBlockStore opens the packfile store on the location's directory,
 // over FTPS or, when the location sets sftp, SFTP.
-// The store keeps every packfile: nothing compacts or deletes one, and it
-// reads the location's prefix as given. index, when not nil, is the local KV
+// The store keeps every packfile: nothing compacts or deletes one, except the
+// tail merge the location's MergeTailBytes enables, and it reads the
+// location's prefix as given. index, when not nil, is the local KV
 // that holds the store's entry cache and block location index.
 func buildFTPSBlockStore(le *logrus.Entry, location *account_settings.FtpsLocation, tlsConf *tls.Config, index kvtx.Store) (backendStore, error) {
 	client, err := buildFTPSClient(le, location, tlsConf)
@@ -95,9 +103,11 @@ func buildFTPSBlockStore(le *logrus.Entry, location *account_settings.FtpsLocati
 		return nil, err
 	}
 	return block_store_s3.NewPackStore(le, client, location.GetRoot(), location.GetPrefix(), &block_store_s3.PackStoreOptions{
-		KeepPacks:  true,
-		Index:      index,
-		ReadWindow: ftpsReadWindow,
+		KeepPacks:      true,
+		Index:          index,
+		ReadWindow:     ftpsReadWindow,
+		Linger:         ftpsLinger,
+		MergeTailBytes: int64(min(location.GetMergeTailBytes(), math.MaxInt64)),
 	}), nil
 }
 

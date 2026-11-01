@@ -231,6 +231,13 @@ export interface FtpsLocation {
    * default for MaxConns, which counts the SSH connections.
    */
   ftpsPort?: number
+  /**
+   * MergeTailBytes, when not zero, merges a short upload into the newest
+   * packfile smaller than this many bytes while the merged packfile still
+   * fits one upload batch, and deletes the packfile it replaces. Zero only
+   * ever adds packfiles.
+   */
+  mergeTailBytes?: bigint
 }
 
 export const FtpsLocation: MessageType<FtpsLocation> =
@@ -247,6 +254,7 @@ export const FtpsLocation: MessageType<FtpsLocation> =
       [8, 'sftp', 8],
       [9, 'host_key', 9],
       [10, 'ftps_port', 13],
+      [11, 'merge_tail_bytes', 4],
     ],
   )
 

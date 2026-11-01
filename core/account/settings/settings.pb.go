@@ -292,6 +292,11 @@ type FtpsLocation struct {
 	// fails to connect. The FTPS sessions follow ConnsPerLogin and the FTPS
 	// default for MaxConns, which counts the SSH connections.
 	FtpsPort uint32 `protobuf:"varint,10,opt,name=ftps_port,json=ftpsPort,proto3" json:"ftpsPort,omitempty"`
+	// MergeTailBytes, when not zero, merges a short upload into the newest
+	// packfile smaller than this many bytes while the merged packfile still
+	// fits one upload batch, and deletes the packfile it replaces. Zero only
+	// ever adds packfiles.
+	MergeTailBytes uint64 `protobuf:"varint,11,opt,name=merge_tail_bytes,json=mergeTailBytes,proto3" json:"mergeTailBytes,omitempty"`
 }
 
 func (x *FtpsLocation) Reset() {
@@ -366,6 +371,13 @@ func (x *FtpsLocation) GetHostKey() string {
 func (x *FtpsLocation) GetFtpsPort() uint32 {
 	if x != nil {
 		return x.FtpsPort
+	}
+	return 0
+}
+
+func (x *FtpsLocation) GetMergeTailBytes() uint64 {
+	if x != nil {
+		return x.MergeTailBytes
 	}
 	return 0
 }
@@ -1435,6 +1447,7 @@ func (m *FtpsLocation) CloneVT() *FtpsLocation {
 	r.Sftp = m.Sftp
 	r.HostKey = m.HostKey
 	r.FtpsPort = m.FtpsPort
+	r.MergeTailBytes = m.MergeTailBytes
 	if len(m.unknownFields) > 0 {
 		r.unknownFields = slices.Clone(m.unknownFields)
 	}
@@ -2159,6 +2172,9 @@ func (this *FtpsLocation) EqualVT(that *FtpsLocation) bool {
 		return false
 	}
 	if this.FtpsPort != that.FtpsPort {
+		return false
+	}
+	if this.MergeTailBytes != that.MergeTailBytes {
 		return false
 	}
 	return string(this.unknownFields) == string(that.unknownFields)
@@ -3491,6 +3507,11 @@ func (x *FtpsLocation) MarshalProtoJSON(s *json.MarshalState) {
 		s.WriteObjectField("ftpsPort")
 		s.WriteUint32(x.FtpsPort)
 	}
+	if x.MergeTailBytes != 0 || s.HasField("mergeTailBytes") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("mergeTailBytes")
+		s.WriteUint64(x.MergeTailBytes)
+	}
 	s.WriteObjectEnd()
 }
 
@@ -3538,6 +3559,9 @@ func (x *FtpsLocation) UnmarshalProtoJSON(s *json.UnmarshalState) {
 		case "ftps_port", "ftpsPort":
 			s.AddField("ftps_port")
 			x.FtpsPort = s.ReadUint32()
+		case "merge_tail_bytes", "mergeTailBytes":
+			s.AddField("merge_tail_bytes")
+			x.MergeTailBytes = s.ReadUint64()
 		}
 	})
 }
@@ -5136,6 +5160,11 @@ func (m *FtpsLocation) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	if m.unknownFields != nil {
 		i = protobuf_go_lite.EncodeRawBytes(dAtA, i, m.unknownFields)
 	}
+	if m.MergeTailBytes != 0 {
+		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(m.MergeTailBytes))
+		i--
+		dAtA[i] = 0x58
+	}
 	if m.FtpsPort != 0 {
 		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(m.FtpsPort))
 		i--
@@ -6651,6 +6680,7 @@ func (m *FtpsLocation) SizeVT() (n int) {
 	n += protobuf_go_lite.SizeBoolNonZero(1, m.Sftp)
 	n += protobuf_go_lite.SizeStringNonEmpty(1, m.HostKey)
 	n += protobuf_go_lite.SizeVarintNonZero(1, m.FtpsPort)
+	n += protobuf_go_lite.SizeVarintNonZero(1, m.MergeTailBytes)
 	n += len(m.unknownFields)
 	return n
 }
@@ -7425,6 +7455,10 @@ func (x *FtpsLocation) MarshalProtoText() string {
 	if x.FtpsPort != 0 {
 		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "ftps_port")
 		protobuf_go_lite.TextWriteUint(&sb, x.FtpsPort)
+	}
+	if x.MergeTailBytes != 0 {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "merge_tail_bytes")
+		protobuf_go_lite.TextWriteUint(&sb, x.MergeTailBytes)
 	}
 	return protobuf_go_lite.TextFinishMessage(&sb)
 }
@@ -8421,6 +8455,15 @@ func (m *FtpsLocation) UnmarshalVT(dAtA []byte) error {
 			}
 			m.FtpsPort = 0
 			m.FtpsPort, iNdEx, err = protobuf_go_lite.DecodeVarintUint32(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+		case 11:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field MergeTailBytes", wireType)
+			}
+			m.MergeTailBytes = 0
+			m.MergeTailBytes, iNdEx, err = protobuf_go_lite.DecodeVarint(dAtA, iNdEx)
 			if err != nil {
 				return err
 			}

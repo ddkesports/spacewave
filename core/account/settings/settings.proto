@@ -119,6 +119,11 @@ message FtpsLocation {
   // fails to connect. The FTPS sessions follow ConnsPerLogin and the FTPS
   // default for MaxConns, which counts the SSH connections.
   uint32 ftps_port = 10;
+  // MergeTailBytes, when not zero, merges a short upload into the newest
+  // packfile smaller than this many bytes while the merged packfile still
+  // fits one upload batch, and deletes the packfile it replaces. Zero only
+  // ever adds packfiles.
+  uint64 merge_tail_bytes = 11;
 }
 
 // SqlLocation locates a MySQL-compatible database that holds blocks. It only
