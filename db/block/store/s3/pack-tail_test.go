@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/s4wave/spacewave/db/block"
 	"github.com/sirupsen/logrus"
 )
 
@@ -43,6 +44,24 @@ func TestPackStoreMergesTail(t *testing.T) {
 		t.Fatalf("bucket holds %d packfiles after short batches; want 1", len(got))
 	}
 	checkBlocks(t, reader, "block", refs[:1])
+
+	// A block merged first without its refs gains them when it is written
+	// again with them.
+	parent := []byte("parent")
+	if _, _, err := store.PutBlock(ctx, parent, nil); err != nil {
+		t.Fatal(err)
+	}
+	parentRef, _, err := store.PutBlock(ctx, parent, &block.PutOpts{Refs: refs[:1], RefsKnown: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := newTestPackStore(t, client).GetStoredBlock(ctx, parentRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored == nil || len(stored.Refs) != 1 || !stored.Refs[0].EqualsRef(refs[0]) {
+		t.Fatalf("stored parent = %v; want the refs of its second write", stored)
+	}
 
 	// A block that fills the tail past the merge size merges once, and the next
 	// short batch starts a new packfile.

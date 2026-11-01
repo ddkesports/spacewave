@@ -74,10 +74,12 @@ func (s *PackStore) mergeTail(ctx context.Context, batch []*block.PutBatchEntry)
 		return false, nil
 	}
 
-	// Add the batch's blocks the tail does not hold.
+	// Add the batch's blocks. A batch block that knows its refs replaces the
+	// tail's copy, as a newer packfile would shadow it without a merge; one
+	// that does not keeps the tail's copy and the refs it holds.
 	for _, entry := range batch {
 		key := string(packfile.BlockKey(entry.Ref.GetHash()))
-		if _, ok := values[key]; ok {
+		if _, ok := values[key]; ok && !entry.RefsKnown {
 			continue
 		}
 		value, err := block.EncodeBlockObject(entry.Data, entry.Refs)

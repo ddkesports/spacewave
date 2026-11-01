@@ -54,6 +54,9 @@ const (
 	// packUploads bounds the packs an upload writes at once. Each holds about
 	// three copies of its blocks in memory while it writes.
 	packUploads = 3
+	// lookupRelists is how many times a lookup lists the packfile entries
+	// again after finding its packfile deleted.
+	lookupRelists = 4
 	// packLinger is how long a short pack of settled blocks waits for more.
 	packLinger = 30 * time.Second
 )
@@ -490,7 +493,8 @@ func (s *PackStore) Sync(context.Context) (bool, error) {
 // lookup runs find against the known packfiles, which the first lookup lists.
 // A miss is final. When find reports a deleted packfile, lookup lists the
 // entries, which drops the packfiles merged away and finds their merged
-// packfile, and runs find again.
+// packfile, and runs find again, up to lookupRelists times, so a reader
+// crosses tail merges that replace its packfile again while it lists.
 func (s *PackStore) lookup(ctx context.Context, find func() (bool, error)) error {
 	// Load the packfile entries before the first lookup and keep them fresh.
 	if err := s.loadEntries(ctx); err != nil {
@@ -503,18 +507,19 @@ func (s *PackStore) lookup(ctx context.Context, find func() (bool, error)) error
 		}
 	})
 
-	// Look for the block in the known packfiles.
-	listed := s.listings.Load()
-	found, err := find()
-	if found || err == nil || !errors.Is(err, ErrNotFound) {
-		return err
+	// Look for the block in the known packfiles, and list the entries again
+	// after each deleted packfile.
+	for range lookupRelists {
+		listed := s.listings.Load()
+		found, err := find()
+		if found || err == nil || !errors.Is(err, ErrNotFound) {
+			return err
+		}
+		if err := s.listEntries(ctx, listed); err != nil {
+			return err
+		}
 	}
-
-	// Refresh packfile entries after a deleted packfile and repeat the lookup.
-	if err := s.listEntries(ctx, listed); err != nil {
-		return err
-	}
-	_, err = find()
+	_, err := find()
 	return err
 }
 
