@@ -1055,6 +1055,16 @@ func (r *replayer) composeDeaths(root *block.BlockRef) *pendingNet {
 	return net
 }
 
+// netted marks the World pages among entries Netted, as markNetted describes,
+// when the replayer records deaths, whose records count their edges. It
+// returns entries and pages unchanged otherwise.
+func (r *replayer) netted(entries, pages []*block.PutBatchEntry) ([]*block.PutBatchEntry, []*block.PutBatchEntry) {
+	if r.deaths == nil || len(pages) == 0 {
+		return entries, pages
+	}
+	return markNetted(entries, pages)
+}
+
 // addWorldPut records a publication that put the World pages among entries,
 // whose puts report the pages the store already held.
 func (r *replayer) addWorldPut(receipt *block.PublicationReceipt, entries, pages []*block.PutBatchEntry) {

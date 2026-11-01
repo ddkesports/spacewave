@@ -443,7 +443,7 @@ func (t *soEngineWriteTx) publish(ctx context.Context, publisher sobject.StatePu
 		pages = kept.keep(pages)
 		pub.RootName, pub.Root = "", nil
 	}
-	pub.Entries = slices.Concat(payload, pages, saveEntries)
+	pub.Entries, pages = t.eng.replay.netted(slices.Concat(payload, pages, saveEntries), pages)
 	named, save := t.eng.replay.pages.split(saveEntries)
 	pub.Heads = []*block.AtomicHeadUpdate{countHead(head, WriteKindState)}
 	if cursor != nil {

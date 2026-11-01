@@ -99,7 +99,7 @@ type deadlistLedger struct {
 }
 
 // lost records that an interval's counts are lost: it names no record, or
-// its record was orphaned before it was encoded, so the edges its pages added
+// its record was orphaned before a save named it, so the edges its pages added
 // to stored blocks are never counted. The next save asks the store to recount.
 // An engine starting on a store an earlier one wrote loses the intervals that
 // one left open.
@@ -211,6 +211,9 @@ func (l *deadlistLedger) move(i int, state deadlistState) {
 		}
 		e.net, e.spans = nil, nil
 		if !e.stored && e.carried == 0 {
+			if e.record != nil {
+				l.lost()
+			}
 			e.record = nil
 		}
 	}

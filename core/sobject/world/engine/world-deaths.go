@@ -1,6 +1,7 @@
 package sobject_world_engine
 
 import (
+	"maps"
 	"slices"
 	"sync"
 
@@ -56,6 +57,32 @@ func newWorldPut(receipt *block.PublicationReceipt, entries, pages []*block.PutB
 		}
 	}
 	return worldPut{receipt: receipt, pages: kept, recounts: recounts}
+}
+
+// markNetted returns entries with each unmarked page among them replaced by a
+// copy marked Netted, and the copies, which newWorldPut takes as the pages.
+// The Volume leaves the edges between Netted entries to the interval's record,
+// so only a page whose receipt reaches a record may be marked: the record
+// counts the edges and lists each put that found the page in Found. It copies,
+// as MarkOriginal does, since a kept page may be in a publication in flight.
+func markNetted(entries, pages []*block.PutBatchEntry) (marked, netted []*block.PutBatchEntry) {
+	// Index the pages.
+	isPage := make(map[*block.PutBatchEntry]struct{}, len(pages))
+	for _, e := range pages {
+		isPage[e] = struct{}{}
+	}
+
+	// Replace each unmarked page with a marked copy.
+	marked = slices.Clone(entries)
+	for i, e := range marked {
+		if _, ok := isPage[e]; ok && !e.Tombstone && !e.Counted {
+			c := *e
+			c.Netted = true
+			marked[i] = &c
+			netted = append(netted, &c)
+		}
+	}
+	return marked, netted
 }
 
 // pendingNet is a named World's interval waiting for the puts that stored its
@@ -208,39 +235,73 @@ func (n *pendingNet) counted(from *block.BlockRef, recounts uint64, recounting b
 // put of it reported the store held is found; one any put stored afresh is not,
 // since that put deferred the edges to its children and the record counts
 // them. A page no successful put stored is never listed dead, which leaks when
-// another path stored it. Without steps, the
-// record counts the edges of the pages the successful puts stored afresh and
-// kills nothing, as block.NetPuts describes. Call it once ready.
+// another path stored it. Without steps, the record counts the edges of the
+// pages the successful puts stored afresh and kills nothing, as block.NetPuts
+// describes. Either way the record lists in Found each successful put that
+// found a page, whose count the Volume added until the record is named. Call
+// it once ready.
 func (n *pendingNet) net(to *block.BlockRef) *block.Replacements {
-	// Gather the pages the successful puts carried, and which of them a put
-	// stored afresh.
+	// Gather the pages the successful puts carried, which of them a put
+	// stored afresh, and each put that found one. A page listed twice in one
+	// put finds its own first copy, so its first entry decides.
 	fresh := make(map[string]bool)
 	carried := make(map[string]struct{})
-	var pages []*block.PutBatchEntry
+	var pages, foundPuts []*block.PutBatchEntry
 	for _, put := range n.puts {
 		if put.receipt.Err() != nil {
 			continue
 		}
 		existed := put.receipt.Existed()
-		for i, e := range put.pages {
+		for _, i := range slices.Sorted(maps.Keys(put.pages)) {
+			e := put.pages[i]
 			key := e.Ref.MarshalString()
 			if _, ok := carried[key]; !ok {
 				carried[key] = struct{}{}
 				pages = append(pages, e)
 			}
-			fresh[key] = fresh[key] || i >= len(existed) || !existed[i]
+			isFresh := i >= len(existed) || !existed[i]
+			fresh[key] = fresh[key] || isFresh
 		}
+		foundPuts = append(foundPuts, put.found(existed)...)
 	}
 
 	// Net the joined steps, or count the puts' edges.
+	var dead *block.Replacements
 	if n.steps == nil {
-		return block.NetPuts(pages, fresh)
+		dead = block.NetPuts(pages, fresh)
+	} else {
+		found := make(map[string]bool, len(fresh))
+		for key, isFresh := range fresh {
+			found[key] = !isFresh
+		}
+		dead = n.steps.Join().Net(found)
 	}
-	found := make(map[string]bool, len(fresh))
-	for key, isFresh := range fresh {
-		found[key] = !isFresh
+	for _, e := range foundPuts {
+		dead.Found = append(dead.Found, e.Ref)
 	}
-	return n.steps.Join().Net(found)
+	return dead
+}
+
+// found returns each page the put found stored, by its first entry, as the
+// Volume counts it.
+func (p *worldPut) found(existed []bool) []*block.PutBatchEntry {
+	// Index each page's first entry, which the Volume's put decides by.
+	first := make(map[string]int, len(p.pages))
+	for i, e := range p.pages {
+		key := e.Ref.MarshalString()
+		if j, ok := first[key]; !ok || i < j {
+			first[key] = i
+		}
+	}
+
+	// List the first entries the put found stored, in entry order.
+	var out []*block.PutBatchEntry
+	for _, i := range slices.Sorted(maps.Values(first)) {
+		if i < len(existed) && existed[i] {
+			out = append(out, p.pages[i])
+		}
+	}
+	return out
 }
 
 // worldDeaths gathers the World transitions the engine's block engines commit,

@@ -28,11 +28,9 @@ type ReplacementStep struct {
 // which releases each child it names: a record that also killed those pages
 // would hand their children to new parents a second time. So the record
 // counts the edges alone: a page stored afresh adds an edge to each child it
-// names, which no put counted unless the child shared its batch, and a child
-// stored afresh takes its first holder without a count. The record holds a
-// child once for each such edge, less that first holder. A found child whose
-// put counted a parent in its batch is held for that parent again, which
-// leaks.
+// names, which no put counted, and a child stored afresh takes its first
+// holder without a count. The record holds a child once for each such edge,
+// less that first holder.
 func NetPuts(pages []*PutBatchEntry, fresh map[string]bool) *Replacements {
 	// Count the edges from each page stored afresh, in page order.
 	edges := make(map[string]int)
@@ -136,10 +134,11 @@ func (s ReplacementSteps) Join() *ReplacementStep {
 }
 
 // Net derives what the step did to the stored pages. puts holds, by
-// MarshalString, each page a put stored, true when the put found the store
-// already held it and counted its holders there; nil means the step's puts
-// stored every page it created afresh. An original page is never found: its
-// put was counted.
+// MarshalString, each page a put carried, true when the put found the store
+// already held it; nil means the step's puts stored every page it created
+// afresh. A created page no put carried is the stored page: a live one is
+// stored, since the tree under the root is, and a dead one is never listed.
+// An original page is never found: its put was counted.
 //
 // The live pages are those To reaches through the pages the step wrote:
 // created, found or replaced. A page outside them is a stored subtree the step
@@ -148,7 +147,7 @@ func (s ReplacementSteps) Join() *ReplacementStep {
 // edges were counted when it was first stored.
 //
 // The candidates are the old root, every replaced page that may be stored and
-// every page one named. A replaced original page is listed dead only when the
+// every page one not stored afresh named. A replaced original page is listed dead only when the
 // dead old root reaches it through dead original pages: a page dirtied
 // through a parent the step dropped may still sit under a parent no step
 // touched, which holds it, so the record leaves it and its children alone. A
@@ -156,27 +155,34 @@ func (s ReplacementSteps) Join() *ReplacementStep {
 // created and dropped in memory never reached the store, and a later write may
 // store the same page afresh, which the listing would free. Every other dead
 // candidate heads a dead subtree, written or not, since a stored page's
-// children are stored.
+// children are stored. A dead page the step stored afresh is listed in
+// Dropped: no put counted its edges, so its children are not candidates.
 //
-// A live page that the step did not store afresh and is neither root is held
-// once for each page the step stored afresh, or the new root, that names it:
-// each such edge is a holder no put counted. A page the step stored afresh
-// takes its first holder without a count and is held once for each other. A
-// page whose old parent died moved, and applying the record takes that
-// parent's count back when it frees, which only applying can see; a page a
-// write copied under two parents keeps one more holder. A found page's holders
-// were counted at its put.
+// A live page that is neither root is held once for each page the step stored
+// afresh, or the new root, that names it: each such edge is a holder no put
+// counted. A page the step stored afresh takes its first holder without a
+// count and is held once for each other. A page whose old parent died moved,
+// and applying the record takes that parent's count back when it frees, which
+// only applying can see; a page a write copied under two parents keeps one
+// more holder.
 //
-// A live page existed when its edge from the new tree was counted already: a
-// put found it, or no page the step stored afresh and not the new root names
-// it and the step did not store it afresh. Applying the record takes one count
-// from it when its listed parent frees, and from the old root for the lineage.
+// A live page existed when it had a holder before the record: the step found
+// it, or did not store it afresh and no page it stored afresh, nor the new
+// root, names it. Applying the record takes one count from it when its listed
+// parent frees, and from the old root for the lineage.
 func (s *ReplacementStep) Net(puts map[string]bool) *Replacements {
-	// fresh reports whether the step stored the page under key afresh.
+	// fresh reports whether a put of the step stored the page under key
+	// afresh, and found whether the step created the page but found it stored.
 	fresh := func(key string) bool {
 		_, isCreated := s.created[key]
 		_, isOriginal := s.original[key]
-		return isCreated && !isOriginal && !puts[key]
+		found, carried := puts[key]
+		return isCreated && !isOriginal && (puts == nil || (carried && !found))
+	}
+	found := func(key string) bool {
+		_, isCreated := s.created[key]
+		_, isOriginal := s.original[key]
+		return isCreated && !isOriginal && !fresh(key)
 	}
 
 	// Walk the live pages from the new root through the written pages,
@@ -245,7 +251,8 @@ func (s *ReplacementStep) Net(puts map[string]bool) *Replacements {
 	// List the dead replaced pages, and gather the pages each stored one
 	// named. A dead original page the old root does not reach is untouched:
 	// a stored parent outside the step holds it. A replaced page no put
-	// stored counted no holder of the pages it named.
+	// stored counted no holder of the pages it named, and a dead one stored
+	// afresh is dropped, its edges never counted.
 	named := make(map[string]*BlockRef)
 	listed := make(map[string]struct{})
 	readNamed := make(map[string]struct{})
@@ -258,8 +265,12 @@ func (s *ReplacementStep) Net(puts map[string]bool) *Replacements {
 			continue
 		}
 		if !isLive {
-			out.Replaced = append(out.Replaced, page.ref)
 			listed[key] = struct{}{}
+			if fresh(key) {
+				out.Dropped = append(out.Dropped, page.ref)
+				continue
+			}
+			out.Replaced = append(out.Replaced, page.ref)
 		}
 		for _, ref := range page.refs {
 			named[ref.MarshalString()] = ref
@@ -272,8 +283,12 @@ func (s *ReplacementStep) Net(puts map[string]bool) *Replacements {
 		_, isLive := live[key]
 		_, isReplaced := s.replaced[key]
 		if !isLive && !isReplaced && s.stored(puts, key) {
-			out.Replaced = append(out.Replaced, page.ref)
 			listed[key] = struct{}{}
+			if fresh(key) {
+				out.Dropped = append(out.Dropped, page.ref)
+			} else {
+				out.Replaced = append(out.Replaced, page.ref)
+			}
 		}
 	}
 
@@ -297,24 +312,18 @@ func (s *ReplacementStep) Net(puts map[string]bool) *Replacements {
 	// from a position outside the touched pages, or written by this step. A
 	// written page may equal a stored page inside a removed subtree.
 	//
-	// Hold each page the step did not store afresh once per fresh page naming
-	// it, whose edge no put counted. A dead page's edge to it is taken back
-	// when the record frees that page, so a page that only moved between
-	// parents nets nothing, and a page a write copied under two parents nets
-	// one. A page stored afresh takes its first holder without a count, so it
-	// is held for each other fresh page naming it. A found page's put counted
-	// its holders. List the live pages whose edge from the new tree existed.
+	// Hold each live page once per fresh page naming it, whose edge no put
+	// counted. A dead page's edge to it is taken back when the record frees
+	// that page, so a page that only moved between parents nets nothing, and
+	// a page a write copied under two parents nets one. A page stored afresh
+	// takes its first holder without a count, so it is held for each other
+	// fresh page naming it. List the live pages that had a holder before.
 	from, to := s.From.MarshalString(), s.To.MarshalString()
 	for key, ref := range live {
-		_, isCreated := s.created[key]
-		_, isOriginal := s.original[key]
 		if key != from && key != to {
-			n := 0
-			switch {
-			case !isCreated || isOriginal:
-				n = direct[key]
-			case fresh(key):
-				n = max(direct[key]-1, 0)
+			n := direct[key]
+			if fresh(key) {
+				n = max(n-1, 0)
 			}
 			for range n {
 				out.Held = append(out.Held, ref)
@@ -323,7 +332,7 @@ func (s *ReplacementStep) Net(puts map[string]bool) *Replacements {
 		if _, isNamed := readNamed[key]; !isNamed {
 			out.Kept = append(out.Kept, ref)
 		}
-		if (puts[key] && !isOriginal) || (direct[key] == 0 && !fresh(key)) {
+		if found(key) || (direct[key] == 0 && !fresh(key)) {
 			out.Existed = append(out.Existed, ref)
 		}
 	}

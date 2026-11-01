@@ -32,6 +32,9 @@ import (
 // parent names it too. The old root loses the lineage's count last when it is
 // in Existed.
 //
+// A page in Dropped is decided as a root of the walk with no children: no put
+// counted its edges, so freeing it takes no count from the pages it names.
+//
 // A killed page whose child list the graph does not hold is a hole: the walk
 // skips its children, which can only leave a count too high.
 func (g *RefGraph) ResolveDeaths(ctx context.Context, from *block.BlockRef, dead *block.Replacements, visit func(node string, frees bool) error) (map[string]int64, error) {
@@ -45,7 +48,8 @@ func (g *RefGraph) ResolveDeaths(ctx context.Context, from *block.BlockRef, dead
 		}
 		return out
 	}
-	listed := set(dead.Replaced, dead.Removed)
+	listed := set(dead.Replaced, dead.Removed, dead.Dropped)
+	dropped := set(dead.Dropped)
 	live := set(dead.Kept)
 	counted := set(dead.Held, dead.Existed)
 
@@ -54,9 +58,14 @@ func (g *RefGraph) ResolveDeaths(ctx context.Context, from *block.BlockRef, dead
 	err := g.transaction(ctx, false, func(ctx context.Context, tx kvtx.Tx) error {
 		// Read the listed pages' child lists: their listed children are not
 		// roots of the walk, and a replaced page's unlisted children are live.
+		// A dropped page names no child the walk follows.
 		childLists := make(map[string][]string, len(listed))
 		named := make(map[string]struct{})
 		for node := range listed {
+			if _, ok := dropped[node]; ok {
+				childLists[node] = nil
+				continue
+			}
 			children, _, err := readChildrenTx(ctx, tx, node)
 			if err != nil {
 				return err

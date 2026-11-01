@@ -180,5 +180,12 @@ message Deadlist {
   // a put found them stored, or only pages that existed name them. The old
   // root is among them when an existing page still names it.
   repeated BlockRef existed = 9;
+  // Dropped are dead pages the interval stored afresh and dropped, whose
+  // edges to their children no put counted.
+  repeated BlockRef dropped = 10;
+  // Found are the pages an interval's puts found stored, listed once per
+  // put. Each such put held its page with one shared count until the record
+  // is named; naming the record takes one count from each entry.
+  repeated BlockRef found = 11;
 }
 

@@ -3,6 +3,7 @@ package kvtx
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -345,7 +346,7 @@ func (v *Volume) setBucketRoot(ctx context.Context, blocks block.StoreOps, rg *b
 	if err != nil || counted {
 		return err
 	}
-	return addDeadlistHolds(ctx, blocks, rg, ref)
+	return v.addDeadlistHolds(ctx, blocks, rg, ref)
 }
 
 // heldCounted reports whether naming the block next under the root name of
@@ -369,28 +370,41 @@ func heldCounted(ctx context.Context, rg *block_gc.RefGraph, bucketID, name, nex
 
 // addDeadlistHolds adds one shared count to each page the deadlist record at
 // ref lists as held, and to the old root it holds until applied, which the
-// sharing walk counts as the holder its name implies. Naming the record is the
-// holder's save, so the count lands in the transaction that makes the new
-// holders durable, exactly once per record: renaming it due, or naming it
-// again, adds nothing, and applying it takes the old root's count. The writer
-// keeps the old root named until the save that names the record, so the old
-// root's count never falls between the two.
-func addDeadlistHolds(ctx context.Context, blocks block.StoreOps, rg *block_gc.RefGraph, ref *block.BlockRef) error {
+// sharing walk counts as the holder its name implies, and takes back the
+// count each put that found a page in Found held it with. Naming the record
+// is the holder's save, so the counts land in the transaction that makes the
+// new holders durable, exactly once per record: renaming it due, or naming it
+// again, changes nothing, and applying it takes the old root's count. The
+// writer keeps the old root named until the save that names the record, so
+// the old root's count never falls between the two. A change below zero
+// leaves the count at zero and counts in deadlistCountUnderflows.
+func (v *Volume) addDeadlistHolds(ctx context.Context, blocks block.StoreOps, rg *block_gc.RefGraph, ref *block.BlockRef) error {
 	// Read the record from the transaction that stores it.
 	first, dead, err := block.ReadDeadlist(ctx, blocks, ref)
 	if err != nil {
 		return fmt.Errorf("count held pages of deadlist record: %w", err)
 	}
 
-	// Count each held page and the old root.
-	held := make([]string, 0, len(dead.Held)+1)
+	// Count each held page and the old root, less each found put.
+	changes := make(map[string]int64, len(dead.Held)+len(dead.Found)+1)
 	for _, page := range dead.Held {
-		held = append(held, block_gc.BlockIRI(page))
+		changes[block_gc.BlockIRI(page)]++
+	}
+	for _, page := range dead.Found {
+		changes[block_gc.BlockIRI(page)]--
 	}
 	if from := first.GetFrom(); !from.GetEmpty() {
-		held = append(held, block_gc.BlockIRI(from))
+		changes[block_gc.BlockIRI(from)]++
 	}
-	return rg.AddHolds(ctx, held)
+
+	// Apply the changes; the sharing walk counts the holders while counts
+	// are incomplete.
+	underflows, err := rg.ChangeHolds(ctx, changes)
+	if errors.Is(err, block_gc.ErrSharingWalk) {
+		return nil
+	}
+	v.deadlistCountUnderflows.Add(uint64(underflows)) // #nosec G115 -- a count is not negative.
+	return err
 }
 
 // addExistedHolds adds the shared counts a put batch gives the pages it found
@@ -415,6 +429,14 @@ func addDeadlistHolds(ctx context.Context, blocks block.StoreOps, rg *block_gc.R
 // writer marks only pages its kept World holds, and the collector frees no
 // page a named World reaches, so this path should be unreachable; revivedPuts
 // counts each entry it takes, and any is an error in that proof.
+//
+// An unmarked Netted entry's edges to other such entries are its interval's
+// to count: its deadlist record holds each page once per page stored afresh
+// that names it. So a found Netted entry gains no count from a Netted parent
+// and none for having no parent; it gains one count instead, which holds it
+// until its record is named, since a record applying before then may free its
+// stored parent. The record lists the entry in Found and naming it takes that
+// count back.
 //
 // It adds nothing on a Volume configured to keep no counts.
 //
@@ -457,7 +479,14 @@ func (v *Volume) addExistedHolds(ctx context.Context, blocks block.StoreOps, rg 
 
 	// Count each found entry once per new parent, or once with no parent in
 	// the batch, where a marked entry found stored is a parent; and each entry
-	// stored afresh once per new parent holding roots.
+	// stored afresh once per new parent holding roots. Edges between Netted
+	// entries count nothing, and a found Netted entry counts once.
+	netted := make(map[string]bool, len(listed))
+	for _, e := range listed {
+		if e.Netted && !e.Counted {
+			netted[block_gc.BlockIRI(e.Ref)] = true
+		}
+	}
 	parents := make(map[string]int, len(listed))
 	var holds []string
 	for _, e := range listed {
@@ -466,7 +495,7 @@ func (v *Volume) addExistedHolds(ctx context.Context, blocks block.StoreOps, rg 
 		for _, child := range e.Refs {
 			key := block_gc.BlockIRI(child)
 			isFound, isListed := found[key]
-			if _, dup := named[key]; dup || !isListed || (!isFound && !e.HoldsRoots) {
+			if _, dup := named[key]; dup || !isListed || (!isFound && !e.HoldsRoots) || (netted[block_gc.BlockIRI(e.Ref)] && netted[key]) {
 				continue
 			}
 			named[key] = struct{}{}
@@ -486,7 +515,7 @@ func (v *Volume) addExistedHolds(ctx context.Context, blocks block.StoreOps, rg 
 		}
 	}
 	for key, isFound := range found {
-		if isFound && parents[key] == 0 {
+		if isFound && (netted[key] || parents[key] == 0) {
 			holds = append(holds, key)
 		}
 	}

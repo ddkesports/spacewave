@@ -25,4 +25,12 @@ type PutBatchEntry struct {
 	// outside holder takes that put's first holder. A layer that drops the
 	// flag under-counts, which frees a live block.
 	HoldsRoots bool
+	// Netted reports that the entry is a page of an interval whose deadlist
+	// record counts the edges between its pages, such as a World page a
+	// recording engine puts. A store that counts shared blocks counts no edge
+	// from one Netted entry to another, and holds a Netted entry it finds
+	// stored with one count, which naming the record takes back: the record
+	// lists the entry in Found once per such put. A layer that drops the flag
+	// over-counts, which leaks and never frees.
+	Netted bool
 }

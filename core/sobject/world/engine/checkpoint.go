@@ -217,11 +217,13 @@ func (e *soEngine) nameWorld(ctx context.Context, world *InnerState, n int, heig
 
 	// Publish it after the admitted publications, splitting the kept pages
 	// from the save first: a receipt may store and drop them meanwhile. Mark
-	// the original pages on copies, leaving the kept pages unchanged.
+	// the original pages counted and the rest Netted on copies, leaving the
+	// kept pages unchanged.
 	pages, save := r.pages.split(entries)
 	if net != nil {
 		net.steps.MarkOriginal(entries)
 	}
+	entries, netted := r.netted(entries, pages)
 	receipt, err := r.pages.SubmitAtomic(ctx, &block.AtomicPublication{
 		Entries: entries,
 		Heads:   []*block.AtomicHeadUpdate{countHead(cursor, WriteKindReplay)},
@@ -235,7 +237,7 @@ func (e *soEngine) nameWorld(ctx context.Context, world *InnerState, n int, heig
 	countPublication(nil, pages, save)
 
 	// Hand the naming put to the interval's record.
-	put := newWorldPut(receipt, entries, pages, r.ledger.recounts)
+	put := newWorldPut(receipt, entries, netted, r.ledger.recounts)
 	named = &put
 	e.admit(receipt, e.retained, seqno)
 	go receipt.Release()

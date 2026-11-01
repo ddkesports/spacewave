@@ -115,6 +115,48 @@ func TestIntervalPutsCountSharedPages(t *testing.T) {
 	if n := readHolds(t, v, q); n != 1 {
 		t.Fatalf("recreated shared leaf holds=%d, want 1", n)
 	}
+
+	// Another World holds leaf s. An overflow put of an interval stores two
+	// parents of s afresh and finds s, all Netted: s gains one count, which
+	// holds it until the record is named, and none per parent.
+	s := scratchLeaf(t, scratch, world("s"))
+	if err := v.SetBucketRoots(ctx, "other", []*block.PutBatchEntry{scratchEntry(t, scratch, s)}, []block.NamedRoot{{Name: "s", Ref: s}}); err != nil {
+		t.Fatal(err)
+	}
+	parent := func(msg string) *block.PutBatchEntry {
+		data := []byte(msg)
+		ref, err := block.BuildBlockRef(data, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &block.PutBatchEntry{Ref: ref, Data: data, Refs: []*block.BlockRef{s}, RefsKnown: true, Netted: true}
+	}
+	leaf := scratchEntry(t, scratch, s)
+	leaf.Netted = true
+	overflow := []*block.PutBatchEntry{parent("a over s"), parent("b over s"), leaf}
+	if err := v.SetBucketRoots(ctx, "bucket", overflow, nil); err != nil {
+		t.Fatal(err)
+	}
+	if n := readHolds(t, v, s); n != 1 {
+		t.Fatalf("found Netted leaf holds=%d, want 1", n)
+	}
+
+	// The record holds s once per fresh parent and lists its found put.
+	// Naming it takes the put's count back: s has three holders.
+	dead := &block.Replacements{Held: []*block.BlockRef{s, s}, Found: []*block.BlockRef{s}}
+	record, first, err := block.EncodeDeadlist(1, nil, nil, dead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := v.SetBucketRoots(ctx, "bucket", record, []block.NamedRoot{{Name: block.DeadlistRootName(1), Ref: first}}); err != nil {
+		t.Fatal(err)
+	}
+	if n := readHolds(t, v, s); n != 2 {
+		t.Fatalf("named record leaf holds=%d, want 2", n)
+	}
+	if n := v.deadlistCountUnderflows.Load(); n != 0 {
+		t.Fatalf("deadlist count underflows=%d, want 0", n)
+	}
 }
 
 // scratchLeaf returns the leaf under root in store.

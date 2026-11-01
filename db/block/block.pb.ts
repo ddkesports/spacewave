@@ -357,6 +357,17 @@ export interface Deadlist {
    * root is among them when an existing page still names it.
    */
   existed?: BlockRef[]
+  /**
+   * Dropped are dead pages the interval stored afresh and dropped, whose
+   * edges to their children no put counted.
+   */
+  dropped?: BlockRef[]
+  /**
+   * Found are the pages an interval's puts found stored, listed once per
+   * put. Each such put held its page with one shared count until the record
+   * is named; naming the record takes one count from each entry.
+   */
+  found?: BlockRef[]
 }
 
 export const Deadlist: MessageType<Deadlist> =
@@ -370,4 +381,6 @@ export const Deadlist: MessageType<Deadlist> =
     [7, 'parts', 11, 1, BlockRef.codec],
     [8, 'held', 11, 1, BlockRef.codec],
     [9, 'existed', 11, 1, BlockRef.codec],
+    [10, 'dropped', 11, 1, BlockRef.codec],
+    [11, 'found', 11, 1, BlockRef.codec],
   ])

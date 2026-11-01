@@ -44,11 +44,12 @@
 \* which nets from the puts as a forfeit's successor does; several lineages,
 \* which SharedCounts.tla covers.
 \*
-\* IntervalCounts.cfg leaves overflow out, because the code's rules fail with
-\* it. An overflow put counts a found page once, however many new parents
-\* name it in memory, so Overflow "pages" fails CountsCover; DropRule "own"
-\* closes a second such gap. Overflow puts of an old page or of the named root
-\* also leak, failing CountsExact.
+\* IntervalCounts.cfg checks three commits without overflow puts, and
+\* IntervalCounts-overflow.cfg two commits with them and reader pins. Under
+\* CountRule "volume" an overflow put counts a found page once, however many
+\* new parents name it in memory, failing CountsCover, and overflow puts of
+\* an old page or of the named root leak, failing CountsExact. CountRule
+\* "hold", the code's rule, passes both configs.
 \*
 \* Switches, each set to the code's rule in IntervalCounts.cfg; the mutant
 \* configs flip one each:
@@ -88,12 +89,20 @@
 \*   "own" lists it as dropped and decides it alone, since no put counted its
 \*   edges. Only an overflow put stores such a page, and "replaced" then
 \*   takes counts that were never added.
+\* - CountRule: "volume" has the Volume count a found unmarked entry's new
+\*   edges from the batch and a found entry with no parent there. "net" has
+\*   the Volume count nothing for a found entry, and Net hold each live page
+\*   the interval found once per fresh parent naming it. "hold" nets as "net"
+\*   does, but the Volume counts each put that finds an unmarked entry once,
+\*   holding the page until the record is named, and naming the record takes
+\*   those counts back: under "net" a record applying before the name frees
+\*   a page the interval's put found.
 
 EXTENDS Integers, FiniteSets, Sequences
 
 CONSTANTS MaxCommits, Overflow, Pins, Forfeits,
           HeldRule, FoundRule, Unfunded, HoldRule, Recount, OriginalRule, ListRule,
-          FreshHeld, WalkRule, DropRule,
+          FreshHeld, WalkRule, DropRule, CountRule,
           MarkedParent
 
 None == "none"
@@ -136,6 +145,7 @@ VARIABLES
   freshSet,  \* pages some put of this interval stored afresh
   foundSet,  \* pages some put of this interval found
   firstFresh,\* pages whose first put this interval stored afresh
+  foundPuts, \* each page's puts this interval that found it, unmarked
   funded,    \* the engine counts on the lineage of named as a holder
   lineage,   \* ghost: the counts do hold the lineage of named
   queue,     \* named records not yet applied, oldest first
@@ -146,7 +156,7 @@ VARIABLES
   lossy,     \* a forfeit or unfunded record ran: leaks are allowed
   underflow  \* a count change went below zero
 vars == <<cur, named, stored, extra, rel, kept, steps, putSet, freshSet,
-          foundSet, firstFresh, funded, lineage, queue, walk, pin, hold,
+          foundSet, firstFresh, foundPuts, funded, lineage, queue, walk, pin, hold,
           commits, lossy, underflow>>
 
 PinRoots == IF pin = None THEN {} ELSE {pin}
@@ -163,6 +173,7 @@ Init ==
   /\ rel = [p \in Pages |-> 0]
   /\ kept = {} /\ steps = <<>>
   /\ putSet = {} /\ freshSet = {} /\ foundSet = {} /\ firstFresh = {}
+  /\ foundPuts = [p \in Pages |-> 0]
   /\ funded = TRUE /\ lineage = TRUE
   /\ queue = <<>> /\ walk = Idle
   /\ commits = 0 /\ lossy = FALSE /\ underflow = FALSE
@@ -182,14 +193,17 @@ PutCounts(E, K, H) ==
       parents(k) == Cardinality({e \in listed \cup
                                    (IF MarkedParent THEN keptK ELSE {}) :
                                    k \in Kids(e)})
-      fromNew(k) == IF k \in listed /\ found(k)
+      fromNew(k) == IF CountRule = "volume" /\ k \in listed /\ found(k)
                     THEN Cardinality({e \in listed : ~found(e) /\ k \in Kids(e)})
                     ELSE 0
-      noParent(k) == IF found(k) /\ parents(k) = 0 /\ k \notin H THEN 1 ELSE 0
+      noParent(k) == IF CountRule = "volume" /\ found(k) /\ parents(k) = 0
+                        /\ k \notin H THEN 1 ELSE 0
+      provisional(k) == IF CountRule = "hold" /\ found(k) THEN 1 ELSE 0
       fromRevived(k) == Cardinality({e \in revived : k \in Kids(e)
                           /\ (k \in keptK \/ (k \notin listed /\ k \in stored))})
   IN [p \in Pages |-> (IF p \in E /\ ~existed(p) THEN 0 ELSE extra[p])
-                       + fromNew(p) + noParent(p) + fromRevived(p)]
+                       + fromNew(p) + noParent(p) + provisional(p)
+                       + fromRevived(p)]
 
 \* The receipts of a batch's unmarked entries, folded into the interval's.
 Receipts(E, K) ==
@@ -199,6 +213,7 @@ Receipts(E, K) ==
      /\ freshSet' = freshSet \cup fresh
      /\ foundSet' = foundSet \cup (R \cap stored)
      /\ firstFresh' = firstFresh \cup (fresh \ putSet)
+     /\ foundPuts' = [p \in Pages |-> foundPuts[p] + (IF p \in R \cap stored THEN 1 ELSE 0)]
 
 \* ---------------------------------------------------------------------------
 \* Commit moves the World in memory from cur to r. It replaces Rp, encodes C,
@@ -249,7 +264,10 @@ Net(s, F, P) ==
       created == UNION {s[i].created : i \in 1..Len(s)}
       original == Original(s)
       isStored(p) == p \in original \/ p \in P
-      foundPages == {p \in created : p \in F /\ p \notin original}
+      \* A created page no put carried is the stored page: a live one is
+      \* stored, since the tree under the root is, and a dead one is never
+      \* listed.
+      foundPages == {p \in created : (p \in F \/ p \notin P) /\ p \notin original}
       createdNet == created \ foundPages
       RECURSIVE NetReach(_)
       NetReach(p) == {p} \cup IF p \in created \cup replaced
@@ -290,6 +308,7 @@ Net(s, F, P) ==
       heldBase(k) == k \in live /\ k # from /\ k # to
                      /\ IF OriginalRule = "stored"
                         THEN k \notin created \ original \/ k \in directNet
+                             \/ (CountRule \in {"net", "hold"} /\ k \in foundPages)
                         ELSE k \notin replaced /\ k \notin created
       edges(k) == IF OriginalRule = "stored" /\ k \in directNet
                   THEN IF FreshHeld /\ direct(k) > 0 THEN direct(k) - 1 ELSE 0
@@ -316,8 +335,11 @@ NetPuts(P, fresh) ==
 \* the root, and names the interval's record. Forfeit does the same save with
 \* the interval's puts dropped: no record, and a recount.
 
+\* The walk passes through a page an overflow put stored above a kept page,
+\* as the page set tracks it, so a kept page below one is put too.
 RECURSIVE KeptReach(_)
 KeptReach(p) == IF p \in kept THEN {p} \cup UNION {KeptReach(k) : k \in Kids(p)}
+                ELSE IF p \in putSet THEN UNION {KeptReach(k) : k \in Kids(p)}
                 ELSE {}
 
 \* The save: the naming batch's counts, with the replay hold block naming the
@@ -348,8 +370,14 @@ Name ==
          netted == funded \/ Unfunded = "steps"
          rec == Net(steps, F, P)
          held == IF netted THEN rec.held ELSE NetPuts(P, fresh)
+         \* Naming the record takes back each found put's count.
+         back(p) == IF CountRule = "hold"
+                    THEN foundPuts[p] + (IF p \in (E \ K) \cap stored THEN 1 ELSE 0)
+                    ELSE 0
+         next(p) == saved[p] + held[p] - back(p)
      IN /\ stored' = stored \cup E
-        /\ extra' = [p \in Pages |-> saved[p] + held[p]]
+        /\ underflow' = (underflow \/ \E p \in Pages : next(p) < 0)
+        /\ extra' = [p \in Pages |-> IF next(p) < 0 THEN 0 ELSE next(p)]
         /\ queue' = IF netted THEN Append(queue, rec) ELSE queue
         \* The root's first put this interval takes the lineage as its first
         \* holder when it stores the root afresh; a found root gains only the
@@ -361,7 +389,8 @@ Name ==
   /\ named' = cur
   /\ steps' = <<>> /\ kept' = {}
   /\ putSet' = {} /\ freshSet' = {} /\ foundSet' = {} /\ firstFresh' = {}
-  /\ UNCHANGED <<cur, walk, pin, commits, underflow>>
+  /\ foundPuts' = [p \in Pages |-> 0]
+  /\ UNCHANGED <<cur, walk, pin, commits>>
 
 \* The recount counts each stored page's holders from the graph: the stored
 \* pages naming it, the pin, the replay hold, and the From of each named
@@ -394,6 +423,7 @@ Forfeit ==
   /\ named' = cur
   /\ steps' = <<>> /\ kept' = {}
   /\ putSet' = {} /\ freshSet' = {} /\ foundSet' = {} /\ firstFresh' = {}
+  /\ foundPuts' = [p \in Pages |-> 0]
   /\ UNCHANGED <<cur, queue, walk, pin, commits, underflow>>
 
 \* ---------------------------------------------------------------------------
@@ -428,7 +458,7 @@ StartApply ==
                  changes |-> [p \in Pages |-> 0]]
   /\ queue' = Tail(queue)
   /\ UNCHANGED <<cur, named, stored, extra, rel, kept, steps, putSet, freshSet,
-                 foundSet, firstFresh, funded, lineage, pin, hold, commits, lossy,
+                 foundSet, firstFresh, foundPuts, funded, lineage, pin, hold, commits, lossy,
                  underflow>>
 
 \* A page loses one count for each parent in the walk that frees, and a root
@@ -460,7 +490,7 @@ WalkStep ==
                    \cup (IF n \in walk.roots THEN {"root"} ELSE {}) :
                Decide(IF q = "root" \/ q \in walk.frees THEN 1 ELSE 0)
   /\ UNCHANGED <<cur, named, stored, extra, rel, kept, steps, putSet, freshSet,
-                 foundSet, firstFresh, funded, lineage, queue, pin, hold, commits, lossy,
+                 foundSet, firstFresh, foundPuts, funded, lineage, queue, pin, hold, commits, lossy,
                  underflow>>
 
 EndApply ==
@@ -477,7 +507,7 @@ EndApply ==
         /\ stored' = stored \ walk.frees
   /\ walk' = Idle
   /\ UNCHANGED <<cur, named, rel, kept, steps, putSet, freshSet, foundSet,
-                 firstFresh, funded, lineage, queue, pin, hold, commits, lossy>>
+                 firstFresh, foundPuts, funded, lineage, queue, pin, hold, commits, lossy>>
 
 \* ---------------------------------------------------------------------------
 \* Releases, the reader pin.
@@ -494,7 +524,7 @@ Resolve(p) ==
                                     + (IF q \in Children(p, {}) THEN 1 ELSE 0)]
           /\ UNCHANGED extra
   /\ UNCHANGED <<cur, named, kept, steps, putSet, freshSet, foundSet,
-                 firstFresh, funded, lineage, queue, walk, pin, hold, commits, lossy,
+                 firstFresh, foundPuts, funded, lineage, queue, walk, pin, hold, commits, lossy,
                  underflow>>
 
 Pin ==
@@ -506,7 +536,7 @@ Pin ==
   /\ extra' = [extra EXCEPT ![named] = @ + 1]
   /\ commits' = commits + 1
   /\ UNCHANGED <<cur, named, stored, rel, kept, steps, putSet, freshSet,
-                 foundSet, firstFresh, funded, lineage, queue, walk, hold, lossy,
+                 foundSet, firstFresh, foundPuts, funded, lineage, queue, walk, hold, lossy,
                  underflow>>
 
 Unpin ==
@@ -515,7 +545,7 @@ Unpin ==
   /\ pin' = None
   /\ rel' = [rel EXCEPT ![pin] = @ + 1]
   /\ UNCHANGED <<cur, named, stored, extra, kept, steps, putSet, freshSet,
-                 foundSet, firstFresh, funded, lineage, queue, walk, hold, commits,
+                 foundSet, firstFresh, foundPuts, funded, lineage, queue, walk, hold, commits,
                  lossy, underflow>>
 
 Next ==

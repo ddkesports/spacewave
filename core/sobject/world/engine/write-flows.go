@@ -128,7 +128,7 @@ func countDeaths(dead *block.Replacements, ok bool) {
 		writeFlows.forfeits.Add(1)
 		return
 	}
-	writeFlows.deaths.Add(uint64(len(dead.Replaced) + len(dead.Removed)))
+	writeFlows.deaths.Add(uint64(len(dead.Replaced) + len(dead.Removed) + len(dead.Dropped)))
 }
 
 // splitPayloads splits a commit's block entries into the payload blocks,
