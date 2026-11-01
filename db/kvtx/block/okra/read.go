@@ -84,6 +84,10 @@ func (t *Tx) findEntriesBatch(
 	values [][]byte,
 	found []bool,
 ) error {
+	// Read the blocks this page leads to at once, before the walk below loads
+	// them one by one.
+	prefetchBatch(ctx, page, pageCursor, lookups)
+
 	// Resolve requested values directly when the page is a leaf.
 	if page.GetLevel() == 0 {
 		for _, lookup := range lookups {
@@ -148,6 +152,52 @@ func (t *Tx) findEntriesBatch(
 		}
 	}
 	return nil
+}
+
+// batchPrefetchConcurrency bounds the block reads one batch page starts at once.
+const batchPrefetchConcurrency = 16
+
+// prefetchBatch reads the blocks the lookups under page lead to, the child
+// pages of an inner page or the value blocks of a leaf, through the cursor's
+// store with several reads in flight, so the serial walk that follows finds
+// them cached. A remote store answers each miss in one round trip, and the
+// walk would otherwise pay those round trips one after another. Failures are
+// left for the walk to report.
+func prefetchBatch(ctx context.Context, page *Page, pageCursor *block.Cursor, lookups []batchLookup) {
+	// Prefetch only through a store and only when the walk loads several blocks.
+	store, _ := pageCursor.GetBlockStore()
+	if store == nil || len(lookups) < 2 {
+		return
+	}
+
+	// Collect each distinct block the lookups reach from this page.
+	entries := page.GetEntries()
+	var refs []*block.BlockRef
+	last := -1
+	for _, lookup := range lookups {
+		idx := page.searchEntry(lookup.key)
+		if idx < 0 || idx == last {
+			continue
+		}
+		last = idx
+		ent := entries[idx]
+		ref := ent.GetChildRef()
+		if page.GetLevel() == 0 {
+			if ent.GetAnchor() || ent.GetValueBlob() != nil || !bytes.Equal(ent.GetKey(), lookup.key) {
+				continue
+			}
+			ref = ent.GetValueRef()
+		}
+		if !ref.GetEmpty() {
+			refs = append(refs, ref)
+		}
+	}
+
+	// Read them together; the walk reports any failure.
+	if len(refs) < 2 {
+		return
+	}
+	_ = block.Prefetch(ctx, store, refs, batchPrefetchConcurrency)
 }
 
 func (p *Page) containsKey(key []byte) bool {
