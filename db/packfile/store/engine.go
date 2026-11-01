@@ -96,7 +96,12 @@ type PackReader struct {
 	// Span store. spans are sorted by offset and disjoint. lru orders the
 	// spans from least to most recently used. A fetch hands its span to its
 	// waiters directly, so eviction may take any span, the newest included.
+	// spanRef is set by each span use and cleared by the budget's span ring
+	// sweep. spanElem is the reader's place in that ring, guarded by the
+	// budget's mtx.
 	spans         []*span
+	spanRef       atomic.Bool
+	spanElem      *list.Element
 	lru           list.List
 	residentBytes int64
 	budget        *residentBudget
