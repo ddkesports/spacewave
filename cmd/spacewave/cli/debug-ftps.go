@@ -16,9 +16,11 @@ import (
 	"github.com/aperturerobotics/cli"
 	"github.com/dustin/go-humanize"
 	block_store_ftps "github.com/s4wave/spacewave/db/block/store/ftps"
+	block_store_s3 "github.com/s4wave/spacewave/db/block/store/s3"
+	block_store_sftp "github.com/s4wave/spacewave/db/block/store/sftp"
 )
 
-// ftpsArgs locate an FTPS server and its login.
+// ftpsArgs locate an FTPS or SFTP server and its login.
 type ftpsArgs struct {
 	// host is the server's host or host:port.
 	host string
@@ -27,12 +29,31 @@ type ftpsArgs struct {
 	// root is the directory holding the objects, relative to the login
 	// directory.
 	root string
-	// conns is the number of control connections.
+	// conns is the number of control connections, or of SSH connections
+	// with sftp.
 	conns int
+	// sftp reaches the server over SFTP instead of FTPS.
+	sftp bool
+	// hostKey pins the SFTP server's host key, as block_store_sftp.Config's
+	// HostKey describes.
+	hostKey string
 }
 
-// client reads the login from the netrc file and builds the FTPS client.
-func (a *ftpsArgs) client() (*block_store_ftps.Client, error) {
+// ftpsFlags returns the flags that set a, whose server holds the packs: the
+// use names what the command does with them, such as "read the packs from".
+func ftpsFlags(a *ftpsArgs, use string) []cli.Flag {
+	return []cli.Flag{
+		&cli.StringFlag{Name: "ftps-host", Usage: use + " this FTPS or SFTP server instead of the bucket", Destination: &a.host},
+		&cli.StringFlag{Name: "ftps-netrc", Usage: "the netrc file holding the server's logins", Destination: &a.netrc},
+		&cli.StringFlag{Name: "ftps-root", Usage: "the server directory holding the key prefix", Destination: &a.root},
+		&cli.IntFlag{Name: "ftps-conns", Usage: "the most FTPS sessions open at once across the netrc logins, spares included, or the SSH connections with --sftp", Value: block_store_ftps.DefaultMaxSessions, Destination: &a.conns},
+		&cli.BoolFlag{Name: "sftp", Usage: "reach --ftps-host over SFTP, on port 22 unless the host names one", Destination: &a.sftp},
+		&cli.StringFlag{Name: "sftp-host-key", Usage: "the SFTP server's host key line or SHA256 fingerprint; empty trusts the first key", EnvVars: []string{"HYPERLINE_WORLD_SFTP_HOST_KEY"}, Destination: &a.hostKey},
+	}
+}
+
+// logins reads the logins of the host from the netrc file.
+func (a *ftpsArgs) logins() ([]block_store_ftps.Login, error) {
 	// Require the login file and the root directory.
 	if a.netrc == "" || a.root == "" {
 		return nil, errors.New("--ftps-host needs --ftps-netrc and --ftps-root")
@@ -43,11 +64,39 @@ func (a *ftpsArgs) client() (*block_store_ftps.Client, error) {
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		host = h
 	}
-	logins, err := block_store_ftps.ReadNetrc(a.netrc, host)
+	return block_store_ftps.ReadNetrc(a.netrc, host)
+}
+
+// client reads the login from the netrc file and builds the FTPS client.
+func (a *ftpsArgs) client() (*block_store_ftps.Client, error) {
+	logins, err := a.logins()
 	if err != nil {
 		return nil, err
 	}
 	return block_store_ftps.NewClient(block_store_ftps.Config{Addr: a.host, Logins: logins, MaxSessions: a.conns}), nil
+}
+
+// objects connects to the server over SFTP when sftp is set and FTPS
+// otherwise.
+func (a *ftpsArgs) objects() (block_store_s3.ObjectStore, error) {
+	if !a.sftp {
+		client, err := a.client()
+		if err != nil {
+			return nil, err
+		}
+		return client, nil
+	}
+	logins, err := a.logins()
+	if err != nil {
+		return nil, err
+	}
+	return block_store_sftp.NewClient(block_store_sftp.Config{
+		Addr:     a.host,
+		User:     logins[0].User,
+		Password: logins[0].Password,
+		HostKey:  a.hostKey,
+		Conns:    a.conns,
+	})
 }
 
 // smokeObjectSize is the size of the objects the smoke test writes, about

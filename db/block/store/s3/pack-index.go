@@ -372,6 +372,34 @@ func (x *packIndex) Locate(ctx context.Context, key []byte) (string, bool, error
 	return x.ids[num], true, nil
 }
 
+// locateAll reports, for each key, whether an h row places it in a pack the
+// table still holds, in one read transaction.
+func (x *packIndex) locateAll(ctx context.Context, keys [][]byte) ([]bool, error) {
+	// Read every row in one snapshot.
+	tx, err := x.store.NewTransaction(ctx, false)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Discard()
+
+	// Place each key whose row names a pack the table holds.
+	out := make([]bool, len(keys))
+	for i, key := range keys {
+		value, ok, err := tx.Get(ctx, hashRowKey(key))
+		if err != nil {
+			return nil, err
+		}
+		if !ok || len(value) != 4 {
+			continue
+		}
+		num := binary.BigEndian.Uint32(value)
+		x.mtx.RLock()
+		out[i] = int(num) < len(x.ids) && x.ids[num] != ""
+		x.mtx.RUnlock()
+	}
+	return out, nil
+}
+
 // Indexed reports whether every key of the pack is in h rows.
 func (x *packIndex) Indexed(id string) bool {
 	x.mtx.RLock()

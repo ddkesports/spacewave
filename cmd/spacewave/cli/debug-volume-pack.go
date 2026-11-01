@@ -20,7 +20,6 @@ import (
 
 	"github.com/aperturerobotics/cli"
 	"github.com/dustin/go-humanize"
-	block_store_ftps "github.com/s4wave/spacewave/db/block/store/ftps"
 	block_store_s3 "github.com/s4wave/spacewave/db/block/store/s3"
 	"github.com/s4wave/spacewave/db/s4db"
 	store_kvkey "github.com/s4wave/spacewave/db/store/kvkey"
@@ -53,6 +52,8 @@ type packArgs struct {
 	uploads int
 	// shards is the number of key ranges each pass packs in parallel.
 	shards int
+	// listPath, when set, packs only the blocks the key list names.
+	listPath string
 	// skipRest leaves out the count of keys outside the block range.
 	skipRest bool
 	// sqlLog, when set, also packs the SQL block store's rows the volume
@@ -71,7 +72,7 @@ func newDebugVolumePackCommand() *cli.Command {
 	var args packArgs
 	return &cli.Command{
 		Name:      "volume-pack",
-		Usage:     "write a live volume file's World blocks to the bucket as packfiles",
+		Usage:     "write a live volume file's World blocks, or the listed blocks, to the bucket as packfiles",
 		ArgsUsage: "<volume-file>",
 		Description: "Opens the s4db volume file read-only beside the process that writes it: it takes no lock, no reader slot " +
 			"and writes no byte of the file. It streams the blocks of the World in key order into packfiles of about " +
@@ -84,8 +85,10 @@ func newDebugVolumePackCommand() *cli.Command {
 			"range and the bytes of their keys and values, which size the file volume-switch writes. " +
 			"The upload rate is limited by --bytes-per-second; the command does not watch the backend's load. " +
 			"With --sql-log it also packs, beside the volume's blocks, the rows of the SQL block store the volume lacks, " +
-			"reading the password from " + sqlPasswordEnv + "; run it with the backend stopped.",
-		Flags: []cli.Flag{
+			"reading the password from " + sqlPasswordEnv + "; run it with the backend stopped. " +
+			"With --list it packs only the blocks a volume-unpacked key list names, whichever store owns them, " +
+			"with the same log, hash check and references.",
+		Flags: append([]cli.Flag{
 			&cli.StringFlag{Name: "world-store", Usage: "the bucket ID of the World's block store, p/<provider>/<account>/blk/<id>", Destination: &args.worldStore, Required: true},
 			&cli.StringFlag{Name: "log", Usage: "the pack log, created when missing and resumed when present", Destination: &args.logPath, Required: true},
 			&cli.StringFlag{Name: "bucket", Usage: "the bucket that receives the packs", EnvVars: []string{"HYPERLINE_PROD_BUCKET"}, Destination: &args.bucket},
@@ -96,10 +99,7 @@ func newDebugVolumePackCommand() *cli.Command {
 			&cli.IntFlag{Name: "pack-mib", Usage: "block data per pack in MiB; zero uses half the pack limit", Destination: &args.packMiB},
 			&cli.IntFlag{Name: "uploads", Usage: "packs uploading at once in each shard", Value: 8, Destination: &args.uploads},
 			&cli.IntFlag{Name: "shards", Usage: "key ranges each pass packs in parallel, split on the block hash; shard i > 0 logs to the log path with .NN appended", Value: 1, Destination: &args.shards},
-			&cli.StringFlag{Name: "ftps-host", Usage: "write the packs to this FTPS server instead of the bucket", Destination: &args.ftps.host},
-			&cli.StringFlag{Name: "ftps-netrc", Usage: "the netrc file holding the FTPS login", Destination: &args.ftps.netrc},
-			&cli.StringFlag{Name: "ftps-root", Usage: "the FTPS directory holding the key prefix", Destination: &args.ftps.root},
-			&cli.IntFlag{Name: "ftps-conns", Usage: "the most FTPS sessions open at once across the netrc logins, spares included", Value: block_store_ftps.DefaultMaxSessions, Destination: &args.ftps.conns},
+			&cli.StringFlag{Name: "list", Usage: "pack only the blocks this key list from volume-unpacked names, outside the World too; takes no --shards or --sql-log", Destination: &args.listPath},
 			&cli.BoolFlag{Name: "skip-rest", Usage: "do not count the keys outside the block range", Destination: &args.skipRest},
 			&cli.StringFlag{Name: "sql-log", Usage: "also pack the SQL block store's rows the volume lacks, with this log", Destination: &args.sqlLog},
 			&cli.StringFlag{Name: "sql-host", Usage: "with --sql-log, the database host", Destination: &args.sql.Host},
@@ -110,7 +110,7 @@ func newDebugVolumePackCommand() *cli.Command {
 			&cli.BoolFlag{Name: "sql-tls", Usage: "with --sql-log, connect with TLS", Value: true, Destination: &args.sql.TLS},
 			&cli.StringFlag{Name: "sql-tls-cert-sha256", Usage: "with --sql-log, the hex SHA-256 of the server certificate to trust", Destination: &args.sql.TLSCertSHA256},
 			&cli.StringFlag{Name: "sql-store-id", Usage: "with --sql-log, the block store id of the World's rows", Destination: &args.sqlStoreID},
-		},
+		}, ftpsFlags(&args.ftps, "write the packs to")...),
 		Action: func(c *cli.Context) error {
 			if c.NArg() != 1 {
 				return errors.New("expected the volume file")
@@ -153,6 +153,9 @@ func packVolumeFile(ctx context.Context, path string, args *packArgs, w io.Write
 		SkipRest:       args.skipRest,
 		Uploads:        args.uploads,
 	}
+	if args.listPath != "" {
+		return packVolumeList(ctx, cfg, args, w, start)
+	}
 	g, gctx := errgroup.WithContext(ctx)
 	firstBlock, err := firstVolumeBlock(ctx, vol, cfg.Keys.GetBlockFullPrefix())
 	if err != nil {
@@ -188,6 +191,29 @@ func packVolumeFile(ctx context.Context, path string, args *packArgs, w io.Write
 		}
 	}
 	return g.Wait()
+}
+
+// packVolumeList packs the blocks of cfg.Source the key list names, writing
+// progress lines to w.
+func packVolumeList(ctx context.Context, cfg packmove.PackConfig, args *packArgs, w io.Writer, start time.Time) error {
+	// Refuse the options a list run does not take.
+	if args.shards > 1 || args.sqlLog != "" {
+		return errors.New("--list takes no --shards or --sql-log")
+	}
+
+	// Pack the list, reporting progress at most once per interval.
+	cfg.ListPath = args.listPath
+	var last time.Time
+	cfg.Progress = func(p packmove.PackProgress) {
+		if time.Since(last) < copyReportInterval {
+			return
+		}
+		last = time.Now()
+		fmt.Fprintf(w, "%s: list: %s\n", time.Since(start).Round(time.Second), formatPackProgress(p))
+	}
+	p, err := packmove.PackList(ctx, cfg)
+	fmt.Fprintf(w, "%s: list done: %s\n", time.Since(start).Round(time.Second), formatPackProgress(p))
+	return err
 }
 
 // digestLen is the length of the block hash digest that ends every block and
@@ -284,7 +310,7 @@ func firstVolumeBlock(ctx context.Context, vol kvtx.Store, prefix []byte) ([]byt
 func (args *packArgs) objectStore() (block_store_s3.ObjectStore, string, error) {
 	// Prefer the FTPS server.
 	if args.ftps.host != "" {
-		client, err := args.ftps.client()
+		client, err := args.ftps.objects()
 		return client, args.ftps.root, err
 	}
 

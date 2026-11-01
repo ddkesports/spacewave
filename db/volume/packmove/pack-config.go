@@ -26,6 +26,9 @@ type PackConfig struct {
 	// SQL is the World's rows in a SQL block store, which PackSQL packs; Pack
 	// ignores it.
 	SQL SQLRows
+	// ListPath is the key list PackList packs, as FindUnpacked writes it;
+	// Pack and PackSQL ignore it.
+	ListPath string
 	// Packer receives the packs.
 	Packer BlockPacker
 	// KeyStart and KeyEnd bound the keys a run packs: block keys relative to

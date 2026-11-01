@@ -9,6 +9,7 @@ import (
 
 	"github.com/aperturerobotics/go-kvfile"
 	"github.com/pkg/errors"
+	"github.com/s4wave/spacewave/db/block"
 	"github.com/s4wave/spacewave/db/packfile"
 	"golang.org/x/sync/errgroup"
 )
@@ -159,6 +160,22 @@ func (s *PackStore) BuildIndex(ctx context.Context, width int, report func(Index
 		report(progress.load())
 	}
 	return nil
+}
+
+// LocateBlocks reports, for each ref, whether the local index places it in a
+// pack, without reading any pack. Only the keys of indexed packs are placed,
+// so after BuildIndex a false names a block no listed pack held, or one whose
+// pack a tail merge replaced since. The store must have been opened with an
+// Index.
+func (s *PackStore) LocateBlocks(ctx context.Context, refs []*block.BlockRef) ([]bool, error) {
+	if s.index == nil {
+		return nil, errors.New("pack store has no index")
+	}
+	keys := make([][]byte, len(refs))
+	for i, ref := range refs {
+		keys[i] = packfile.BlockKey(ref.GetHash())
+	}
+	return s.index.locateAll(ctx, keys)
 }
 
 func (p *IndexProgress) load() IndexProgress {

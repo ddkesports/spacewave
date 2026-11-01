@@ -12,8 +12,8 @@ import (
 
 	"github.com/aperturerobotics/cli"
 	"github.com/dustin/go-humanize"
-	block_store_ftps "github.com/s4wave/spacewave/db/block/store/ftps"
 	block_store_s3 "github.com/s4wave/spacewave/db/block/store/s3"
+	"github.com/s4wave/spacewave/db/kvtx"
 	kvtx_prefixer "github.com/s4wave/spacewave/db/kvtx/prefixer"
 	"github.com/s4wave/spacewave/db/s4db"
 	"github.com/sirupsen/logrus"
@@ -35,18 +35,14 @@ func newDebugVolumePackIndexCommand() *cli.Command {
 		Name:      "volume-pack-index",
 		Usage:     "build the entry cache and block location index of the packs into a stopped volume file",
 		ArgsUsage: "<volume.s4db>",
-		Flags: []cli.Flag{
+		Flags: append([]cli.Flag{
 			&cli.StringFlag{Name: "world-store", Usage: "the World block store's id in its account, as the backend logs it in bstore-id, such as hyperline-world; the index is keyed by it", Destination: &args.pack.worldStore, Required: true},
 			&cli.StringFlag{Name: "bucket", Usage: "the bucket that holds the packs", EnvVars: []string{"HYPERLINE_PROD_BUCKET"}, Destination: &args.pack.bucket},
 			&cli.StringFlag{Name: "endpoint", Usage: "the S3 endpoint", Value: "https://s3.us-east-005.backblazeb2.com", EnvVars: []string{"HYPERLINE_PROD_BUCKET_ENDPOINT"}, Destination: &args.pack.endpoint},
 			&cli.StringFlag{Name: "region", Usage: "the S3 region", Value: "us-east-005", EnvVars: []string{"HYPERLINE_PROD_BUCKET_REGION"}, Destination: &args.pack.region},
 			&cli.StringFlag{Name: "key-prefix", Usage: "the key prefix of the packs in the bucket", Value: "world/packs/", Destination: &args.pack.keyPrefix},
-			&cli.StringFlag{Name: "ftps-host", Usage: "read the packs from this FTPS server instead of the bucket", Destination: &args.pack.ftps.host},
-			&cli.StringFlag{Name: "ftps-netrc", Usage: "the netrc file holding the FTPS logins", Destination: &args.pack.ftps.netrc},
-			&cli.StringFlag{Name: "ftps-root", Usage: "the FTPS directory holding the key prefix", Destination: &args.pack.ftps.root},
-			&cli.IntFlag{Name: "ftps-conns", Usage: "the most FTPS sessions open at once across the netrc logins, spares included", Value: block_store_ftps.DefaultMaxSessions, Destination: &args.pack.ftps.conns},
 			&cli.IntFlag{Name: "width", Usage: "packs read at once; zero uses the FTPS sessions or 8", Destination: &args.width},
-		},
+		}, ftpsFlags(&args.pack.ftps, "read the packs from")...),
 		Action: func(c *cli.Context) error {
 			if c.NArg() != 1 {
 				return errors.New("expected the volume file")
@@ -60,24 +56,38 @@ func newDebugVolumePackIndexCommand() *cli.Command {
 // tail of each pack, and writes them into the volume file at path, which the
 // backend must not have open. It resumes from what the file holds.
 func buildPackIndex(ctx context.Context, path string, args *packIndexArgs, w io.Writer) error {
-	objects, bucket, err := args.pack.objectStore()
-	if err != nil {
-		return err
-	}
+	// Open the stopped volume file and the store over it.
 	vol, err := s4db.Open(path, s4db.Options{})
 	if err != nil {
 		return err
 	}
 	defer vol.Close()
+	packs, err := openIndexedPacks(vol, args)
+	if err != nil {
+		return err
+	}
+	defer packs.Close()
+	return indexPacks(ctx, packs, args, w)
+}
 
-	// Build the store the backend builds, over the same key space.
+// openIndexedPacks builds the pack store the backend builds, keeping its
+// entry cache and block location index in vol under the World store's prefix.
+func openIndexedPacks(vol kvtx.Store, args *packIndexArgs) (*block_store_s3.PackStore, error) {
+	objects, bucket, err := args.pack.objectStore()
+	if err != nil {
+		return nil, err
+	}
 	index := kvtx_prefixer.NewPrefixer(vol, block_store_s3.PackIndexPrefix(args.pack.worldStore))
-	packs := block_store_s3.NewPackStore(logrus.NewEntry(logrus.New()), objects, bucket, args.pack.keyPrefix, &block_store_s3.PackStoreOptions{
+	return block_store_s3.NewPackStore(logrus.NewEntry(logrus.New()), objects, bucket, args.pack.keyPrefix, &block_store_s3.PackStoreOptions{
 		KeepPacks: true,
 		Index:     index,
-	})
-	defer packs.Close()
+	}), nil
+}
 
+// indexPacks indexes every pack of packs, args.width at a time, writing
+// progress lines to w.
+func indexPacks(ctx context.Context, packs *block_store_s3.PackStore, args *packIndexArgs, w io.Writer) error {
+	// Read as many packs at once as the server has spare connections.
 	width := args.width
 	if width <= 0 {
 		width = 8
@@ -85,6 +95,8 @@ func buildPackIndex(ctx context.Context, path string, args *packIndexArgs, w io.
 			width = max(args.pack.ftps.conns-1, 1)
 		}
 	}
+
+	// Index, reporting the rates about once a second.
 	start := time.Now()
 	report := func(p block_store_s3.IndexProgress) {
 		secs := max(time.Since(start).Seconds(), 0.001)

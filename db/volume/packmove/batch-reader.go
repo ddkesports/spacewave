@@ -80,11 +80,21 @@ func (r *batchReader) read(ctx context.Context, tx kvtx.Tx) (*packBatch, error) 
 
 	// Read each packed block's references from the graph in the same
 	// snapshot.
+	if err := attachRefs(ctx, tx, batch); err != nil {
+		return nil, err
+	}
+	return batch, nil
+}
+
+// attachRefs sets the references of each block the batch packs from the
+// volume's reference graph in tx, and counts the blocks the graph does not
+// track.
+func attachRefs(ctx context.Context, tx kvtx.Tx, batch *packBatch) error {
 	graph := volume_kvtx.OpenRefGraph(kvtx.NewTxStore(tx))
 	for _, put := range batch.puts {
 		targets, tracked, err := graph.GetBlockEdges(ctx, block_gc.BlockIRI(put.Ref))
 		if err != nil {
-			return nil, errors.Wrap(err, "read block references")
+			return errors.Wrap(err, "read block references")
 		}
 		if !tracked {
 			batch.untracked++
@@ -95,7 +105,7 @@ func (r *batchReader) read(ctx context.Context, tx kvtx.Tx) (*packBatch, error) 
 			}
 		}
 	}
-	return batch, nil
+	return nil
 }
 
 // collect reads the keys and data of the next batch from tx.
