@@ -91,6 +91,12 @@ const ftpsReadWindow = 32 << 10
 // packfile for good; waiting lets a trickle of writes fill one.
 const ftpsLinger = time.Hour
 
+// ftpsMergeLinger is how long a short upload batch waits for more blocks when
+// the location merges short uploads into its tail packfile. The merge keeps the
+// packfiles large, so the wait only bounds how long a new block has no copy
+// but the local one.
+const ftpsMergeLinger = 5 * time.Minute
+
 // buildFTPSBlockStore opens the packfile store on the location's directory,
 // over FTPS or, when the location sets sftp, SFTP.
 // The store keeps every packfile: nothing compacts or deletes one, except the
@@ -98,16 +104,26 @@ const ftpsLinger = time.Hour
 // location's prefix as given. index, when not nil, is the local KV
 // that holds the store's entry cache and block location index.
 func buildFTPSBlockStore(le *logrus.Entry, location *account_settings.FtpsLocation, tlsConf *tls.Config, index kvtx.Store) (backendStore, error) {
+	// Connect to the location.
 	client, err := buildFTPSClient(le, location, tlsConf)
 	if err != nil {
 		return nil, err
 	}
+
+	// Wait less for a short batch when the tail merge keeps packfiles large.
+	mergeTail := int64(min(location.GetMergeTailBytes(), math.MaxInt64))
+	linger := ftpsLinger
+	if mergeTail != 0 {
+		linger = ftpsMergeLinger
+	}
+
+	// Open the store, keeping every packfile.
 	return block_store_s3.NewPackStore(le, client, location.GetRoot(), location.GetPrefix(), &block_store_s3.PackStoreOptions{
 		KeepPacks:      true,
 		Index:          index,
 		ReadWindow:     ftpsReadWindow,
-		Linger:         ftpsLinger,
-		MergeTailBytes: int64(min(location.GetMergeTailBytes(), math.MaxInt64)),
+		Linger:         linger,
+		MergeTailBytes: mergeTail,
 	}), nil
 }
 
