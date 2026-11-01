@@ -42,6 +42,12 @@ export interface NodeType {
    * registration at a time.
    */
   pluginConfigIds?: string[]
+  /**
+   * PluginServiceIds lists the RPC services implemented on the plugin bus.
+   * A compiled lookup server uses the port protocol as its server_id; the host
+   * binds it to this registration before applying it on the Device.
+   */
+  pluginServiceIds?: string[]
 }
 
 export const NodeType: MessageType<NodeType> =
@@ -53,6 +59,7 @@ export const NodeType: MessageType<NodeType> =
       [3, 'ports', 11, 1, FlowgraphPort.codec],
       [4, 'config_ids', 9, 1],
       [5, 'plugin_config_ids', 9, 1],
+      [6, 'plugin_service_ids', 9, 1],
     ],
   )
 

@@ -34,6 +34,10 @@ type NodeType struct {
 	// builds the other config_ids itself. A config ID belongs to one
 	// registration at a time.
 	PluginConfigIds []string `protobuf:"bytes,5,rep,name=plugin_config_ids,json=pluginConfigIds,proto3" json:"pluginConfigIds,omitempty"`
+	// PluginServiceIds lists the RPC services implemented on the plugin bus.
+	// A compiled lookup server uses the port protocol as its server_id; the host
+	// binds it to this registration before applying it on the Device.
+	PluginServiceIds []string `protobuf:"bytes,6,rep,name=plugin_service_ids,json=pluginServiceIds,proto3" json:"pluginServiceIds,omitempty"`
 }
 
 func (x *NodeType) Reset() {
@@ -73,6 +77,13 @@ func (x *NodeType) GetConfigIds() []string {
 func (x *NodeType) GetPluginConfigIds() []string {
 	if x != nil {
 		return x.PluginConfigIds
+	}
+	return nil
+}
+
+func (x *NodeType) GetPluginServiceIds() []string {
+	if x != nil {
+		return x.PluginServiceIds
 	}
 	return nil
 }
@@ -305,6 +316,7 @@ func (m *NodeType) CloneVT() *NodeType {
 	r.Ports = protobuf_go_lite.CloneVTSlice(m.Ports)
 	r.ConfigIds = protobuf_go_lite.CloneSlice(m.ConfigIds)
 	r.PluginConfigIds = protobuf_go_lite.CloneSlice(m.PluginConfigIds)
+	r.PluginServiceIds = protobuf_go_lite.CloneSlice(m.PluginServiceIds)
 	if len(m.unknownFields) > 0 {
 		r.unknownFields = slices.Clone(m.unknownFields)
 	}
@@ -438,6 +450,9 @@ func (this *NodeType) EqualVT(that *NodeType) bool {
 		return false
 	}
 	if !protobuf_go_lite.EqualSlice(this.PluginConfigIds, that.PluginConfigIds) {
+		return false
+	}
+	if !protobuf_go_lite.EqualSlice(this.PluginServiceIds, that.PluginServiceIds) {
 		return false
 	}
 	return string(this.unknownFields) == string(that.unknownFields)
@@ -634,6 +649,11 @@ func (x *NodeType) MarshalProtoJSON(s *json.MarshalState) {
 		s.WriteObjectField("pluginConfigIds")
 		s.WriteStringArray(x.PluginConfigIds)
 	}
+	if len(x.PluginServiceIds) > 0 || s.HasField("pluginServiceIds") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("pluginServiceIds")
+		s.WriteStringArray(x.PluginServiceIds)
+	}
 	s.WriteObjectEnd()
 }
 
@@ -689,6 +709,13 @@ func (x *NodeType) UnmarshalProtoJSON(s *json.UnmarshalState) {
 				return
 			}
 			x.PluginConfigIds = s.ReadStringArray()
+		case "plugin_service_ids", "pluginServiceIds":
+			s.AddField("plugin_service_ids")
+			if s.ReadNil() {
+				x.PluginServiceIds = nil
+				return
+			}
+			x.PluginServiceIds = s.ReadStringArray()
 		}
 	})
 }
@@ -1151,6 +1178,13 @@ func (m *NodeType) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	if m.unknownFields != nil {
 		i = protobuf_go_lite.EncodeRawBytes(dAtA, i, m.unknownFields)
 	}
+	if len(m.PluginServiceIds) > 0 {
+		for iNdEx := len(m.PluginServiceIds) - 1; iNdEx >= 0; iNdEx-- {
+			i = protobuf_go_lite.EncodeString(dAtA, i, m.PluginServiceIds[iNdEx])
+			i--
+			dAtA[i] = 0x32
+		}
+	}
 	if len(m.PluginConfigIds) > 0 {
 		for iNdEx := len(m.PluginConfigIds) - 1; iNdEx >= 0; iNdEx-- {
 			i = protobuf_go_lite.EncodeString(dAtA, i, m.PluginConfigIds[iNdEx])
@@ -1508,6 +1542,7 @@ func (m *NodeType) SizeVT() (n int) {
 	}
 	n += protobuf_go_lite.SizeStringSlice(1, m.ConfigIds)
 	n += protobuf_go_lite.SizeStringSlice(1, m.PluginConfigIds)
+	n += protobuf_go_lite.SizeStringSlice(1, m.PluginServiceIds)
 	n += len(m.unknownFields)
 	return n
 }
@@ -1644,6 +1679,14 @@ func (x *NodeType) MarshalProtoText() string {
 	if len(x.PluginConfigIds) > 0 {
 		protobuf_go_lite.TextWriteListStart(&sb, initialLen, "plugin_config_ids")
 		for i, v := range x.PluginConfigIds {
+			protobuf_go_lite.TextWriteListSeparator(&sb, i)
+			protobuf_go_lite.TextWriteString(&sb, v)
+		}
+		protobuf_go_lite.TextWriteListEnd(&sb)
+	}
+	if len(x.PluginServiceIds) > 0 {
+		protobuf_go_lite.TextWriteListStart(&sb, initialLen, "plugin_service_ids")
+		for i, v := range x.PluginServiceIds {
 			protobuf_go_lite.TextWriteListSeparator(&sb, i)
 			protobuf_go_lite.TextWriteString(&sb, v)
 		}
@@ -1882,6 +1925,16 @@ func (m *NodeType) UnmarshalVT(dAtA []byte) error {
 				return err
 			}
 			m.PluginConfigIds = append(m.PluginConfigIds, v)
+		case 6:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field PluginServiceIds", wireType)
+			}
+			var v string
+			v, iNdEx, err = protobuf_go_lite.DecodeString(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			m.PluginServiceIds = append(m.PluginServiceIds, v)
 		default:
 			iNdEx = preIndex
 			skippy, err := protobuf_go_lite.Skip(dAtA[iNdEx:])

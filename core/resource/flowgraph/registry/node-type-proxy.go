@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aperturerobotics/controllerbus/bus"
 	"github.com/aperturerobotics/controllerbus/config"
 	"github.com/pkg/errors"
+	stream_srpc_server_lookup "github.com/s4wave/spacewave/net/stream/srpc/server/lookup"
 	s4wave_flowgraph "github.com/s4wave/spacewave/sdk/flowgraph"
 	flowgraph_registry "github.com/s4wave/spacewave/sdk/flowgraph/registry"
 )
@@ -74,6 +77,14 @@ func (p *nodeTypeProxy) Compile(ctx context.Context, node *s4wave_flowgraph.Plac
 		return nil, err
 	}
 
+	// Index this node's stream ports once for the compiled lookup servers.
+	ports := make(map[string]struct{}, len(node.Node.GetPorts()))
+	for _, port := range node.Node.GetPorts() {
+		if port.GetTypeId() == "stream" {
+			ports[port.GetName()] = struct{}{}
+		}
+	}
+
 	// Check declarations, then bind plugin configs to this registration and
 	// resolve core configs on the host bus.
 	entries := make(map[string]config.Config, len(resp.GetEntries()))
@@ -92,7 +103,23 @@ func (p *nodeTypeProxy) Compile(ctx context.Context, node *s4wave_flowgraph.Plac
 		if err != nil {
 			return nil, err
 		}
-		entries[name] = resolved.GetConfig()
+		conf := resolved.GetConfig()
+		if lookup, ok := conf.(*stream_srpc_server_lookup.Config); ok && len(p.reg.metadata.GetPluginServiceIds()) != 0 {
+			// Require this node's authored stream port before binding its route.
+			port, found := strings.CutPrefix(lookup.GetServerId(), "spacewave/"+node.FlowgraphKey+"/"+node.NodeID+"/")
+			expected, portErr := s4wave_flowgraph.NodePortProtocolID(node.FlowgraphKey, node.NodeID, port)
+			_, declared := ports[port]
+			if !found || portErr != nil || string(expected) != lookup.GetServerId() || !declared {
+				return nil, errors.New("plugin lookup must serve this node's stream port")
+			}
+
+			// Bind the port route to the registration that compiled it.
+			if len(lookup.GetProtocolIds()) != 1 || lookup.GetServerId() != lookup.GetProtocolIds()[0] || !slices.Equal(lookup.GetPeerIds(), []string{node.DevicePeerID}) {
+				return nil, errors.New("plugin port lookup must name one protocol, its server ID and the Device peer")
+			}
+			lookup.ServerId = "flowgraph-plugin/" + strconv.FormatUint(uint64(p.reg.id), 10) + "/" + lookup.ServerId
+		}
+		entries[name] = conf
 	}
 	return entries, nil
 }

@@ -8,6 +8,7 @@ import (
 	context "context"
 
 	controller_exec "github.com/aperturerobotics/controllerbus/controller/exec"
+	rpcstream "github.com/aperturerobotics/starpc/rpcstream"
 	srpc "github.com/aperturerobotics/starpc/srpc"
 )
 
@@ -126,6 +127,9 @@ type SRPCNodeTypeResourceServiceClient interface {
 	// ExecController runs one of the plugin_config_ids on the plugin's bus and
 	// streams its status until the call ends.
 	ExecController(ctx context.Context, in *ExecControllerRequest) (SRPCNodeTypeResourceService_ExecControllerClient, error)
+	// ServeRpc forwards port calls to the plugin bus. RpcStreamInit.component_id
+	// names the port protocol used as LookupRpcService's server ID.
+	ServeRpc(ctx context.Context) (SRPCNodeTypeResourceService_ServeRpcClient, error)
 }
 
 type srpcNodeTypeResourceServiceClient struct {
@@ -188,12 +192,54 @@ func (x *srpcNodeTypeResourceService_ExecControllerClient) RecvTo(m *controller_
 	return x.MsgRecv(m)
 }
 
+func (c *srpcNodeTypeResourceServiceClient) ServeRpc(ctx context.Context) (SRPCNodeTypeResourceService_ServeRpcClient, error) {
+	stream, err := c.cc.NewStream(ctx, c.serviceID, "ServeRpc", nil)
+	if err != nil {
+		return nil, err
+	}
+	strm := &srpcNodeTypeResourceService_ServeRpcClient{stream}
+	return strm, nil
+}
+
+type SRPCNodeTypeResourceService_ServeRpcClient interface {
+	srpc.Stream
+	Send(*rpcstream.RpcStreamPacket) error
+	Recv() (*rpcstream.RpcStreamPacket, error)
+	RecvTo(*rpcstream.RpcStreamPacket) error
+}
+
+type srpcNodeTypeResourceService_ServeRpcClient struct {
+	srpc.Stream
+}
+
+func (x *srpcNodeTypeResourceService_ServeRpcClient) Send(m *rpcstream.RpcStreamPacket) error {
+	if m == nil {
+		return nil
+	}
+	return x.MsgSend(m)
+}
+
+func (x *srpcNodeTypeResourceService_ServeRpcClient) Recv() (*rpcstream.RpcStreamPacket, error) {
+	m := new(rpcstream.RpcStreamPacket)
+	if err := x.MsgRecv(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+func (x *srpcNodeTypeResourceService_ServeRpcClient) RecvTo(m *rpcstream.RpcStreamPacket) error {
+	return x.MsgRecv(m)
+}
+
 type SRPCNodeTypeResourceServiceServer interface {
 	// Compile returns entries whose keys and revisions the Device assigns.
 	Compile(context.Context, *CompileRequest) (*CompileResponse, error)
 	// ExecController runs one of the plugin_config_ids on the plugin's bus and
 	// streams its status until the call ends.
 	ExecController(*ExecControllerRequest, SRPCNodeTypeResourceService_ExecControllerStream) error
+	// ServeRpc forwards port calls to the plugin bus. RpcStreamInit.component_id
+	// names the port protocol used as LookupRpcService's server ID.
+	ServeRpc(SRPCNodeTypeResourceService_ServeRpcStream) error
 }
 
 const SRPCNodeTypeResourceServiceServiceID = "s4wave.flowgraph.registry.NodeTypeResourceService"
@@ -224,6 +270,7 @@ func (SRPCNodeTypeResourceServiceHandler) GetMethodIDs() []string {
 	return []string{
 		"Compile",
 		"ExecController",
+		"ServeRpc",
 	}
 }
 
@@ -240,6 +287,8 @@ func (d *SRPCNodeTypeResourceServiceHandler) InvokeMethod(
 		return true, d.InvokeMethod_Compile(d.impl, strm)
 	case "ExecController":
 		return true, d.InvokeMethod_ExecController(d.impl, strm)
+	case "ServeRpc":
+		return true, d.InvokeMethod_ServeRpc(d.impl, strm)
 	default:
 		return false, nil
 	}
@@ -264,6 +313,11 @@ func (SRPCNodeTypeResourceServiceHandler) InvokeMethod_ExecController(impl SRPCN
 	}
 	serverStrm := &srpcNodeTypeResourceService_ExecControllerStream{strm}
 	return impl.ExecController(req, serverStrm)
+}
+
+func (SRPCNodeTypeResourceServiceHandler) InvokeMethod_ServeRpc(impl SRPCNodeTypeResourceServiceServer, strm srpc.Stream) error {
+	clientStrm := &srpcNodeTypeResourceService_ServeRpcStream{strm}
+	return impl.ServeRpc(clientStrm)
 }
 
 type SRPCNodeTypeResourceService_CompileStream interface {
@@ -295,4 +349,41 @@ func (x *srpcNodeTypeResourceService_ExecControllerStream) SendAndClose(m *contr
 		}
 	}
 	return x.CloseSend()
+}
+
+type SRPCNodeTypeResourceService_ServeRpcStream interface {
+	srpc.Stream
+	Send(*rpcstream.RpcStreamPacket) error
+	SendAndClose(*rpcstream.RpcStreamPacket) error
+	Recv() (*rpcstream.RpcStreamPacket, error)
+	RecvTo(*rpcstream.RpcStreamPacket) error
+}
+
+type srpcNodeTypeResourceService_ServeRpcStream struct {
+	srpc.Stream
+}
+
+func (x *srpcNodeTypeResourceService_ServeRpcStream) Send(m *rpcstream.RpcStreamPacket) error {
+	return x.MsgSend(m)
+}
+
+func (x *srpcNodeTypeResourceService_ServeRpcStream) SendAndClose(m *rpcstream.RpcStreamPacket) error {
+	if m != nil {
+		if err := x.MsgSend(m); err != nil {
+			return err
+		}
+	}
+	return x.CloseSend()
+}
+
+func (x *srpcNodeTypeResourceService_ServeRpcStream) Recv() (*rpcstream.RpcStreamPacket, error) {
+	m := new(rpcstream.RpcStreamPacket)
+	if err := x.MsgRecv(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+func (x *srpcNodeTypeResourceService_ServeRpcStream) RecvTo(m *rpcstream.RpcStreamPacket) error {
+	return x.MsgRecv(m)
 }

@@ -2,6 +2,7 @@ syntax = "proto3";
 package s4wave.flowgraph.registry;
 
 import "github.com/s4wave/spacewave/sdk/flowgraph/flowgraph.proto";
+import "github.com/aperturerobotics/starpc/rpcstream/rpcstream.proto";
 import "github.com/aperturerobotics/controllerbus/controller/configset/proto/configset.proto";
 import "github.com/aperturerobotics/controllerbus/controller/exec/exec.proto";
 
@@ -24,6 +25,10 @@ message NodeType {
   // builds the other config_ids itself. A config ID belongs to one
   // registration at a time.
   repeated string plugin_config_ids = 5;
+  // PluginServiceIds lists the RPC services implemented on the plugin bus.
+  // A compiled lookup server uses the port protocol as its server_id; the host
+  // binds it to this registration before applying it on the Device.
+  repeated string plugin_service_ids = 6;
 }
 
 // NodeTypeRegistryResourceService retains plugin compiler registrations.
@@ -53,6 +58,9 @@ service NodeTypeResourceService {
   // ExecController runs one of the plugin_config_ids on the plugin's bus and
   // streams its status until the call ends.
   rpc ExecController(ExecControllerRequest) returns (stream .controller.exec.ExecControllerResponse);
+  // ServeRpc forwards port calls to the plugin bus. RpcStreamInit.component_id
+  // names the port protocol used as LookupRpcService's server ID.
+  rpc ServeRpc(stream .rpcstream.RpcStreamPacket) returns (stream .rpcstream.RpcStreamPacket);
 }
 
 // CompileRequest carries the placement context across the plugin boundary.

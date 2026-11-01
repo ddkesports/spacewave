@@ -2,11 +2,14 @@ package resource_flowgraph_registry
 
 import (
 	"context"
+	"strconv"
+	"strings"
 
 	"github.com/aperturerobotics/controllerbus/bus"
 	"github.com/aperturerobotics/controllerbus/controller"
 	"github.com/aperturerobotics/controllerbus/controller/resolver"
 	"github.com/aperturerobotics/controllerbus/directive"
+	bifrost_rpc "github.com/s4wave/spacewave/net/rpc"
 	s4wave_flowgraph "github.com/s4wave/spacewave/sdk/flowgraph"
 )
 
@@ -44,6 +47,21 @@ func (c *BridgeController) HandleDirective(ctx context.Context, di directive.Ins
 		engineID, typeID := dir.LookupFlowgraphNodeTypeEngineID(), dir.LookupFlowgraphNodeTypeID()
 		return c.watch(func() *nodeTypeRegistration { return c.registry.lookupLocked(engineID, typeID) }, func(reg *nodeTypeRegistration) directive.Value {
 			return newNodeTypeProxy(c.b, reg)
+		})
+	case bifrost_rpc.LookupRpcService:
+		route, ok := strings.CutPrefix(dir.LookupRpcServerID(), "flowgraph-plugin/")
+		if !ok {
+			return nil, nil
+		}
+		id, serverID, ok := strings.Cut(route, "/")
+		regID, err := strconv.ParseUint(id, 10, 32)
+		if !ok || err != nil || serverID == "" {
+			return nil, nil
+		}
+		return c.watch(func() *nodeTypeRegistration {
+			return c.registry.registrations[uint32(regID)] //nolint:gosec // ParseUint above limits the value to 32 bits.
+		}, func(reg *nodeTypeRegistration) directive.Value {
+			return &pluginPortInvoker{reg: reg, serverID: serverID}
 		})
 	case resolver.LoadFactoryByConfig:
 		conf, ok := dir.LoadFactoryByConfig().(*pluginConfig)

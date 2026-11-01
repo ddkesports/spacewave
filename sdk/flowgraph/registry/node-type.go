@@ -47,5 +47,14 @@ func (n *NodeType) Validate() error {
 		}
 		plugin[id] = struct{}{}
 	}
+
+	// Keep the service grant unambiguous.
+	services := make(map[string]struct{}, len(n.GetPluginServiceIds()))
+	for _, id := range n.GetPluginServiceIds() {
+		if _, exists := services[id]; id == "" || exists {
+			return errors.New("plugin service IDs must be nonempty and distinct")
+		}
+		services[id] = struct{}{}
+	}
 	return nil
 }

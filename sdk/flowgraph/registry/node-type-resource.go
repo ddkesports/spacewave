@@ -8,7 +8,10 @@ import (
 	"github.com/aperturerobotics/controllerbus/controller/configset"
 	configset_proto "github.com/aperturerobotics/controllerbus/controller/configset/proto"
 	controller_exec "github.com/aperturerobotics/controllerbus/controller/exec"
+	"github.com/aperturerobotics/starpc/rpcstream"
+	"github.com/aperturerobotics/starpc/srpc"
 	"github.com/pkg/errors"
+	bifrost_rpc "github.com/s4wave/spacewave/net/rpc"
 	s4wave_flowgraph "github.com/s4wave/spacewave/sdk/flowgraph"
 )
 
@@ -114,6 +117,13 @@ func (r *CompileRequest) PlacedNode() *s4wave_flowgraph.PlacedFlowgraphNode {
 		}
 	}
 	return node
+}
+
+// ServeRpc serves only declared services, routing each call to its port on the plugin bus.
+func (r *NodeTypeResource) ServeRpc(strm SRPCNodeTypeResourceService_ServeRpcStream) error {
+	return rpcstream.HandleRpcStream(strm, func(ctx context.Context, serverID string, released func()) (srpc.Invoker, func(), error) {
+		return &portInvoker{invoker: bifrost_rpc.NewInvoker(r.b, serverID, true), services: r.metadata.GetPluginServiceIds()}, nil, nil
+	})
 }
 
 // _ is a type assertion.

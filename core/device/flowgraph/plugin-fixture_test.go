@@ -15,6 +15,7 @@ import (
 	"github.com/aperturerobotics/controllerbus/controller"
 	controllerbus_core "github.com/aperturerobotics/controllerbus/core"
 	"github.com/aperturerobotics/controllerbus/directive"
+	"github.com/aperturerobotics/starpc/echo"
 	"github.com/aperturerobotics/starpc/srpc"
 	resource "github.com/s4wave/spacewave/bldr/resource"
 	resource_client "github.com/s4wave/spacewave/bldr/resource/client"
@@ -29,7 +30,12 @@ import (
 	"github.com/s4wave/spacewave/db/world"
 	world_testbed "github.com/s4wave/spacewave/db/world/testbed"
 	world_types "github.com/s4wave/spacewave/db/world/types"
+	"github.com/s4wave/spacewave/net/peer"
+	bifrost_rpc "github.com/s4wave/spacewave/net/rpc"
 	stream_echo "github.com/s4wave/spacewave/net/stream/echo"
+	stream_srpc "github.com/s4wave/spacewave/net/stream/srpc"
+	stream_srpc_server_lookup "github.com/s4wave/spacewave/net/stream/srpc/server/lookup"
+	"github.com/s4wave/spacewave/net/transport/inproc"
 	flowgraph_plugin "github.com/s4wave/spacewave/plugin/flowgraph"
 	s4wave_configtype_registry "github.com/s4wave/spacewave/sdk/configtype/registry"
 	s4wave_device "github.com/s4wave/spacewave/sdk/device"
@@ -47,7 +53,7 @@ import (
 // their generation scopes, and the Device runs only its own World's.
 func TestPluginNodeFixture(t *testing.T) {
 	// Create an isolated Device World and an allowed plugin node placement.
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 	defer cancel()
 	le := logrus.NewEntry(logrus.New())
 	tb := world_testbed.MustDefault(t, ctx)
@@ -90,6 +96,7 @@ func TestPluginNodeFixture(t *testing.T) {
 	// Resolve plugin declarations and config constructors on the daemon bus, with no plugin controller there.
 	b := tb.Bus
 	tb.StaticResolver.AddFactory(stream_echo.NewFactory(b))
+	tb.StaticResolver.AddFactory(stream_srpc_server_lookup.NewFactory(b))
 
 	// Serve the node type registry through the bridge controller.
 	generations := registration.NewRegistry()
@@ -100,8 +107,19 @@ func TestPluginNodeFixture(t *testing.T) {
 	}
 	defer bridgeRelease()
 
+	// Connect independent testbed peers to the Device's process-local transport.
+	network := inproc.NewNetwork()
+	remote := newPluginPortPeer(t, ctx, le, network)
+	refused := newPluginPortPeer(t, ctx, le, network)
+
 	// Run compiled controllers on the actual Device Session bus.
-	st, err := transport.NewSessionTransport(le, b, key, "", "", transport.WithChildFactories(func(b bus.Bus) controller.Factory { return stream_echo.NewFactory(b) }))
+	st, err := transport.NewSessionTransport(le, b, key, "", "", transport.WithChildFactories(func(b bus.Bus) controller.Factory { return stream_echo.NewFactory(b) }),
+		transport.WithInprocNetwork(network), transport.WithPeerAuthorizer(func(_ context.Context, id peer.ID) error {
+			if id != remote.GetPeerID() {
+				return errors.New("fixture peer refused")
+			}
+			return nil
+		}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,11 +265,61 @@ func TestPluginNodeFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Publish echo services only on the plugin's isolated bus; grant only Echoer.
+	echoMux := srpc.NewMux()
+	if err := echo.SRPCRegisterEchoer(echoMux, echo.NewEchoServer(nil)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Add an ungranted alias to prove the port enforces its service declaration.
+	if err := echoMux.Register(echo.NewSRPCEchoerHandler(echo.NewEchoServer(nil), "fixture/undeclared")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Resolve plugin RPC services only on the isolated plugin bus.
+	echoRelease, err := pluginBus.AddController(ctx, bifrost_rpc.NewRpcServiceController(
+		controller.NewInfo("fixture/port-echo", controller.MustParseVersion("0.0.1"), "plugin port echo"),
+		bifrost_rpc.NewRpcServiceBuilder(echoMux), nil, false, nil, []string{echo.SRPCEchoerServiceID}, nil,
+	), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer echoRelease()
+
 	// The Device runs the controller in the plugin and shows it active.
 	expectRuns(t, ctx, runs, "start one")
 	waitCapabilities(t, ctx, tb.Engine, func(caps map[string]*s4wave_device.DeviceCapability) bool {
 		return capabilityState(caps, "run") == s4wave_device.DeviceCapabilityState_DEVICE_CAPABILITY_STATE_ACTIVE
 	})
+
+	// An admitted second peer reaches the plugin service over the node's port.
+	portID, err := s4wave_flowgraph.NodePortProtocolID(testFlowgraphKey, "run", "echo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	echoClient := echo.NewSRPCEchoerClient(srpc.NewClient(stream_srpc.NewOpenStreamFunc(remote.GetChildBus(), portID, remote.GetPeerID(), st.GetPeerID(), 0)))
+	reply, err := echoClient.Echo(ctx, &echo.EchoMsg{Body: "plugin port echo"})
+	if err != nil || reply.GetBody() != "plugin port echo" {
+		t.Fatalf("plugin port echo = %v, %v", reply, err)
+	}
+
+	// The port refuses a service implemented by the plugin but absent from its grant.
+	undeclared := srpc.NewClient(stream_srpc.NewOpenStreamFunc(remote.GetChildBus(), portID, remote.GetPeerID(), st.GetPeerID(), 0))
+	undeclaredCtx, undeclaredCancel := context.WithTimeout(ctx, 5*time.Second)
+	undeclaredErr := undeclared.ExecCall(undeclaredCtx, "fixture/undeclared", "Echo", &echo.EchoMsg{Body: "must not echo"}, &echo.EchoMsg{})
+	undeclaredCancel()
+	if undeclaredErr == nil || errors.Is(undeclaredErr, context.DeadlineExceeded) {
+		t.Fatalf("undeclared service result = %v", undeclaredErr)
+	}
+
+	// A linked peer outside the Session rule cannot call the same service.
+	refusedClient := echo.NewSRPCEchoerClient(srpc.NewClient(stream_srpc.NewOpenStreamFunc(refused.GetChildBus(), portID, refused.GetPeerID(), st.GetPeerID(), 0)))
+	refusedCtx, refusedCancel := context.WithTimeout(ctx, 5*time.Second)
+	_, refusedErr := refusedClient.Echo(refusedCtx, &echo.EchoMsg{Body: "must not echo"})
+	refusedCancel()
+	if refusedErr == nil || errors.Is(refusedErr, context.DeadlineExceeded) {
+		t.Fatalf("refused peer result = %v", refusedErr)
+	}
 
 	// A changed setting restarts the plugin controller with the new config.
 	setPluginRunNode(t, ctx, tb.Engine, "two")
@@ -368,7 +436,7 @@ const pluginRunConfigID = "fixture/plugin-run"
 func setPluginRunNode(t *testing.T, ctx context.Context, engine world.Engine, value string) {
 	commit(t, ctx, engine, func(tx world.Tx) error {
 		_, err := s4wave_flowgraph.UpdateFlowgraph(ctx, tx, testFlowgraphKey, &s4wave_flowgraph.UpdateFlowgraphRequest{
-			SetNodes:      map[string]*s4wave_flowgraph.FlowgraphNode{"run": {TypeId: pluginRunNodeTypeID, Parameters: map[string]string{"value": value}}},
+			SetNodes:      map[string]*s4wave_flowgraph.FlowgraphNode{"run": {TypeId: pluginRunNodeTypeID, Parameters: map[string]string{"value": value}, Ports: []*s4wave_flowgraph.FlowgraphPort{{Name: "echo", TypeId: "stream", Direction: s4wave_flowgraph.FlowgraphPortDirection_FLOWGRAPH_PORT_DIRECTION_OUTPUT}}}},
 			SetPlacements: map[string]*s4wave_flowgraph.FlowgraphPlacement{"run": devicePlacement(testSelfKey)},
 		})
 		return err
@@ -380,10 +448,12 @@ func setPluginRunNode(t *testing.T, ctx context.Context, engine world.Engine, va
 func registerPluginRun(ctx context.Context, resources *resource_client.Client, root srpc.Client, b bus.Bus) (func() error, error) {
 	// Attach the compiler and its plugin controllers.
 	metadata := &flowgraph_registry.NodeType{
-		TypeId:          pluginRunNodeTypeID,
-		DisplayName:     "Plugin Run",
-		ConfigIds:       []string{pluginRunConfigID},
-		PluginConfigIds: []string{pluginRunConfigID},
+		TypeId:           pluginRunNodeTypeID,
+		DisplayName:      "Plugin Run",
+		Ports:            pluginRunNodeType{}.GetPorts(),
+		ConfigIds:        []string{pluginRunConfigID, stream_srpc_server_lookup.ConfigID},
+		PluginServiceIds: []string{echo.SRPCEchoerServiceID},
+		PluginConfigIds:  []string{pluginRunConfigID},
 	}
 	mux := srpc.NewMux()
 	if err := flowgraph_registry.SRPCRegisterNodeTypeResourceService(mux, flowgraph_registry.NewNodeTypeResource(b, metadata, pluginRunNodeType{})); err != nil {
@@ -436,14 +506,14 @@ func (pluginRunNodeType) GetDisplayName() string {
 	return "Plugin Run"
 }
 
-// GetPorts declares no ports.
+// GetPorts declares the plugin echo stream port.
 func (pluginRunNodeType) GetPorts() []*s4wave_flowgraph.FlowgraphPort {
-	return nil
+	return []*s4wave_flowgraph.FlowgraphPort{{Name: "echo", TypeId: "stream", Direction: s4wave_flowgraph.FlowgraphPortDirection_FLOWGRAPH_PORT_DIRECTION_OUTPUT}}
 }
 
 // GetConfigIDs declares the plugin run config.
 func (pluginRunNodeType) GetConfigIDs() []string {
-	return []string{pluginRunConfigID}
+	return []string{pluginRunConfigID, stream_srpc_server_lookup.ConfigID}
 }
 
 // Compile carries the value parameter as the config's bytes. It requires the
@@ -456,7 +526,14 @@ func (pluginRunNodeType) Compile(_ context.Context, node *s4wave_flowgraph.Place
 	if err := conf.UnmarshalVT([]byte(node.Node.GetParameters()["value"])); err != nil {
 		return nil, err
 	}
-	return map[string]config.Config{"run": conf}, nil
+	// Serve the plugin's echo service through a core port listener on the Device.
+	portID, err := s4wave_flowgraph.NodePortProtocolID(node.FlowgraphKey, node.NodeID, "echo")
+	if err != nil {
+		return nil, err
+	}
+	return map[string]config.Config{"run": conf, "port": &stream_srpc_server_lookup.Config{
+		PeerIds: []string{node.DevicePeerID}, ProtocolIds: []string{string(portID)}, ServerId: string(portID),
+	}}, nil
 }
 
 // pluginRunFactory builds the controller that exists only on the plugin's bus.

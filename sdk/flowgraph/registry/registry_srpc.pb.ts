@@ -12,11 +12,13 @@ import {
 import { MethodKind } from '@aptre/protobuf-es-lite'
 import {
   buildDecodeMessageTransform,
+  buildEncodeMessageTransform,
   MessageStream,
   ProtoRpc,
   ServerContext,
 } from 'starpc'
 import { ExecControllerResponse } from '@go/github.com/aperturerobotics/controllerbus/controller/exec/exec.pb.js'
+import { RpcStreamPacket } from '@go/github.com/aperturerobotics/starpc/rpcstream/rpcstream.pb.js'
 
 /**
  * NodeTypeRegistryResourceService retains plugin compiler registrations.
@@ -136,6 +138,18 @@ export const NodeTypeResourceServiceDefinition = {
       O: ExecControllerResponse,
       kind: MethodKind.ServerStreaming,
     },
+    /**
+     * ServeRpc forwards port calls to the plugin bus. RpcStreamInit.component_id
+     * names the port protocol used as LookupRpcService's server ID.
+     *
+     * @generated from rpc s4wave.flowgraph.registry.NodeTypeResourceService.ServeRpc
+     */
+    ServeRpc: {
+      name: 'ServeRpc',
+      I: RpcStreamPacket,
+      O: RpcStreamPacket,
+      kind: MethodKind.BiDiStreaming,
+    },
   },
 } as const
 
@@ -165,6 +179,17 @@ export interface NodeTypeResourceService {
     request: ExecControllerRequest,
     abortSignal?: AbortSignal,
   ): MessageStream<ExecControllerResponse>
+
+  /**
+   * ServeRpc forwards port calls to the plugin bus. RpcStreamInit.component_id
+   * names the port protocol used as LookupRpcService's server ID.
+   *
+   * @generated from rpc s4wave.flowgraph.registry.NodeTypeResourceService.ServeRpc
+   */
+  ServeRpc(
+    request: MessageStream<RpcStreamPacket>,
+    abortSignal?: AbortSignal,
+  ): MessageStream<RpcStreamPacket>
 }
 
 /**
@@ -195,6 +220,18 @@ export interface NodeTypeResourceServiceHandler {
     abortSignal: AbortSignal,
     context: ServerContext,
   ): MessageStream<ExecControllerResponse>
+
+  /**
+   * ServeRpc forwards port calls to the plugin bus. RpcStreamInit.component_id
+   * names the port protocol used as LookupRpcService's server ID.
+   *
+   * @generated from rpc s4wave.flowgraph.registry.NodeTypeResourceService.ServeRpc
+   */
+  ServeRpc(
+    request: MessageStream<RpcStreamPacket>,
+    abortSignal: AbortSignal,
+    context: ServerContext,
+  ): MessageStream<RpcStreamPacket>
 }
 
 export const NodeTypeResourceServiceServiceName =
@@ -208,6 +245,7 @@ export class NodeTypeResourceServiceClient implements NodeTypeResourceService {
     this.rpc = rpc
     this.Compile = this.Compile.bind(this)
     this.ExecController = this.ExecController.bind(this)
+    this.ServeRpc = this.ServeRpc.bind(this)
   }
   /**
    * Compile returns entries whose keys and revisions the Device assigns.
@@ -246,5 +284,24 @@ export class NodeTypeResourceServiceClient implements NodeTypeResourceService {
       abortSignal || undefined,
     )
     return buildDecodeMessageTransform(ExecControllerResponse)(result)
+  }
+
+  /**
+   * ServeRpc forwards port calls to the plugin bus. RpcStreamInit.component_id
+   * names the port protocol used as LookupRpcService's server ID.
+   *
+   * @generated from rpc s4wave.flowgraph.registry.NodeTypeResourceService.ServeRpc
+   */
+  ServeRpc(
+    request: MessageStream<RpcStreamPacket>,
+    abortSignal?: AbortSignal,
+  ): MessageStream<RpcStreamPacket> {
+    const result = this.rpc.bidirectionalStreamingRequest(
+      this.service,
+      NodeTypeResourceServiceDefinition.methods.ServeRpc.name,
+      buildEncodeMessageTransform(RpcStreamPacket)(request),
+      abortSignal || undefined,
+    )
+    return buildDecodeMessageTransform(RpcStreamPacket)(result)
   }
 }

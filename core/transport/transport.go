@@ -29,6 +29,7 @@ import (
 	stream_api_accept "github.com/s4wave/spacewave/net/stream/api/accept"
 	stream_forwarding "github.com/s4wave/spacewave/net/stream/forwarding"
 	stream_listening "github.com/s4wave/spacewave/net/stream/listening"
+	stream_srpc_server_lookup "github.com/s4wave/spacewave/net/stream/srpc/server/lookup"
 	transport_controller "github.com/s4wave/spacewave/net/transport/controller"
 	"github.com/sirupsen/logrus"
 )
@@ -428,7 +429,12 @@ func (t *SessionTransport) Execute(ctx context.Context) (err error) {
 		// The child bus loads and runs its own controllers, finding factories
 		// it lacks through the bridged LoadFactoryByConfig. Forwarding a load
 		// would run a second instance on the parent bus.
-		switch di.GetDirective().(type) {
+		switch dir := di.GetDirective().(type) {
+		case resolver.LoadFactoryByConfig:
+			// Lookup servers must use the Session factory that enforces admission.
+			if dir.LoadFactoryByConfig().GetConfigID() == stream_srpc_server_lookup.ConfigID {
+				return false, nil
+			}
 		case peer.GetPeer, link.EstablishLinkWithPeer, link_solicit.SolicitProtocol,
 			signaling.SignalPeer, signaling.HandleSignalPeer, configset.ApplyConfigSet,
 			resolver.LoadControllerWithConfig, loader.ExecController:
@@ -465,6 +471,7 @@ func (t *SessionTransport) Execute(ctx context.Context) (err error) {
 	sr.AddFactory(stream_api_accept.NewFactory(b))
 	sr.AddFactory(stream_forwarding.NewFactory(b))
 	sr.AddFactory(stream_listening.NewFactory(b))
+	sr.AddFactory(&lookupServerFactory{session: t})
 	for _, newFactory := range t.childFactories {
 		sr.AddFactory(newFactory(b))
 	}
