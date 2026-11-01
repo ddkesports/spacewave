@@ -6,6 +6,7 @@ import (
 	"math"
 	"slices"
 	"sync"
+	"sync/atomic"
 
 	"github.com/aperturerobotics/util/broadcast"
 	"github.com/pkg/errors"
@@ -84,6 +85,9 @@ type PackfileStore struct {
 	manifest *btree.BTreeG[*manifestEntry]
 	// manifestByID permits point replacement and removal, guarded by bcast.
 	manifestByID map[string]*manifestEntry
+	// current is the immutable catalog published after each manifest change,
+	// so lookups share one snapshot and its locator cache.
+	current atomic.Pointer[ManifestSnapshot]
 }
 
 // NewPackfileStore creates a new packfile store.
@@ -99,6 +103,7 @@ func NewPackfileStore(opener Opener, cache IndexCache) *PackfileStore {
 		budget:          newResidentBudget(defaultResidentBudget),
 		gate:            newDemandGate(),
 	}
+	s.publishManifest()
 	return s
 }
 
@@ -132,9 +137,11 @@ func (s *PackfileStore) Close() {
 	s.notify = nil
 	s.mtx.Unlock()
 	s.bcast.HoldLock(func(broadcast func(), _ func() <-chan struct{}) {
+		// Publish the empty manifest and wake the waiters.
 		s.manifest = newManifestTree()
 		s.manifestByID = nil
 		s.closeComplete = true
+		s.publishManifest()
 		broadcast()
 	})
 }
@@ -722,6 +729,7 @@ func (s *PackfileStore) updateManifest(entries []*packfile.PackfileEntry, remove
 		}
 
 		// Wake catalog observers after publishing the manifest changes.
+		s.publishManifest()
 		broadcast()
 	})
 	s.mtx.Unlock()

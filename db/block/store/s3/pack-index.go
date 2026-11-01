@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"slices"
 	"sync"
+	"sync/atomic"
 
 	"github.com/pkg/errors"
 	"github.com/s4wave/spacewave/db/kvtx"
@@ -105,6 +106,9 @@ type packIndex struct {
 	buffered []*packfile.PackfileEntry
 	// work wakes the background indexer when pending grows.
 	work chan struct{}
+	// version counts the changes to rows, so Indexed answers stay valid
+	// while it holds. Changed with mtx held.
+	version atomic.Uint64
 }
 
 func newPackIndex(store kvtx.Store) *packIndex {
@@ -165,6 +169,7 @@ func (x *packIndex) register(id string, row packRow, entry *packfile.PackfileEnt
 	x.mtx.Lock()
 	defer x.mtx.Unlock()
 	x.rows[id] = row
+	x.version.Add(1)
 	for int(row.num) >= len(x.ids) {
 		x.ids = append(x.ids, "")
 	}
@@ -179,6 +184,7 @@ func (x *packIndex) nextRow(id string, indexed bool) packRow {
 	row := packRow{num: uint32(len(x.ids)), indexed: indexed} //nolint:gosec // 2^32 packs cannot exist.
 	x.ids = append(x.ids, id)
 	x.rows[id] = row
+	x.version.Add(1)
 	return row
 }
 
@@ -301,6 +307,7 @@ func (x *packIndex) remove(ctx context.Context, ids []string) error {
 		delete(x.rows, id)
 		delete(x.pending, id)
 	}
+	x.version.Add(1)
 	x.mtx.Unlock()
 
 	tx, err := x.store.NewTransaction(ctx, true)
@@ -405,6 +412,11 @@ func (x *packIndex) Indexed(id string) bool {
 	x.mtx.RLock()
 	defer x.mtx.RUnlock()
 	return x.rows[id].indexed
+}
+
+// Version changes whenever Indexed may answer differently for some pack.
+func (x *packIndex) Version() uint64 {
+	return x.version.Load()
 }
 
 // wake signals the background indexer.
@@ -514,6 +526,7 @@ func (x *packIndex) writeKeys(ctx context.Context, id string, scan func(func(key
 	x.mtx.Lock()
 	if _, ok := x.rows[id]; ok {
 		x.rows[id] = row
+		x.version.Add(1)
 	}
 	delete(x.pending, id)
 	x.mtx.Unlock()

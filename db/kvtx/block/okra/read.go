@@ -8,6 +8,7 @@ import (
 
 	"github.com/s4wave/spacewave/db/block"
 	"github.com/s4wave/spacewave/db/block/blob"
+	"golang.org/x/sync/errgroup"
 )
 
 // loadPage returns the validated Okra page stored at cursor.
@@ -85,9 +86,9 @@ type batchNode struct {
 // findEntriesBatch resolves lookups below page into values and found, indexed
 // by each lookup's request position. The lookups are sorted by key, so the keys
 // under each child page form one contiguous run and child pages load in key
-// order. The walk goes one tree level at a time and reads every block the next
-// level needs together before loading them, so a remote store answers the
-// whole level in a few round trips. findEntriesBatch reorders lookups in place.
+// order. The walk goes one tree level at a time and loads every block the next
+// level needs together, so a remote store answers the whole level in a few
+// round trips. findEntriesBatch reorders lookups in place.
 func (t *Tx) findEntriesBatch(
 	ctx context.Context,
 	page *Page,
@@ -98,22 +99,26 @@ func (t *Tx) findEntriesBatch(
 ) error {
 	level := []batchNode{{page: page, cursor: pageCursor, lookups: lookups}}
 	for len(level) != 0 {
-		// Read the blocks this level leads to at once, before the walk below
-		// loads them one by one.
-		prefetchBatch(ctx, level)
+		// Plan the level's loads in key order, then run them together.
+		var loads []batchLoad
+		for i := range level {
+			loads = appendBatchLoads(loads, &level[i])
+		}
+		if err := t.runBatchLoads(ctx, loads); err != nil {
+			return err
+		}
 
+		// Place the leaf values and descend into the loaded child pages.
 		var next []batchNode
-		for _, node := range level {
-			if node.page.GetLevel() == 0 {
-				if err := t.resolveLeafBatch(ctx, node, values, found); err != nil {
-					return err
-				}
+		for i := range loads {
+			load := &loads[i]
+			if load.node.page.GetLevel() == 0 {
+				values[load.lookups[0].index] = load.value
+				found[load.lookups[0].index] = true
 				continue
 			}
-			var err error
-			next, err = appendChildBatch(ctx, next, node)
-			if err != nil {
-				return err
+			if child, ok := load.childNode(); ok {
+				next = append(next, child)
 			}
 		}
 		level = next
@@ -121,118 +126,111 @@ func (t *Tx) findEntriesBatch(
 	return nil
 }
 
-// resolveLeafBatch decodes the values of the lookups that match entries of the
-// leaf node into their request positions.
-func (t *Tx) resolveLeafBatch(ctx context.Context, node batchNode, values [][]byte, found []bool) error {
-	for _, lookup := range node.lookups {
-		// Find an exact non-anchor match for the requested key.
-		idx := node.page.searchEntry(lookup.key)
-		if idx < 0 {
-			continue
-		}
-		ent := node.page.GetEntries()[idx]
-		if ent.GetAnchor() || !bytes.Equal(ent.GetKey(), lookup.key) {
-			continue
-		}
+// batchLoad is one block the batch walk loads below a node: the value of one
+// matched lookup in a leaf, or the child page covering a run of lookups in an
+// inner node.
+type batchLoad struct {
+	// node is the node holding the entry.
+	node *batchNode
+	// idx is the entry's index in the node's page.
+	idx int
+	// lookups is the run of lookups under a child page, or the one matched
+	// lookup of a value.
+	lookups []batchLookup
 
-		// Decode the matched value into its original batch position.
-		value, err := t.entryToValue(ctx, node.page, node.cursor, idx)
-		if err != nil {
-			return err
-		}
-		values[lookup.index] = value
-		found[lookup.index] = true
-	}
-	return nil
+	// value is the loaded leaf value.
+	value []byte
+	// page and cursor are the loaded child page and its position.
+	page   *Page
+	cursor *block.Cursor
 }
 
-// appendChildBatch loads the child pages of the inner node that cover its
-// lookups and appends each with the run of lookups within its bounds.
-func appendChildBatch(ctx context.Context, next []batchNode, node batchNode) ([]batchNode, error) {
+// appendBatchLoads appends the loads the lookups under node need: the value of
+// each exact non-anchor match in a leaf, or the child page of each run of keys
+// sharing a child in an inner node. Keys ordered before the page's first entry
+// load nothing.
+func appendBatchLoads(loads []batchLoad, node *batchNode) []batchLoad {
+	entries := node.page.GetEntries()
 	lookups := node.lookups
 	for len(lookups) != 0 {
-		// Take the run of keys under the first remaining key's child page.
 		idx := node.page.searchEntry(lookups[0].key)
+		if node.page.GetLevel() == 0 {
+			lookup := lookups[:1]
+			lookups = lookups[1:]
+			if idx < 0 {
+				continue
+			}
+			ent := entries[idx]
+			if ent.GetAnchor() || !bytes.Equal(ent.GetKey(), lookup[0].key) {
+				continue
+			}
+			loads = append(loads, batchLoad{node: node, idx: idx, lookups: lookup})
+			continue
+		}
+
+		// Take the run of keys under the first remaining key's child page.
 		n := 1
 		for n < len(lookups) && node.page.searchEntry(lookups[n].key) == idx {
 			n++
 		}
 		group := lookups[:n]
 		lookups = lookups[n:]
-
-		// Skip keys ordered before the page's first entry.
-		if idx < 0 {
-			continue
-		}
-
-		// Load the child page containing this group of requested keys.
-		childCursor := node.page.FollowChild(node.cursor, idx)
-		childPage, err := loadPage(ctx, childCursor)
-		if err != nil {
-			return next, err
-		}
-
-		// Retain only keys within the loaded child page bounds.
-		nextGroup := group[:0]
-		for _, lookup := range group {
-			if childPage.containsKey(lookup.key) {
-				nextGroup = append(nextGroup, lookup)
-			}
-		}
-		if len(nextGroup) != 0 {
-			next = append(next, batchNode{page: childPage, cursor: childCursor, lookups: nextGroup})
+		if idx >= 0 {
+			loads = append(loads, batchLoad{node: node, idx: idx, lookups: group})
 		}
 	}
-	return next, nil
+	return loads
 }
 
-// batchPrefetchConcurrency bounds the block reads one batch level starts at once.
-const batchPrefetchConcurrency = 16
+// batchLoadConcurrency bounds the block loads one batch level runs at once.
+const batchLoadConcurrency = 16
 
-// prefetchBatch reads the blocks the lookups under the level's nodes lead to,
-// the child pages of inner nodes or the value blocks of leaves, through the
-// store with several reads in flight, so the serial walk that follows finds
-// them cached. A remote store answers each miss in one round trip, and the
-// walk would otherwise pay those round trips one after another. Failures are
-// left for the walk to report.
-func prefetchBatch(ctx context.Context, level []batchNode) {
-	// Prefetch only through a store.
-	store, _ := level[0].cursor.GetBlockStore()
-	if store == nil {
-		return
+// runBatchLoads loads each value or child page with at most
+// batchLoadConcurrency loads in flight. Each load goes through its cursor, so
+// a block the decoded block cache holds costs no store read. Returns the first
+// failure.
+func (t *Tx) runBatchLoads(ctx context.Context, loads []batchLoad) error {
+	// Load a single block on the caller's goroutine.
+	if len(loads) == 1 {
+		return t.runBatchLoad(ctx, &loads[0])
 	}
 
-	// Collect each distinct block the lookups reach from each node.
-	var refs []*block.BlockRef
-	for _, node := range level {
-		entries := node.page.GetEntries()
-		last := -1
-		for _, lookup := range node.lookups {
-			idx := node.page.searchEntry(lookup.key)
-			if idx < 0 || idx == last {
-				continue
-			}
-			last = idx
-			ent := entries[idx]
-			ref := ent.GetChildRef()
-			if node.page.GetLevel() == 0 {
-				if ent.GetAnchor() || ent.GetValueBlob() != nil || !bytes.Equal(ent.GetKey(), lookup.key) {
-					continue
-				}
-				ref = ent.GetValueRef()
-			}
-			if !ref.GetEmpty() {
-				refs = append(refs, ref)
-			}
+	// Run the loads together; each writes only its own entry.
+	eg, ctx := errgroup.WithContext(ctx)
+	eg.SetLimit(batchLoadConcurrency)
+	for i := range loads {
+		eg.Go(func() error { return t.runBatchLoad(ctx, &loads[i]) })
+	}
+	return eg.Wait()
+}
+
+// runBatchLoad loads one leaf value or child page.
+func (t *Tx) runBatchLoad(ctx context.Context, load *batchLoad) error {
+	// Decode a leaf's matched value.
+	node := load.node
+	if node.page.GetLevel() == 0 {
+		value, err := t.entryToValue(ctx, node.page, node.cursor, load.idx)
+		load.value = value
+		return err
+	}
+
+	// Load the child page covering the run of lookups.
+	load.cursor = node.page.FollowChild(node.cursor, load.idx)
+	page, err := loadPage(ctx, load.cursor)
+	load.page = page
+	return err
+}
+
+// childNode returns the loaded child page with the run of lookups within its
+// bounds, and false when none are.
+func (l *batchLoad) childNode() (batchNode, bool) {
+	group := l.lookups[:0]
+	for _, lookup := range l.lookups {
+		if l.page.containsKey(lookup.key) {
+			group = append(group, lookup)
 		}
 	}
-
-	// Read them together when the walk would load several; the walk reports
-	// any failure.
-	if len(refs) < 2 {
-		return
-	}
-	_ = block.Prefetch(ctx, store, refs, batchPrefetchConcurrency)
+	return batchNode{page: l.page, cursor: l.cursor, lookups: group}, len(group) != 0
 }
 
 func (p *Page) containsKey(key []byte) bool {

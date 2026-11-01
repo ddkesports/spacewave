@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"sync/atomic"
 
 	"github.com/s4wave/spacewave/db/block"
 	"github.com/s4wave/spacewave/db/packfile"
@@ -15,16 +16,21 @@ type ManifestSnapshot struct {
 	store *PackfileStore
 	// entries is an immutable copy-on-write tree in lookup order.
 	entries *btree.BTreeG[*manifestEntry]
+	// unindexed caches the packs the locator has not indexed, for the
+	// locator version it was computed at.
+	unindexed atomic.Pointer[unindexedPacks]
 }
 
-// SnapshotManifest captures the current catalog in constant space and time.
-// The result is safe for concurrent reads until the store is closed.
+// SnapshotManifest returns the current catalog in constant time. The result
+// is immutable and safe for concurrent reads until the store is closed.
 func (s *PackfileStore) SnapshotManifest() *ManifestSnapshot {
-	var entries *btree.BTreeG[*manifestEntry]
-	s.bcast.HoldLock(func(_ func(), _ func() <-chan struct{}) {
-		entries = s.manifest.Copy()
-	})
-	return &ManifestSnapshot{store: s, entries: entries}
+	return s.current.Load()
+}
+
+// publishManifest publishes a snapshot of the manifest. Call with bcast held,
+// or before the store is shared.
+func (s *PackfileStore) publishManifest() {
+	s.current.Store(&ManifestSnapshot{store: s, entries: s.manifest.Copy()})
 }
 
 // GetEntries materializes an explicitly requested complete catalog snapshot.

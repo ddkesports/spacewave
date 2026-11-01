@@ -18,6 +18,8 @@ type Locator interface {
 	Locate(ctx context.Context, key []byte) (packID string, found bool, err error)
 	// Indexed reports whether Locate knows every key of the pack.
 	Indexed(packID string) bool
+	// Version changes whenever Indexed may answer differently for some pack.
+	Version() uint64
 }
 
 // SetLocator sets the locator the lookups consult. Call it before the first
@@ -26,51 +28,91 @@ func (s *PackfileStore) SetLocator(l Locator) {
 	s.locator = l
 }
 
+// unindexedPacks is a snapshot's catalog split by the locator at one version.
+type unindexedPacks struct {
+	// version is the locator version the split was computed at.
+	version uint64
+	// byID holds every pack of the snapshot by id.
+	byID map[string]*manifestEntry
+	// open holds the packs the locator has not indexed, in lookup order.
+	open []*manifestEntry
+}
+
+// unindexedPacks returns the snapshot's packs split by loc, computing the
+// split once per snapshot and locator version. The version is read before
+// the split, so a change during it makes the next lookup recompute.
+func (v *ManifestSnapshot) unindexedPacks(loc Locator) *unindexedPacks {
+	// Reuse the split while the locator answers as it did.
+	version := loc.Version()
+	if packs := v.unindexed.Load(); packs != nil && packs.version == version {
+		return packs
+	}
+
+	// Index every pack and collect those the locator has not indexed.
+	packs := &unindexedPacks{
+		version: version,
+		byID:    make(map[string]*manifestEntry, v.entries.Len()),
+	}
+	v.entries.Scan(func(item *manifestEntry) bool {
+		id := item.entry.GetId()
+		packs.byID[id] = item
+		if !loc.Indexed(id) {
+			packs.open = append(packs.open, item)
+		}
+		return true
+	})
+	v.unindexed.Store(packs)
+	return packs
+}
+
 // candidates returns the packs of view that may hold key, the pack the locator
 // places it in first.
 func (s *PackfileStore) candidates(ctx context.Context, view *ManifestSnapshot, key []byte) ([]*manifestEntry, error) {
-	// Ask the locator which pack holds the key.
+	// Without a locator every pack tests its filter.
+	bloomKey := bloom.NewKey(key)
 	loc := s.locator
-	var located string
-	var found bool
-	if loc != nil {
-		var err error
-		located, found, err = loc.Locate(ctx, key)
-		if err != nil {
-			return nil, err
+	if loc == nil {
+		return view.filterCandidates(bloomKey), nil
+	}
+
+	// Ask the locator which pack holds the key.
+	located, found, err := loc.Locate(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+
+	// Place the located pack first. When it left the manifest, the index
+	// cannot rule out the packs it covers: test every filter.
+	packs := view.unindexedPacks(loc)
+	var out []*manifestEntry
+	if found {
+		hit := packs.byID[located]
+		if hit == nil {
+			return view.filterCandidates(bloomKey), nil
 		}
+		out = append(out, hit)
 	}
 
 	// Test the filters of the packs the locator has not indexed.
-	bloomKey := bloom.NewKey(key)
-	var hit *manifestEntry
-	var out []*manifestEntry
-	view.entries.Scan(func(item *manifestEntry) bool {
-		id := item.entry.GetId()
-		switch {
-		case found && id == located:
-			hit = item
-		case loc != nil && loc.Indexed(id):
-		case item.filter == nil || item.filter.TestKey(bloomKey):
-			out = append(out, item)
+	for _, item := range packs.open {
+		if found && item == out[0] {
+			continue
 		}
-		return true
-	})
-	if hit != nil {
-		return append([]*manifestEntry{hit}, out...), nil
-	}
-	if !found {
-		return out, nil
-	}
-
-	// The located pack left the manifest, so the index cannot rule out the
-	// packs it covers: test every filter.
-	out = out[:0]
-	view.entries.Scan(func(item *manifestEntry) bool {
 		if item.filter == nil || item.filter.TestKey(bloomKey) {
 			out = append(out, item)
 		}
+	}
+	return out, nil
+}
+
+// filterCandidates returns every pack of view whose filter may hold key.
+func (v *ManifestSnapshot) filterCandidates(key bloom.Key) []*manifestEntry {
+	var out []*manifestEntry
+	v.entries.Scan(func(item *manifestEntry) bool {
+		if item.filter == nil || item.filter.TestKey(key) {
+			out = append(out, item)
+		}
 		return true
 	})
-	return out, nil
+	return out
 }
