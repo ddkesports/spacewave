@@ -59,6 +59,11 @@ export enum FlowgraphPlacementKind {
    * FLOWGRAPH_PLACEMENT_KIND_ACTOR places a Step on an actor.
    */
   ACTOR = 2,
+
+  /**
+   * FLOWGRAPH_PLACEMENT_KIND_ACTOR_TEMPLATE starts an actor for each activation.
+   */
+  ACTOR_TEMPLATE = 3,
 }
 
 export const FlowgraphPlacementKind_Enum = /* @__PURE__ */ createEnumType(
@@ -67,6 +72,7 @@ export const FlowgraphPlacementKind_Enum = /* @__PURE__ */ createEnumType(
     [0, 'FLOWGRAPH_PLACEMENT_KIND_UNKNOWN'],
     [1, 'FLOWGRAPH_PLACEMENT_KIND_DEVICE'],
     [2, 'FLOWGRAPH_PLACEMENT_KIND_ACTOR'],
+    [3, 'FLOWGRAPH_PLACEMENT_KIND_ACTOR_TEMPLATE'],
   ],
 )
 
@@ -790,6 +796,10 @@ export interface FlowgraphRun {
    * stored cursor, so two readers of the same events deliver each once.
    */
   cursor?: { [key: string]: Uint8Array }
+  /**
+   * Placements is the immutable placement snapshot at FlowgraphRevision.
+   */
+  placements?: { [key: string]: FlowgraphPlacement }
 }
 
 export const FlowgraphRun: MessageType<FlowgraphRun> =
@@ -808,6 +818,7 @@ export const FlowgraphRun: MessageType<FlowgraphRun> =
       [10, 'pause_reason', 9],
       [11, 'standing', 8],
       [12, 'cursor', 12, 584],
+      [13, 'placements', 11, 584, FlowgraphPlacement.codec],
     ],
   )
 
@@ -854,6 +865,11 @@ export interface FlowgraphActivation {
    * grows, so a sequence number is never reused after an acknowledgement.
    */
   lastInputSeq?: bigint
+  /**
+   * ActorKey is the immutable receipt of the actor started for this activation.
+   * RecordActivationActor sets it once; restarted execs reattach to this actor.
+   */
+  actorKey?: string
 }
 
 export const FlowgraphActivation: MessageType<FlowgraphActivation> =
@@ -868,6 +884,44 @@ export const FlowgraphActivation: MessageType<FlowgraphActivation> =
       [6, 'key', 9],
       [7, 'inbox', 11, 1, FlowgraphLiveInput.codec],
       [8, 'last_input_seq', 4],
+      [9, 'actor_key', 9],
+    ],
+  )
+
+/**
+ * FlowgraphActivationContext is supplied as the flowgraph/context Task input.
+ * An exec uses it to record its actor and watch or acknowledge live inputs.
+ *
+ * @generated from message s4wave.flowgraph.FlowgraphActivationContext
+ */
+export interface FlowgraphActivationContext {
+  /**
+   * RunKey names the owning run, an immutable execution snapshot.
+   */
+  runKey?: string
+  /**
+   * ActivationId is the activation's Task key within that run.
+   */
+  activationId?: string
+  /**
+   * Key is the activation's arrival key, empty for an unkeyed Step.
+   */
+  key?: string
+  /**
+   * TemplateKey names the template in the run's immutable placement snapshot.
+   * It is empty unless the Step is placed on an actor template.
+   */
+  templateKey?: string
+}
+
+export const FlowgraphActivationContext: MessageType<FlowgraphActivationContext> =
+  /* @__PURE__ */ createMessageType<FlowgraphActivationContext>(
+    's4wave.flowgraph.FlowgraphActivationContext',
+    () => [
+      [1, 'run_key', 9],
+      [2, 'activation_id', 9],
+      [3, 'key', 9],
+      [4, 'template_key', 9],
     ],
   )
 
@@ -978,6 +1032,10 @@ export interface FlowgraphEvent {
    * EventId identifies the event within its event source.
    */
   eventId?: string
+  /**
+   * Port is the source output port, or empty for every outgoing connection.
+   */
+  port?: string
 }
 
 export const FlowgraphEvent: MessageType<FlowgraphEvent> =
@@ -986,6 +1044,7 @@ export const FlowgraphEvent: MessageType<FlowgraphEvent> =
     () => [
       [1, 'object_key', 9],
       [2, 'event_id', 9],
+      [3, 'port', 9],
     ],
   )
 

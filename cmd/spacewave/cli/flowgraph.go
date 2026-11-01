@@ -286,6 +286,7 @@ func buildFlowgraphShowCommand() *cli.Command {
 func buildFlowgraphNodeCommand() *cli.Command {
 	setArgs := &flowgraphNodeSetArgs{}
 	rmArgs := &flowgraphArgs{}
+	placeArgs := &flowgraphNodeSetArgs{}
 	return &cli.Command{
 		Name:  "node",
 		Usage: "edit Flowgraph nodes",
@@ -296,6 +297,13 @@ func buildFlowgraphNodeCommand() *cli.Command {
 				ArgsUsage: "<node-id>",
 				Flags:     setArgs.BuildFlags(),
 				Action:    setArgs.Run,
+			},
+			{
+				Name:      "place",
+				Usage:     "place an existing node on a Device, actor or actor template",
+				ArgsUsage: "<node-id>",
+				Flags:     placeArgs.placementFlags(),
+				Action:    placeArgs.place,
 			},
 			{
 				Name:      "rm",
@@ -324,6 +332,8 @@ type flowgraphNodeSetArgs struct {
 	skills  cli.StringSlice
 	device  string
 	actor   string
+	// template is the object that starts one actor per activation.
+	template string
 	// object is the Space object the node binds.
 	object string
 	// targetFile holds a Target in generated protobuf JSON format.
@@ -357,6 +367,7 @@ func (a *flowgraphNodeSetArgs) BuildFlags() []cli.Flag {
 		&cli.StringSliceFlag{Name: "skill", Usage: "Step skill name (repeatable)", Destination: &a.skills},
 		&cli.StringFlag{Name: "device", Usage: "place the node on this Device object key", Destination: &a.device},
 		&cli.StringFlag{Name: "actor", Usage: "place the Step on this actor object key", Destination: &a.actor},
+		&cli.StringFlag{Name: "template", Usage: "start an actor from this template per activation", Destination: &a.template},
 		&cli.StringFlag{Name: "object", Usage: "bind the node to this Space object key", Destination: &a.object},
 		&cli.StringFlag{Name: "target-file", Usage: "Step Target file in protobuf JSON format", Destination: &a.targetFile},
 		&cli.UintFlag{Name: "max-visits", Usage: "Step visit bound (zero is unlimited)", Destination: &a.maxVisits},
@@ -372,8 +383,9 @@ func (a *flowgraphNodeSetArgs) Run(c *cli.Context) error {
 		return errors.New("node set requires <node-id>")
 	}
 	id := c.Args().First()
-	if a.device != "" && a.actor != "" {
-		return errors.New("--device and --actor are mutually exclusive")
+	placement, err := a.buildPlacement()
+	if err != nil {
+		return err
 	}
 
 	// Build the node from its flags.
@@ -384,10 +396,6 @@ func (a *flowgraphNodeSetArgs) Run(c *cli.Context) error {
 	req := &flowgraph.UpdateFlowgraphRequest{SetNodes: map[string]*flowgraph.FlowgraphNode{id: node}}
 
 	// Place the node in the same edit when requested.
-	placement := &flowgraph.FlowgraphPlacement{Kind: flowgraph.FlowgraphPlacementKind_FLOWGRAPH_PLACEMENT_KIND_DEVICE, ObjectKey: a.device}
-	if a.actor != "" {
-		placement = &flowgraph.FlowgraphPlacement{Kind: flowgraph.FlowgraphPlacementKind_FLOWGRAPH_PLACEMENT_KIND_ACTOR, ObjectKey: a.actor}
-	}
 	if placement.GetObjectKey() != "" {
 		req.SetPlacements = map[string]*flowgraph.FlowgraphPlacement{id: placement}
 	}
@@ -439,6 +447,7 @@ func (a *flowgraphNodeSetArgs) buildNode() (*flowgraph.FlowgraphNode, error) {
 		}
 	}
 
+	// Keyed delivery applies only to Steps.
 	if a.keyed && node.GetStep() == nil {
 		return nil, errors.New("--keyed requires --type step")
 	}
@@ -658,7 +667,56 @@ func describePlacement(placement *flowgraph.FlowgraphPlacement) string {
 		return "device " + placement.GetObjectKey()
 	case flowgraph.FlowgraphPlacementKind_FLOWGRAPH_PLACEMENT_KIND_ACTOR:
 		return "actor " + placement.GetObjectKey()
+	case flowgraph.FlowgraphPlacementKind_FLOWGRAPH_PLACEMENT_KIND_ACTOR_TEMPLATE:
+		return "template " + placement.GetObjectKey()
 	default:
 		return ""
 	}
+}
+
+// placementFlags returns the flags shared by node set and node place.
+func (a *flowgraphNodeSetArgs) placementFlags() []cli.Flag {
+	return append(a.flowgraphArgs.BuildFlags(),
+		&cli.StringFlag{Name: "device", Usage: "Device object key", Destination: &a.device},
+		&cli.StringFlag{Name: "actor", Usage: "actor object key", Destination: &a.actor},
+		&cli.StringFlag{Name: "template", Usage: "actor template object key", Destination: &a.template},
+	)
+}
+
+// buildPlacement selects one placement, leaving it absent when no flag is set.
+func (a *flowgraphNodeSetArgs) buildPlacement() (*flowgraph.FlowgraphPlacement, error) {
+	// Require at most one destination across the supported kinds.
+	var placement *flowgraph.FlowgraphPlacement
+	for _, candidate := range []*flowgraph.FlowgraphPlacement{
+		{Kind: flowgraph.FlowgraphPlacementKind_FLOWGRAPH_PLACEMENT_KIND_DEVICE, ObjectKey: a.device},
+		{Kind: flowgraph.FlowgraphPlacementKind_FLOWGRAPH_PLACEMENT_KIND_ACTOR, ObjectKey: a.actor},
+		{Kind: flowgraph.FlowgraphPlacementKind_FLOWGRAPH_PLACEMENT_KIND_ACTOR_TEMPLATE, ObjectKey: a.template},
+	} {
+		if candidate.GetObjectKey() == "" {
+			continue
+		}
+		if placement != nil {
+			return nil, errors.New("--device, --actor and --template are mutually exclusive")
+		}
+		placement = candidate
+	}
+	return placement, nil
+}
+
+// place changes the placement of an existing node without replacing its body.
+func (a *flowgraphNodeSetArgs) place(c *cli.Context) error {
+	// Require one node and one placement before opening the graph.
+	if c.NArg() != 1 {
+		return errors.New("node place requires <node-id>")
+	}
+	placement, err := a.buildPlacement()
+	if err != nil {
+		return err
+	}
+	if placement == nil {
+		return errors.New("node place requires --device, --actor or --template")
+	}
+
+	// Change just the node's graph edge.
+	return a.update(c, &flowgraph.UpdateFlowgraphRequest{SetPlacements: map[string]*flowgraph.FlowgraphPlacement{c.Args().First(): placement}})
 }

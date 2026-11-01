@@ -34,12 +34,14 @@ func (r *DeliverEventsRequest) Validate() error {
 // cursor. The arrivals and the cursor are written together, so an event is
 // never queued without its cursor or the cursor moved without its event.
 // Call it in a write transaction; the run controller for runKey routes the
-// arrivals.
+// arrivals. For a bound source, pass its current type binding to validate
+// named output ports. Unbound sources use the authored ports.
 func DeliverEvents(
 	ctx context.Context,
 	ws world.WorldState,
 	runKey string,
 	req *DeliverEventsRequest,
+	bindings ...*s4wave_flowgraph.FlowgraphBinding,
 ) (DeliverEventsResult, error) {
 	// Read the run and its pinned graph.
 	if err := req.Validate(); err != nil {
@@ -64,11 +66,32 @@ func DeliverEvents(
 		return DeliverEventsResult_DELIVER_EVENTS_RESULT_STALE_CURSOR, nil
 	}
 
+	// Validate named output ports before queuing any event or moving the cursor.
+	node := graph.GetNodes()[req.GetNodeId()]
+	for _, event := range req.GetEvents() {
+		if event.GetPort() == "" {
+			continue
+		}
+		port := node.FindPort(event.GetPort())
+		if node.GetObjectKey() != "" {
+			port = nil
+			if len(bindings) != 0 && bindings[0].GetObjectKey() == node.GetObjectKey() && bindings[0].GetState() == s4wave_flowgraph.FlowgraphBindingState_FLOWGRAPH_BINDING_STATE_BOUND {
+				port = bindings[0].FindPort(event.GetPort())
+			}
+		}
+		if port.GetDirection() != s4wave_flowgraph.FlowgraphPortDirection_FLOWGRAPH_PORT_DIRECTION_OUTPUT {
+			return DeliverEventsResult_DELIVER_EVENTS_RESULT_UNKNOWN, errors.Errorf("event port %q is not a declared output", event.GetPort())
+		}
+	}
+
 	// Queue each event along the node's connections and move the cursor.
 	next := run.CloneVT()
 	connections := outgoing(graph, req.GetNodeId())
 	for _, event := range req.GetEvents() {
 		for _, connection := range connections {
+			if event.GetPort() != "" && connection.GetOutputPort() != event.GetPort() {
+				continue
+			}
 			next.Arrivals = append(next.Arrivals, &s4wave_flowgraph.FlowgraphArrival{
 				NodeId: connection.GetInputNode(),
 				Port:   connection.GetInputPort(),
@@ -77,6 +100,7 @@ func DeliverEvents(
 					Event: &s4wave_flowgraph.FlowgraphEvent{
 						ObjectKey: event.GetObjectKey(),
 						EventId:   event.GetEventId(),
+						Port:      event.GetPort(),
 					},
 				},
 			})

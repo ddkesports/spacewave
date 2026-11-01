@@ -92,7 +92,7 @@ func (s *counterSource) WatchEvents(req *flowgraph_eventsource.WatchEventsReques
 		if count > sent {
 			batch := &flowgraph_eventsource.WatchEventsResponse{NextCursor: []byte(strconv.Itoa(count))}
 			for n := sent + 1; n <= count; n++ {
-				batch.Events = append(batch.Events, &flowgraph_eventsource.SourceEvent{EventId: "e" + strconv.Itoa(n)})
+				batch.Events = append(batch.Events, &flowgraph_eventsource.SourceEvent{EventId: "e" + strconv.Itoa(n), Port: "event"})
 			}
 			if err := strm.Send(batch); err != nil {
 				return err
@@ -134,7 +134,9 @@ func (c *counterTypes) HandleDirective(_ context.Context, di directive.Instance)
 		if dir.LookupObjectTypeMetadataTypeID() != counterType {
 			return nil, nil
 		}
-		metadata := &s4wave_objecttype_registry.ObjectTypeMetadata{DisplayName: "Counter source"}
+		metadata := &s4wave_objecttype_registry.ObjectTypeMetadata{DisplayName: "Counter source", Ports: []*s4wave_objecttype_registry.ObjectTypePort{
+			{Name: "event", Direction: s4wave_objecttype_registry.ObjectTypePortDirection_OBJECT_TYPE_PORT_DIRECTION_OUTPUT, TypeId: "activation"},
+		}}
 		return directive.R(directive.NewValueResolver([]s4wave_objecttype_registry.LookupObjectTypeMetadataValue{metadata}), nil)
 	case objecttype.LookupObjectType:
 		if dir.LookupObjectTypeID() != counterType {

@@ -27,6 +27,10 @@ export interface SourceEvent {
    * object itself.
    */
   payloadObjectKey?: string
+  /**
+   * Port selects one source output port, or every connection when empty.
+   */
+  port?: string
 }
 
 export const SourceEvent: MessageType<SourceEvent> =
@@ -36,6 +40,7 @@ export const SourceEvent: MessageType<SourceEvent> =
       [1, 'event_id', 9],
       [2, 'key', 9],
       [3, 'payload_object_key', 9],
+      [4, 'port', 9],
     ],
   )
 

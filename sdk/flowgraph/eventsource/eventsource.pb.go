@@ -26,6 +26,8 @@ type SourceEvent struct {
 	// empty when the event has no payload, and the arrival then names the source
 	// object itself.
 	PayloadObjectKey string `protobuf:"bytes,3,opt,name=payload_object_key,json=payloadObjectKey,proto3" json:"payloadObjectKey,omitempty"`
+	// Port selects one source output port, or every connection when empty.
+	Port string `protobuf:"bytes,4,opt,name=port,proto3" json:"port,omitempty"`
 }
 
 func (x *SourceEvent) Reset() {
@@ -51,6 +53,13 @@ func (x *SourceEvent) GetKey() string {
 func (x *SourceEvent) GetPayloadObjectKey() string {
 	if x != nil {
 		return x.PayloadObjectKey
+	}
+	return ""
+}
+
+func (x *SourceEvent) GetPort() string {
+	if x != nil {
+		return x.Port
 	}
 	return ""
 }
@@ -114,6 +123,7 @@ func (m *SourceEvent) CloneVT() *SourceEvent {
 	r.EventId = m.EventId
 	r.Key = m.Key
 	r.PayloadObjectKey = m.PayloadObjectKey
+	r.Port = m.Port
 	if len(m.unknownFields) > 0 {
 		r.unknownFields = slices.Clone(m.unknownFields)
 	}
@@ -170,6 +180,9 @@ func (this *SourceEvent) EqualVT(that *SourceEvent) bool {
 		return false
 	}
 	if this.PayloadObjectKey != that.PayloadObjectKey {
+		return false
+	}
+	if this.Port != that.Port {
 		return false
 	}
 	return string(this.unknownFields) == string(that.unknownFields)
@@ -249,6 +262,11 @@ func (x *SourceEvent) MarshalProtoJSON(s *json.MarshalState) {
 		s.WriteObjectField("payloadObjectKey")
 		s.WriteString(x.PayloadObjectKey)
 	}
+	if x.Port != "" || s.HasField("port") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("port")
+		s.WriteString(x.Port)
+	}
 	s.WriteObjectEnd()
 }
 
@@ -275,6 +293,9 @@ func (x *SourceEvent) UnmarshalProtoJSON(s *json.UnmarshalState) {
 		case "payload_object_key", "payloadObjectKey":
 			s.AddField("payload_object_key")
 			x.PayloadObjectKey = s.ReadString()
+		case "port":
+			s.AddField("port")
+			x.Port = s.ReadString()
 		}
 	})
 }
@@ -426,6 +447,11 @@ func (m *SourceEvent) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	if m.unknownFields != nil {
 		i = protobuf_go_lite.EncodeRawBytes(dAtA, i, m.unknownFields)
 	}
+	if len(m.Port) > 0 {
+		i = protobuf_go_lite.EncodeString(dAtA, i, m.Port)
+		i--
+		dAtA[i] = 0x22
+	}
 	if len(m.PayloadObjectKey) > 0 {
 		i = protobuf_go_lite.EncodeString(dAtA, i, m.PayloadObjectKey)
 		i--
@@ -539,6 +565,7 @@ func (m *SourceEvent) SizeVT() (n int) {
 	n += protobuf_go_lite.SizeStringNonEmpty(1, m.EventId)
 	n += protobuf_go_lite.SizeStringNonEmpty(1, m.Key)
 	n += protobuf_go_lite.SizeStringNonEmpty(1, m.PayloadObjectKey)
+	n += protobuf_go_lite.SizeStringNonEmpty(1, m.Port)
 	n += len(m.unknownFields)
 	return n
 }
@@ -583,6 +610,10 @@ func (x *SourceEvent) MarshalProtoText() string {
 	if x.PayloadObjectKey != "" {
 		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "payload_object_key")
 		protobuf_go_lite.TextWriteString(&sb, x.PayloadObjectKey)
+	}
+	if x.Port != "" {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "port")
+		protobuf_go_lite.TextWriteString(&sb, x.Port)
 	}
 	return protobuf_go_lite.TextFinishMessage(&sb)
 }
@@ -681,6 +712,16 @@ func (m *SourceEvent) UnmarshalVT(dAtA []byte) error {
 				return err
 			}
 			m.PayloadObjectKey = v
+		case 4:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Port", wireType)
+			}
+			var v string
+			v, iNdEx, err = protobuf_go_lite.DecodeString(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			m.Port = v
 		default:
 			iNdEx = preIndex
 			skippy, err := protobuf_go_lite.Skip(dAtA[iNdEx:])

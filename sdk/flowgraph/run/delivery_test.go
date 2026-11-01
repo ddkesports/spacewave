@@ -117,3 +117,52 @@ func TestDeliverEventsCursor(t *testing.T) {
 		t.Fatalf("cursor = %q, want c3", resumed.GetCursor()[sourceID])
 	}
 }
+
+// TestEventPorts routes a named event port exclusively and keeps empty-port broadcast.
+func TestEventPorts(t *testing.T) {
+	// Give the source two outputs with different receiving Steps.
+	e := newEnv(t)
+	source := &s4wave_flowgraph.FlowgraphNode{TypeId: "test/event-source", Ports: []*s4wave_flowgraph.FlowgraphPort{
+		port("message", s4wave_flowgraph.FlowgraphPortDirection_FLOWGRAPH_PORT_DIRECTION_OUTPUT),
+		port("thread", s4wave_flowgraph.FlowgraphPortDirection_FLOWGRAPH_PORT_DIRECTION_OUTPUT),
+		port("input", s4wave_flowgraph.FlowgraphPortDirection_FLOWGRAPH_PORT_DIRECTION_INPUT),
+	}}
+	e.createGraph(map[string]*s4wave_flowgraph.FlowgraphNode{
+		sourceID: source,
+		"a":      e.step([]string{"in"}, [2]string{"out", "none"}, true, nil),
+		"b":      e.step([]string{"in"}, [2]string{"out", "none"}, true, nil),
+	}, map[string]*s4wave_flowgraph.FlowgraphConnection{
+		"src-a": connect(sourceID, "message", "a", "in"),
+		"src-b": connect(sourceID, "thread", "b", "in"),
+	})
+	e.startRun()
+
+	// A thread event reaches just the thread connection, with its source port preserved.
+	threaded := event("thread-1", "topic")
+	threaded.Port = "thread"
+	e.deliver("", "c1", threaded)
+	run := e.readRun()
+	requireEventIDs(t, run, "thread-1")
+	if arrival := run.GetArrivals()[0]; arrival.GetNodeId() != "b" || arrival.GetEvent().GetPort() != "thread" || arrival.GetKey() != "topic" {
+		t.Fatalf("thread arrival = %v", arrival)
+	}
+
+	// Unknown and input ports cannot move the cursor or queue a partial batch.
+	for _, port := range []string{"unknown", "input"} {
+		err := world.ExecTransaction(e.ctx, e.tb.Engine, true, func(ctx context.Context, tx world.WorldState) error {
+			invalid := event("invalid", "topic")
+			invalid.Port = port
+			_, err := flowgraph_run.DeliverEvents(ctx, tx, runKey, &flowgraph_run.DeliverEventsRequest{
+				NodeId: sourceID, Cursor: []byte("c1"), NextCursor: []byte("c2"), Events: []*flowgraph_run.DeliveredEvent{threaded, invalid},
+			})
+			return err
+		})
+		if err == nil || !e.readRun().EqualVT(run) {
+			t.Fatalf("invalid port %q changed the run: %v", port, err)
+		}
+	}
+
+	// An event without a port retains the existing broadcast behavior.
+	e.deliver("c1", "c2", event("broadcast", "topic"))
+	requireEventIDs(t, e.readRun(), "thread-1", "broadcast", "broadcast")
+}

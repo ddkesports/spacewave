@@ -241,6 +241,8 @@ func TestFlowgraphResourceRejectsInvalidEdits(t *testing.T) {
 		{SetConnections: map[string]*flowgraph.FlowgraphConnection{"wrong": {OutputNode: "local", OutputPort: "stream", InputNode: "tcp", InputPort: "stream"}}},
 		{SetNodes: map[string]*flowgraph.FlowgraphNode{"step": {TypeId: flowgraph.TCPPortNodeTypeID}}},
 		{SetPlacements: map[string]*flowgraph.FlowgraphPlacement{"tcp": {Kind: flowgraph.FlowgraphPlacementKind_FLOWGRAPH_PLACEMENT_KIND_DEVICE, ObjectKey: "actor/first"}}},
+		{SetPlacements: map[string]*flowgraph.FlowgraphPlacement{"tcp": {Kind: flowgraph.FlowgraphPlacementKind_FLOWGRAPH_PLACEMENT_KIND_ACTOR_TEMPLATE, ObjectKey: "actor/first"}}},
+		{SetPlacements: map[string]*flowgraph.FlowgraphPlacement{"step": {Kind: flowgraph.FlowgraphPlacementKind_FLOWGRAPH_PLACEMENT_KIND_ACTOR_TEMPLATE, ObjectKey: "missing/template"}}},
 	}
 	for _, request := range requests {
 		if _, err := service.UpdateFlowgraph(t.Context(), request); err == nil {

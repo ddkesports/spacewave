@@ -30,11 +30,14 @@ type flowgraphRunArgs struct {
 	worker string
 	// workerPeer selects a Device peer linked to the placed Worker.
 	workerPeer string
+	// standing finds or creates the graph's standing run.
+	standing bool
 }
 
 // BuildFlags returns the run command's daemon and placement flags.
 func (a *flowgraphRunArgs) BuildFlags() []cli.Flag {
 	return append(a.flowgraphArgs.BuildFlags(),
+		&cli.BoolFlag{Name: "standing", Usage: "find or create the Flowgraph standing run", Destination: &a.standing},
 		&cli.StringFlag{Name: "cluster", Usage: "Cluster object key for a new run", Destination: &a.cluster},
 		&cli.StringFlag{Name: "worker", Usage: "place a new run on this Worker object key", Destination: &a.worker},
 		&cli.StringFlag{Name: "peer-id", Usage: "placed Worker peer (default: this session)", Destination: &a.workerPeer},
@@ -44,10 +47,20 @@ func (a *flowgraphRunArgs) BuildFlags() []cli.Flag {
 // Run creates, resumes, or reads a run through the granting daemon session.
 func (a *flowgraphRunArgs) Run(c *cli.Context) error {
 	// Require one run key before mounting the session.
-	if c.NArg() != 1 {
+	if c.NArg() != 1 && (a.action != "start" || !a.standing || c.NArg() != 0) {
 		return errors.New("one Flowgraph run object key is required")
 	}
 	key := c.Args().First()
+	if a.standing {
+		if a.action != "start" {
+			return errors.New("--standing applies only to run start")
+		}
+		derived := flowgraph_run.StandingRunKey(a.key)
+		if key != "" && key != derived {
+			return errors.New("standing run key must be " + derived)
+		}
+		key = derived
+	}
 	if a.action == "start" && (a.cluster == "" || a.key == "") {
 		return errors.New("start requires --cluster and --flowgraph")
 	}
@@ -101,18 +114,7 @@ func (a *flowgraphRunArgs) Run(c *cli.Context) error {
 		return err
 	}
 	err = world.ExecTransaction(c.Context, engine, true, func(ctx context.Context, tx world.WorldState) error {
-		if a.action == "resume" {
-			return flowgraph_run.ResumeRun(ctx, tx, key)
-		}
-		var placement *forge_worker.Placement
-		if a.worker != "" {
-			pid := a.workerPeer
-			if pid == "" {
-				pid = sender.String()
-			}
-			placement = &forge_worker.Placement{WorkerObjectKey: a.worker, PeerId: pid}
-		}
-		return flowgraph_run.StartRun(ctx, tx, sender, key, a.key, a.cluster, placement)
+		return a.apply(ctx, tx, sender, key)
 	})
 	if err != nil {
 		return err
@@ -206,4 +208,29 @@ func buildFlowgraphRunCommand() *cli.Command {
 		})
 	}
 	return group
+}
+
+// apply changes the run in the granting session's World transaction.
+func (a *flowgraphRunArgs) apply(ctx context.Context, tx world.WorldState, sender peer.ID, key string) error {
+	// Resume a paused run without changing its placement.
+	if a.action == "resume" {
+		return flowgraph_run.ResumeRun(ctx, tx, key)
+	}
+
+	// Resolve the optional Worker placement for a newly created run.
+	var placement *forge_worker.Placement
+	if a.worker != "" {
+		pid := a.workerPeer
+		if pid == "" {
+			pid = sender.String()
+		}
+		placement = &forge_worker.Placement{WorkerObjectKey: a.worker, PeerId: pid}
+	}
+
+	// Find the standing run idempotently, or create one ordinary run.
+	if a.standing {
+		_, err := flowgraph_run.StandingRun(ctx, tx, sender, a.key, a.cluster, placement)
+		return err
+	}
+	return flowgraph_run.StartRun(ctx, tx, sender, key, a.key, a.cluster, placement)
 }

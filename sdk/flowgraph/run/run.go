@@ -132,6 +132,7 @@ func StartRun(
 		JobKey:       jobKey,
 		State:        s4wave_flowgraph.FlowgraphRunState_FLOWGRAPH_RUN_STATE_RUNNING,
 		Standing:     options.standing,
+		Placements:   snapshot.GetPlacements(),
 	}
 	for _, id := range slices.Sorted(maps.Keys(graph.GetNodes())) {
 		if graph.GetNodes()[id].GetStep() != nil && len(inputPorts(graph, id)) == 0 {
@@ -190,6 +191,7 @@ func ResumeRun(ctx context.Context, ws world.WorldState, runKey string) error {
 	// Write the run with the graph pinned at the current revision.
 	_, _, err = world.AccessObjectState(ctx, obj, true, func(cursor *block.Cursor) error {
 		cursor.SetBlock(next, true)
+		next.Placements = snapshot.GetPlacements()
 		next.SetGraph(cursor, graph, snapshot.GetRevision())
 		return nil
 	})

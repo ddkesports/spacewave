@@ -79,7 +79,7 @@ func (w *eventSourceWatcher) execute(ctx context.Context) error {
 	binding, err := watch.Next(ctx)
 	for err == nil {
 		if binding.GetState() == s4wave_flowgraph.FlowgraphBindingState_FLOWGRAPH_BINDING_STATE_BOUND {
-			binding, err = w.serve(ctx, watch, binding.GetTypeId())
+			binding, err = w.serve(ctx, watch, binding)
 			continue
 		}
 		w.c.le.Debugf("event source %q is %s, waiting", w.key.nodeID, binding.GetState())
@@ -91,7 +91,7 @@ func (w *eventSourceWatcher) execute(ctx context.Context) error {
 // serve streams the object's events until its binding changes, and returns the
 // new binding. It returns an error when the stream fails while the binding
 // stands.
-func (w *eventSourceWatcher) serve(ctx context.Context, watch *s4wave_flowgraph.BindingWatch, typeID string) (*s4wave_flowgraph.FlowgraphBinding, error) {
+func (w *eventSourceWatcher) serve(ctx context.Context, watch *s4wave_flowgraph.BindingWatch, binding *s4wave_flowgraph.FlowgraphBinding) (*s4wave_flowgraph.FlowgraphBinding, error) {
 	// Cancel the stream when the binding changes.
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -107,7 +107,7 @@ func (w *eventSourceWatcher) serve(ctx context.Context, watch *s4wave_flowgraph.
 	}()
 
 	// Stream until the stream fails or the binding change cancels it.
-	streamErr := w.stream(streamCtx, typeID)
+	streamErr := w.stream(streamCtx, binding)
 	cancel()
 	next := <-changed
 	if ctx.Err() != nil {
@@ -126,9 +126,9 @@ func (w *eventSourceWatcher) serve(ctx context.Context, watch *s4wave_flowgraph.
 // cursor and delivers each batch. It opens the stream again from the stored
 // cursor when a delivery names a stale cursor, and returns when the stream
 // fails or the context ends.
-func (w *eventSourceWatcher) stream(ctx context.Context, typeID string) error {
+func (w *eventSourceWatcher) stream(ctx context.Context, binding *s4wave_flowgraph.FlowgraphBinding) error {
 	// Build the object's resource client.
-	client, closeClient, err := w.openClient(ctx, typeID)
+	client, closeClient, err := w.openClient(ctx, binding.GetTypeId())
 	if err != nil {
 		return err
 	}
@@ -140,7 +140,7 @@ func (w *eventSourceWatcher) stream(ctx context.Context, typeID string) error {
 		if err != nil {
 			return err
 		}
-		if err := w.watchEvents(ctx, client, cursor); err != nil {
+		if err := w.watchEvents(ctx, client, cursor, binding); err != nil {
 			return err
 		}
 	}
@@ -185,7 +185,7 @@ func (w *eventSourceWatcher) openClient(ctx context.Context, typeID string) (flo
 // watchEvents delivers the batches of one WatchEvents stream opened after
 // cursor. It returns nil when a delivery names a stale cursor, so the caller
 // resumes from the stored one, and an error when the stream ends or fails.
-func (w *eventSourceWatcher) watchEvents(ctx context.Context, client flowgraph_eventsource.SRPCEventSourceServiceClient, cursor []byte) error {
+func (w *eventSourceWatcher) watchEvents(ctx context.Context, client flowgraph_eventsource.SRPCEventSourceServiceClient, cursor []byte, binding *s4wave_flowgraph.FlowgraphBinding) error {
 	// Open the stream after the cursor.
 	stream, err := client.WatchEvents(ctx, &flowgraph_eventsource.WatchEventsRequest{Cursor: cursor})
 	if err != nil {
@@ -202,7 +202,7 @@ func (w *eventSourceWatcher) watchEvents(ctx context.Context, client flowgraph_e
 			}
 			return errors.Wrap(err, "event source stream")
 		}
-		result, err := w.deliver(ctx, cursor, batch)
+		result, err := w.deliver(ctx, cursor, batch, binding)
 		if err != nil {
 			return err
 		}
@@ -234,7 +234,7 @@ func (w *eventSourceWatcher) readCursor(ctx context.Context) ([]byte, error) {
 
 // deliver hands one batch to the run in one World transaction. A batch whose
 // events have no payload object names the source object.
-func (w *eventSourceWatcher) deliver(ctx context.Context, cursor []byte, batch *flowgraph_eventsource.WatchEventsResponse) (DeliverEventsResult, error) {
+func (w *eventSourceWatcher) deliver(ctx context.Context, cursor []byte, batch *flowgraph_eventsource.WatchEventsResponse, binding *s4wave_flowgraph.FlowgraphBinding) (DeliverEventsResult, error) {
 	// Translate the source's events to the run's delivery.
 	req := &DeliverEventsRequest{
 		NodeId:     w.key.nodeID,
@@ -250,6 +250,7 @@ func (w *eventSourceWatcher) deliver(ctx context.Context, cursor []byte, batch *
 			ObjectKey: objectKey,
 			EventId:   event.GetEventId(),
 			Key:       event.GetKey(),
+			Port:      event.GetPort(),
 		})
 	}
 
@@ -257,7 +258,7 @@ func (w *eventSourceWatcher) deliver(ctx context.Context, cursor []byte, batch *
 	var result DeliverEventsResult
 	err := world.ExecTransaction(ctx, w.c.engine, true, func(ctx context.Context, tx world.WorldState) error {
 		var err error
-		result, err = DeliverEvents(ctx, tx, w.c.conf.GetObjectKey(), req)
+		result, err = DeliverEvents(ctx, tx, w.c.conf.GetObjectKey(), req, binding)
 		return err
 	})
 	return result, err

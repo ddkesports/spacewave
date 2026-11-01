@@ -27,6 +27,8 @@ message SourceEvent {
   // empty when the event has no payload, and the arrival then names the source
   // object itself.
   string payload_object_key = 3;
+  // Port selects one source output port, or every connection when empty.
+  string port = 4;
 }
 
 // WatchEventsRequest opens a stream of events.

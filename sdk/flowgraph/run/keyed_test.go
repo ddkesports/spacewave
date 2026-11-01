@@ -26,6 +26,8 @@ const (
 	liveStepID = "test/live-step"
 	// keyedID is the keyed Step of the live tests.
 	keyedID = "a"
+	// templateKey names the test actor template.
+	templateKey = "template/test"
 )
 
 // liveConfig is the test Step's config: the World engine and the run to read.
@@ -56,6 +58,14 @@ type liveSteps struct {
 	echoed chan string
 	// runKey is the run the executions belong to.
 	runKey string
+	// attached reports each actor an execution attaches to.
+	attached chan string
+	// stopped reports executions whose lifecycle ended.
+	stopped chan string
+	// stopWorker stops the current worker and its executions.
+	stopWorker func()
+	// outputKey overrides the routing key on completed activations when nonempty.
+	outputKey string
 }
 
 // GetConfigID returns the config ID.
@@ -81,6 +91,8 @@ func (f *liveSteps) GetVersion() controller.Version { return flowgraph_run.Versi
 type liveStep struct {
 	f      *liveSteps
 	handle forge_target.ExecControllerHandle
+	// activation is the context supplied on the production Task input.
+	activation *s4wave_flowgraph.FlowgraphActivationContext
 }
 
 // GetControllerInfo returns information about the controller.
@@ -89,35 +101,74 @@ func (s *liveStep) GetControllerInfo() *controller.Info {
 }
 
 // InitForgeExecController keeps the handle.
-func (s *liveStep) InitForgeExecController(_ context.Context, _ forge_target.InputMap, handle forge_target.ExecControllerHandle) error {
+func (s *liveStep) InitForgeExecController(ctx context.Context, inputs forge_target.InputMap, handle forge_target.ExecControllerHandle) error {
+	// Keep the handle and read this activation's own identity.
 	s.handle = handle
-	return nil
+	var err error
+	s.activation, err = flowgraph_run.ReadActivationContext(ctx, inputs, handle)
+	return err
 }
 
-// activation returns the Task key of the run's one running activation of the
-// keyed Step: the identity a production Step receives with its start.
-func (s *liveStep) activation() (string, error) {
-	run := s.f.e.readStanding()
-	for _, activation := range run.GetActivations() {
-		if !activation.GetDone() && activation.GetNodeId() == keyedID {
-			return activation.GetTaskKey(), nil
+// attach finds the recorded actor, or creates and records one atomically.
+func (s *liveStep) attach(ctx context.Context) (string, error) {
+	// Read the run through the same transaction that will record the actor.
+	var actor string
+	err := world.ExecTransaction(ctx, s.f.e.tb.Engine, true, func(ctx context.Context, tx world.WorldState) error {
+		run, _, err := s4wave_flowgraph.ReadFlowgraphRun(ctx, tx, s.activation.GetRunKey())
+		if err != nil {
+			return err
 		}
-	}
-	return "", errors.New("keyed Step has no running activation")
+		// Reattach only while the owning activation still exists.
+		found := false
+		for _, activation := range run.GetActivations() {
+			if activation.GetTaskKey() == s.activation.GetActivationId() {
+				actor = activation.GetActorKey()
+				found = true
+				break
+			}
+		}
+		if !found {
+			return flowgraph_run.ErrActivationEnded
+		}
+		if actor != "" {
+			return nil
+		}
+
+		// A template belongs to the pinned placement, even if the graph was edited.
+		if s.activation.GetTemplateKey() != templateKey {
+			return errors.New("wrong activation template")
+		}
+		actor = "test-actor/" + s.activation.GetActivationId()
+		obj, _, err := world.CreateWorldObject(ctx, tx, actor, func(cursor *block.Cursor) error {
+			cursor.SetBlock(s.activation, true)
+			return nil
+		})
+		world.ReleaseObjectState(obj)
+		if err != nil {
+			return err
+		}
+		return flowgraph_run.RecordActivationActor(ctx, tx, s.activation.GetRunKey(), s.activation.GetActivationId(), actor)
+	})
+	return actor, err
 }
 
 // Execute reads live inputs while it waits for a token, then sets its output.
 func (s *liveStep) Execute(ctx context.Context) error {
+	// Start one actor for this activation, or reattach after a worker restart.
+	actor, err := s.attach(ctx)
+	if err != nil {
+		return err
+	}
+	s.f.attached <- actor
+	defer func() { s.f.stopped <- actor }()
+
 	// Echo and acknowledge each live input until the token arrives.
 	e := s.f.e
 	watchCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	watched := make(chan error, 1)
 	if s.f.ack {
-		id, err := s.activation()
-		if err != nil {
-			return err
-		}
+		id := s.activation.GetActivationId()
 		go func() {
 			watched <- flowgraph_run.WatchLiveInputs(watchCtx, e.tb.WorldState, s.f.runKey, id, func(inputs []*s4wave_flowgraph.FlowgraphLiveInput) error {
 				for _, input := range inputs {
@@ -156,7 +207,19 @@ func (s *liveStep) Execute(ctx context.Context) error {
 		return err
 	}
 	val.Name = "out"
-	return s.handle.SetOutputs(ctx, forge_value.ValueSlice{val}, true)
+	outputs := forge_value.ValueSlice{val}
+	if s.f.outputKey != "" {
+		keyValue, err := forge_target.AccessValue(ctx, s.handle, seed, func(cursor *block.Cursor) error {
+			_, err := blob.BuildBlob(ctx, int64(len(s.f.outputKey)), bytes.NewBufferString(s.f.outputKey), cursor, nil)
+			return err
+		})
+		if err != nil {
+			return err
+		}
+		keyValue.Name = s4wave_flowgraph.KeyOutputName
+		outputs = append(outputs, keyValue)
+	}
+	return s.handle.SetOutputs(ctx, outputs, true)
 }
 
 // HandleDirective resolves no directives.
@@ -175,8 +238,13 @@ var _ forge_target.ExecController = (*liveStep)(nil)
 // controller started, and returns the test Step factory. The Step has one
 // input port per source.
 func (e *env) liveGraph(ack bool, sources ...string) *liveSteps {
+	return e.liveGraphWith(ack, false, sources...)
+}
+
+// liveGraphWith optionally connects a keyed successor to the test template Step.
+func (e *env) liveGraphWith(ack, successor bool, sources ...string) *liveSteps {
 	// Register the test Step.
-	steps := &liveSteps{e: e, ack: ack, tokens: make(chan struct{}, 8), echoed: make(chan string, 8), runKey: standingKey}
+	steps := &liveSteps{e: e, ack: ack, tokens: make(chan struct{}, 8), echoed: make(chan string, 8), runKey: standingKey, attached: make(chan string, 16), stopped: make(chan string, 16)}
 	e.tb.StaticResolver.AddFactory(steps)
 	target, err := target_json.ResolveYAML(e.ctx, e.tb.Bus, []byte(`
 outputs:
@@ -186,6 +254,9 @@ outputs:
   - name: none
     outputType: OutputType_EXEC
     execOutput: none
+  - name: flowgraph/key
+    outputType: OutputType_EXEC
+    execOutput: flowgraph/key
 exec:
   controller:
     id: `+liveStepID+`
@@ -216,6 +287,11 @@ exec:
 		step.Ports = append(step.Ports, port("in-"+source, s4wave_flowgraph.FlowgraphPortDirection_FLOWGRAPH_PORT_DIRECTION_INPUT))
 		connections[source+"-"+keyedID] = connect(source, "events", keyedID, "in-"+source)
 	}
+	if successor {
+		nodes["b"] = step.CloneVT()
+		nodes["b"].Ports = append(nodes["b"].Ports[:2], port("in", s4wave_flowgraph.FlowgraphPortDirection_FLOWGRAPH_PORT_DIRECTION_INPUT))
+		connections["a-b"] = connect(keyedID, "out", "b", "in")
+	}
 	e.createGraph(nodes, connections)
 
 	// Create the event object, the standing run, and start both controllers.
@@ -227,8 +303,24 @@ exec:
 		world.ReleaseObjectState(obj)
 		return err
 	})
+	e.exec(func(ctx context.Context, tx world.WorldState) error {
+		obj, _, err := world.CreateWorldObject(ctx, tx, templateKey, func(cursor *block.Cursor) error {
+			cursor.SetBlock(&s4wave_flowgraph.FlowgraphVisits{}, true)
+			return nil
+		})
+		world.ReleaseObjectState(obj)
+		return err
+	})
+	e.editGraph(&s4wave_flowgraph.UpdateFlowgraphRequest{SetPlacements: map[string]*s4wave_flowgraph.FlowgraphPlacement{
+		keyedID: {Kind: s4wave_flowgraph.FlowgraphPlacementKind_FLOWGRAPH_PLACEMENT_KIND_ACTOR_TEMPLATE, ObjectKey: templateKey},
+	}})
+	if successor {
+		e.editGraph(&s4wave_flowgraph.UpdateFlowgraphRequest{SetPlacements: map[string]*s4wave_flowgraph.FlowgraphPlacement{
+			"b": {Kind: s4wave_flowgraph.FlowgraphPlacementKind_FLOWGRAPH_PLACEMENT_KIND_ACTOR_TEMPLATE, ObjectKey: templateKey},
+		}})
+	}
 	e.standingRun()
-	e.startWorker()
+	steps.stopWorker = e.startWorker()
 	_, ref, err := flowgraph_run.StartControllerWithConfig(e.ctx, e.tb.Bus, flowgraph_run.NewConfig(e.tb.EngineID, standingKey))
 	if err != nil {
 		e.t.Fatal(err)
@@ -358,6 +450,46 @@ func TestKeyedActivationsRunTogether(t *testing.T) {
 		t.Fatalf("activations = %v, want k1 and k2 both running", run.GetActivations())
 	}
 
+	// Both Tasks receive their own context and name distinct actors on the run.
+	actors := []string{<-steps.attached, <-steps.attached}
+	if actors[0] == actors[1] {
+		t.Fatal("two keys share an actor")
+	}
+	run = e.waitStandingRun("recorded actors", func(run *s4wave_flowgraph.FlowgraphRun) bool {
+		return len(run.GetActivations()) == 2 && run.GetActivations()[0].GetActorKey() != "" && run.GetActivations()[1].GetActorKey() != ""
+	})
+	first := run.GetActivations()[0]
+	e.exec(func(ctx context.Context, tx world.WorldState) error {
+		if err := flowgraph_run.RecordActivationActor(ctx, tx, standingKey, first.GetTaskKey(), first.GetActorKey()); err != nil {
+			return err
+		}
+		if err := flowgraph_run.RecordActivationActor(ctx, tx, standingKey, first.GetTaskKey(), run.GetActivations()[1].GetActorKey()); err == nil {
+			t.Fatal("actor replacement succeeded")
+		}
+		return nil
+	})
+
+	// Restart the Worker mid-activation and reattach to both recorded actors.
+	steps.stopWorker()
+	for range 2 {
+		select {
+		case <-steps.stopped:
+		case <-e.ctx.Done():
+			t.Fatal(e.ctx.Err())
+		}
+	}
+	steps.stopWorker = e.startWorker()
+	for range 2 {
+		select {
+		case actor := <-steps.attached:
+			if actor != actors[0] && actor != actors[1] {
+				t.Fatalf("restart created %q", actor)
+			}
+		case <-e.ctx.Done():
+			t.Fatal(e.ctx.Err())
+		}
+	}
+
 	// A repeat arrival for k1 joins k1's inbox and starts no third activation.
 	e.deliverFrom(sourceID, "c1", "c2", event("e3", "k1"))
 	run = e.waitStandingRun("k1 inbox", func(run *s4wave_flowgraph.FlowgraphRun) bool {
@@ -372,7 +504,12 @@ func TestKeyedActivationsRunTogether(t *testing.T) {
 	}
 
 	// Both executions end; k1's unacknowledged e3 starts a third activation.
-	steps.release(3)
+	steps.release(2)
+	successorActor := <-steps.attached
+	if successorActor == actors[0] || successorActor == actors[1] {
+		t.Fatal("successor reused its predecessor actor")
+	}
+	steps.release(1)
 	e.requireDrained(3)
 }
 
@@ -410,4 +547,45 @@ func TestKeyedSuccessorReceivesUnacknowledgedInput(t *testing.T) {
 	// The successor ends without another one.
 	steps.release(1)
 	e.requireDrained(2)
+}
+
+// TestKeyedOutputRouting carries a key through a Step and honors its reserved override.
+func TestKeyedOutputRouting(t *testing.T) {
+	for _, override := range []string{"", "topic-reassigned"} {
+		t.Run("override="+override, func(t *testing.T) {
+			// Connect two keyed template Steps and control their completion independently.
+			e := newEnv(t)
+			steps := e.liveGraphWith(false, true, sourceID)
+			steps.outputKey = override
+			e.deliverFrom(sourceID, "", "c1", event("message", "topic"))
+			select {
+			case <-steps.attached:
+			case <-e.ctx.Done():
+				t.Fatal(e.ctx.Err())
+			}
+			steps.release(1)
+
+			// The successor receives either the inherited key or the explicit override.
+			want := "topic"
+			if override != "" {
+				want = override
+			}
+			run := e.waitStandingRun("keyed successor", func(run *s4wave_flowgraph.FlowgraphRun) bool {
+				return len(run.GetActivations()) == 1 && run.GetActivations()[0].GetNodeId() == "b"
+			})
+			activation := run.GetActivations()[0]
+			if activation.GetKey() != want || activation.GetInputs()[0].GetKey() != want {
+				t.Fatalf("successor = %v, want key %q", activation, want)
+			}
+
+			// Complete the successor and wait until both Steps have drained.
+			select {
+			case <-steps.attached:
+			case <-e.ctx.Done():
+				t.Fatal(e.ctx.Err())
+			}
+			steps.release(1)
+			e.requireDrained(1)
+		})
+	}
 }

@@ -15,6 +15,8 @@ const (
 	DevicePlacementPredicate = "<flowgraph/device>"
 	// ActorPlacementPredicate links a Flowgraph to an actor, labelled by node ID.
 	ActorPlacementPredicate = "<flowgraph/actor>"
+	// ActorTemplatePlacementPredicate links a Step to its actor template.
+	ActorTemplatePlacementPredicate = "<flowgraph/actor-template>"
 )
 
 // PlacementQuad constructs the graph edge for one node's placement.
@@ -25,6 +27,8 @@ func PlacementQuad(graphKey, nodeID string, placement *FlowgraphPlacement) (worl
 		predicate = DevicePlacementPredicate
 	case FlowgraphPlacementKind_FLOWGRAPH_PLACEMENT_KIND_ACTOR:
 		predicate = ActorPlacementPredicate
+	case FlowgraphPlacementKind_FLOWGRAPH_PLACEMENT_KIND_ACTOR_TEMPLATE:
+		predicate = ActorTemplatePlacementPredicate
 	default:
 		return nil, errors.New("placement kind is required")
 	}
@@ -33,11 +37,11 @@ func PlacementQuad(graphKey, nodeID string, placement *FlowgraphPlacement) (worl
 
 // ReadPlacements reads the placement edges of this graph, keyed by node ID.
 func ReadPlacements(ctx context.Context, ws world.WorldState, graphKey string) (map[string]*FlowgraphPlacement, error) {
-	// Query the two placement predicates without scanning other World objects.
+	// Query the placement predicates without scanning other World objects.
 	// A Flowgraph has one edge per node, so the lookups take no limit; the
 	// batch lookup requires one over a remote World.
 	var edges []world.GraphQuad
-	for _, predicate := range []string{DevicePlacementPredicate, ActorPlacementPredicate} {
+	for _, predicate := range []string{DevicePlacementPredicate, ActorPlacementPredicate, ActorTemplatePlacementPredicate} {
 		found, err := ws.LookupGraphQuads(ctx, world.NewGraphQuadWithKeys(graphKey, predicate, "", ""), 0)
 		if err != nil {
 			return nil, err
@@ -70,6 +74,8 @@ func parsePlacementQuad(edge world.GraphQuad) (string, *FlowgraphPlacement, erro
 		kind = FlowgraphPlacementKind_FLOWGRAPH_PLACEMENT_KIND_DEVICE
 	case ActorPlacementPredicate:
 		kind = FlowgraphPlacementKind_FLOWGRAPH_PLACEMENT_KIND_ACTOR
+	case ActorTemplatePlacementPredicate:
+		kind = FlowgraphPlacementKind_FLOWGRAPH_PLACEMENT_KIND_ACTOR_TEMPLATE
 	default:
 		return "", nil, nil
 	}
@@ -101,7 +107,7 @@ func ValidatePlacement(ctx context.Context, ws world.WorldState, node *Flowgraph
 	switch placement.GetKind() {
 	case FlowgraphPlacementKind_FLOWGRAPH_PLACEMENT_KIND_DEVICE:
 		return world_types.CheckObjectType(ctx, ws, placement.GetObjectKey(), s4wave_device.DeviceTypeID)
-	case FlowgraphPlacementKind_FLOWGRAPH_PLACEMENT_KIND_ACTOR:
+	case FlowgraphPlacementKind_FLOWGRAPH_PLACEMENT_KIND_ACTOR, FlowgraphPlacementKind_FLOWGRAPH_PLACEMENT_KIND_ACTOR_TEMPLATE:
 		if node.GetStep() == nil {
 			return errors.New("actor placement requires a Step")
 		}

@@ -59,6 +59,10 @@ export interface DeliveredEvent {
    * it. It is empty for an ordinary event.
    */
   key?: string
+  /**
+   * Port selects one source output port, or every connection when empty.
+   */
+  port?: string
 }
 
 export const DeliveredEvent: MessageType<DeliveredEvent> =
@@ -68,6 +72,7 @@ export const DeliveredEvent: MessageType<DeliveredEvent> =
       [1, 'object_key', 9],
       [2, 'event_id', 9],
       [3, 'key', 9],
+      [4, 'port', 9],
     ],
   )
 

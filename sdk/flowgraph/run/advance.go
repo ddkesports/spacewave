@@ -16,12 +16,15 @@ import (
 	forge_job "github.com/s4wave/spacewave/forge/job"
 	forge_target "github.com/s4wave/spacewave/forge/target"
 	forge_task "github.com/s4wave/spacewave/forge/task"
+	task_tx "github.com/s4wave/spacewave/forge/task/tx"
 	forge_value "github.com/s4wave/spacewave/forge/value"
 	s4wave_flowgraph "github.com/s4wave/spacewave/sdk/flowgraph"
 )
 
 // runner advances one run within a World transaction.
 type runner struct {
+	// runKey identifies the owning run.
+	runKey string
 	// ws is the write transaction.
 	ws world.WorldState
 	// graph is the pinned Flowgraph body.
@@ -41,7 +44,7 @@ func advance(ctx context.Context, ws world.WorldState, runKey string) ([]string,
 	}
 
 	// Route outcomes, then start Steps and settle the state.
-	r := &runner{ws: ws, graph: graph, run: previous.CloneVT()}
+	r := &runner{runKey: runKey, ws: ws, graph: graph, run: previous.CloneVT()}
 	if err := r.route(ctx); err != nil {
 		return nil, err
 	}
@@ -131,6 +134,15 @@ func (r *runner) route(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+
+		// Resolve the routing key before committing a successful outcome.
+		key := activation.GetKey()
+		if failure == "" {
+			key, failure, err = r.routingKey(ctx, task, key)
+			if err != nil {
+				return err
+			}
+		}
 		activation.Done = true
 		if failure != "" {
 			r.run.Arrivals = append(r.run.Arrivals, activation.GetInputs()...)
@@ -143,7 +155,7 @@ func (r *runner) route(ctx context.Context) error {
 		// Record the spend and deliver the chosen output.
 		activation.Output = port
 		r.visits(activation.GetNodeId()).Spend += spend
-		r.deliver(activation.GetNodeId(), port, activation.GetTaskKey())
+		r.deliver(activation.GetNodeId(), port, activation.GetTaskKey(), key)
 	}
 	return nil
 }
@@ -191,16 +203,7 @@ func (r *runner) outcome(ctx context.Context, nodeID string, task *forge_task.Ta
 // readSpend reads a spend output as a decimal integer blob.
 func (r *runner) readSpend(ctx context.Context, output *forge_value.Value) (uint64, string, error) {
 	// Read the blob the output references.
-	ref, err := output.ToBucketRef()
-	if err != nil {
-		return 0, "spend: " + err.Error(), nil
-	}
-	var data []byte
-	_, err = world.AccessObject(ctx, r.ws.AccessWorldState, ref, func(cursor *block.Cursor) error {
-		var err error
-		data, err = blob.FetchToBytes(ctx, cursor)
-		return err
-	})
+	data, err := r.readOutput(ctx, output)
 	if err != nil {
 		return 0, "", err
 	}
@@ -215,7 +218,7 @@ func (r *runner) readSpend(ctx context.Context, output *forge_value.Value) (uint
 
 // deliver queues an output for each Step input connected to a node's port, in
 // connection ID order, so a port with several connections forks the run.
-func (r *runner) deliver(nodeID, port, taskKey string) {
+func (r *runner) deliver(nodeID, port, taskKey, key string) {
 	for _, connection := range outgoing(r.graph, nodeID) {
 		if connection.GetOutputPort() != port {
 			continue
@@ -223,6 +226,7 @@ func (r *runner) deliver(nodeID, port, taskKey string) {
 		r.run.Arrivals = append(r.run.Arrivals, &s4wave_flowgraph.FlowgraphArrival{
 			NodeId: connection.GetInputNode(),
 			Port:   connection.GetInputPort(),
+			Key:    key,
 			Source: &s4wave_flowgraph.FlowgraphArrival_TaskOutput{
 				TaskOutput: &s4wave_flowgraph.FlowgraphTaskOutput{TaskKey: taskKey, OutputName: port},
 			},
@@ -383,7 +387,7 @@ func (r *runner) activate(
 		target.Inputs = append(target.Inputs, input)
 	}
 
-	// Create the Task with the Job's placement.
+	// Resolve the Job placement and reserve the next activation identity.
 	jobKey := r.run.GetJobKey()
 	job, err := forge_job.LookupJobBody(ctx, r.ws, jobKey)
 	if err != nil {
@@ -393,9 +397,23 @@ func (r *runner) activate(
 	if err != nil {
 		return err
 	}
+
+	// Supply the activation context before persisting the Task Target.
+	contextValue, err := r.contextInput(ctx, target, taskKey, key, nodeID)
+	if err != nil {
+		return err
+	}
 	obj, _, err := forge_task.CreateTaskWithTarget(ctx, r.ws, "", taskKey, name, target, "", 1, job.GetPlacement(), timestamp.Now())
 	world.ReleaseObjectState(obj)
 	if err != nil {
+		return err
+	}
+
+	// Retain the context as a scheduler-supplied Task input before publishing
+	// the activation. Forge carries this ValueSet through its Pass and Execution.
+	update := task_tx.NewTxUpdateInputs(taskKey)
+	update.TxUpdateInputs.ValueSet = &forge_target.ValueSet{Inputs: []*forge_value.Value{contextValue}}
+	if _, _, err := r.ws.ApplyWorldOp(ctx, update, ""); err != nil {
 		return err
 	}
 
@@ -423,12 +441,15 @@ func (r *runner) activate(
 // name: the search starts at the larger of that count and the visits, and
 // skips names whose Task exists.
 func (r *runner) newTaskName(ctx context.Context, jobKey string) (string, string, error) {
+	// Start beyond every activation already counted by the run.
 	n := len(r.run.GetActivations())
 	var visits int
 	for _, v := range r.run.GetVisits() {
 		visits += int(v.GetCount())
 	}
 	n = max(n, visits)
+
+	// Skip durable Tasks retained by the Job after the run drops their activations.
 	for {
 		name := "a" + strconv.Itoa(n)
 		taskKey := forge_job.NewJobTaskKey(jobKey, name)
@@ -532,4 +553,42 @@ func inputPorts(graph *s4wave_flowgraph.Flowgraph, nodeID string) []string {
 	}
 	slices.Sort(ports)
 	return ports
+}
+
+// readOutput reads a reserved output's blob through its storage reference.
+func (r *runner) readOutput(ctx context.Context, output *forge_value.Value) ([]byte, error) {
+	// Resolve the Forge value to its stored object.
+	ref, err := output.ToBucketRef()
+	if err != nil {
+		return nil, err
+	}
+
+	// Read the output blob without changing it.
+	var data []byte
+	_, err = world.AccessObject(ctx, r.ws.AccessWorldState, ref, func(cursor *block.Cursor) error {
+		var err error
+		data, err = blob.FetchToBytes(ctx, cursor)
+		return err
+	})
+	return data, err
+}
+
+// routingKey reads the reserved key output, or inherits the activation's key.
+func (r *runner) routingKey(ctx context.Context, task *forge_task.Task, inherited string) (string, string, error) {
+	// An absent output inherits; an explicitly empty blob clears the key.
+	output, _ := task.GetValueSet().LookupOutput(s4wave_flowgraph.KeyOutputName)
+	if output == nil || output.IsEmpty() {
+		return inherited, "", nil
+	}
+	data, err := r.readOutput(ctx, output)
+	if err != nil {
+		return "", "", err
+	}
+
+	// Permit one terminal line ending, but reject multiline routing keys.
+	key := strings.TrimSuffix(strings.TrimSuffix(string(data), "\n"), "\r")
+	if strings.ContainsAny(key, "\r\n") {
+		return "", "flowgraph/key must be a one-line blob", nil
+	}
+	return key, "", nil
 }

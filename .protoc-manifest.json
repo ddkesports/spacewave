@@ -3835,7 +3835,7 @@
       ]
     },
     "github.com/s4wave/spacewave/sdk/flowgraph": {
-      "hash": "f5e0481d56e0cf4927fff792451405a4cfeb2d788d06372eeb22e2a0197328ca",
+      "hash": "da9e5df5507b3d28037ab9c52b987f22e86926c775cc1ee0525e58428c0ce691",
       "generatedFiles": [
         "sdk/flowgraph/flowgraph.pb.go",
         "sdk/flowgraph/flowgraph.pb.ts",
@@ -3849,7 +3849,7 @@
       ]
     },
     "github.com/s4wave/spacewave/sdk/flowgraph/eventsource": {
-      "hash": "2a4eda7f4b672463c11a348e490b06c1f104fbd59523b7d53fff1f28094201e0",
+      "hash": "a2579245b79c8e87f253976642f390adf05ddee102ba179a98f46e3e25ad5653",
       "generatedFiles": [
         "sdk/flowgraph/eventsource/eventsource.pb.go",
         "sdk/flowgraph/eventsource/eventsource.pb.ts",
@@ -3873,7 +3873,7 @@
       ]
     },
     "github.com/s4wave/spacewave/sdk/flowgraph/run": {
-      "hash": "fb679f17ab439ad1bcd8d82eb1813e2cb315bd6fbbc57044c56c691eb62d34f3",
+      "hash": "3e2839fd9082d53b468df4fe8fc61494b6209ce037eabba6422509f7bbd9115e",
       "generatedFiles": [
         "sdk/flowgraph/run/config.pb.go",
         "sdk/flowgraph/run/config.pb.ts",

@@ -13,6 +13,10 @@ const (
 	// SpendOutputName is the reserved Step output reporting an activation's
 	// spend as a decimal integer blob.
 	SpendOutputName = "spend"
+	// KeyOutputName is the reserved output reporting a routing key as a one-line blob.
+	KeyOutputName = "flowgraph/key"
+	// ActivationContextInputName is the reserved input carrying FlowgraphActivationContext.
+	ActivationContextInputName = "flowgraph/context"
 )
 
 // NewFlowgraphRunBlock constructs the stored run state.

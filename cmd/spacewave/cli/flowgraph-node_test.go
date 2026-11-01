@@ -108,3 +108,26 @@ func TestFlowgraphNodeKeyed(t *testing.T) {
 		t.Fatal("Device node accepted --keyed")
 	}
 }
+
+// TestFlowgraphNodeTemplate selects a template placement without replacing the Step.
+func TestFlowgraphNodeTemplate(t *testing.T) {
+	// Resolve the template and name it in the same format as graph readback.
+	args := &flowgraphNodeSetArgs{template: "template/fixer"}
+	placement, err := args.buildPlacement()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if placement.GetKind() != flowgraph.FlowgraphPlacementKind_FLOWGRAPH_PLACEMENT_KIND_ACTOR_TEMPLATE || describePlacement(placement) != "template template/fixer" {
+		t.Fatalf("template placement = %v", placement)
+	}
+
+	// A template cannot share its node's placement with another actor or Device.
+	args.actor = "actor/existing"
+	if _, err := args.buildPlacement(); err == nil {
+		t.Fatal("template and actor accepted together")
+	}
+	args.actor, args.device = "", "device/local"
+	if _, err := args.buildPlacement(); err == nil {
+		t.Fatal("template and Device accepted together")
+	}
+}

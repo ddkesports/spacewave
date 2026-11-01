@@ -119,6 +119,8 @@ enum FlowgraphPlacementKind {
   FLOWGRAPH_PLACEMENT_KIND_DEVICE = 1;
   // FLOWGRAPH_PLACEMENT_KIND_ACTOR places a Step on an actor.
   FLOWGRAPH_PLACEMENT_KIND_ACTOR = 2;
+  // FLOWGRAPH_PLACEMENT_KIND_ACTOR_TEMPLATE starts an actor for each activation.
+  FLOWGRAPH_PLACEMENT_KIND_ACTOR_TEMPLATE = 3;
 }
 
 // FlowgraphPlacement is a command or readback of a placement graph edge.
@@ -309,6 +311,8 @@ message FlowgraphRun {
   // event-source node, by node ID. A delivery applies only when it names the
   // stored cursor, so two readers of the same events deliver each once.
   map<string, bytes> cursor = 12;
+  // Placements is the immutable placement snapshot at FlowgraphRevision.
+  map<string, FlowgraphPlacement> placements = 13;
 }
 
 // FlowgraphActivation is one activation of a Step, run as one Forge Task.
@@ -334,6 +338,23 @@ message FlowgraphActivation {
   // LastInputSeq is the sequence number of the latest live input. It only
   // grows, so a sequence number is never reused after an acknowledgement.
   uint64 last_input_seq = 8;
+  // ActorKey is the immutable receipt of the actor started for this activation.
+  // RecordActivationActor sets it once; restarted execs reattach to this actor.
+  string actor_key = 9;
+}
+
+// FlowgraphActivationContext is supplied as the flowgraph/context Task input.
+// An exec uses it to record its actor and watch or acknowledge live inputs.
+message FlowgraphActivationContext {
+  // RunKey names the owning run, an immutable execution snapshot.
+  string run_key = 1;
+  // ActivationId is the activation's Task key within that run.
+  string activation_id = 2;
+  // Key is the activation's arrival key, empty for an unkeyed Step.
+  string key = 3;
+  // TemplateKey names the template in the run's immutable placement snapshot.
+  // It is empty unless the Step is placed on an actor template.
+  string template_key = 4;
 }
 
 // FlowgraphLiveInput is an arrival delivered to a running keyed activation.
@@ -377,6 +398,8 @@ message FlowgraphEvent {
   string object_key = 1;
   // EventId identifies the event within its event source.
   string event_id = 2;
+  // Port is the source output port, or empty for every outgoing connection.
+  string port = 3;
 }
 
 // FlowgraphVisits counts one Step's activations in a run.

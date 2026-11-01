@@ -12,6 +12,8 @@ message DeliveredEvent {
   // Key routes the event to a keyed Step activation, as the node type derives
   // it. It is empty for an ordinary event.
   string key = 3;
+  // Port selects one source output port, or every connection when empty.
+  string port = 4;
 }
 
 // DeliverEventsRequest hands a run the events an event-source node read.

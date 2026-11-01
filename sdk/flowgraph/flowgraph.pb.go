@@ -67,6 +67,8 @@ const (
 	FlowgraphPlacementKind_FLOWGRAPH_PLACEMENT_KIND_DEVICE FlowgraphPlacementKind = 1
 	// FLOWGRAPH_PLACEMENT_KIND_ACTOR places a Step on an actor.
 	FlowgraphPlacementKind_FLOWGRAPH_PLACEMENT_KIND_ACTOR FlowgraphPlacementKind = 2
+	// FLOWGRAPH_PLACEMENT_KIND_ACTOR_TEMPLATE starts an actor for each activation.
+	FlowgraphPlacementKind_FLOWGRAPH_PLACEMENT_KIND_ACTOR_TEMPLATE FlowgraphPlacementKind = 3
 )
 
 // Enum value maps for FlowgraphPlacementKind.
@@ -75,11 +77,13 @@ var (
 		0: "FLOWGRAPH_PLACEMENT_KIND_UNKNOWN",
 		1: "FLOWGRAPH_PLACEMENT_KIND_DEVICE",
 		2: "FLOWGRAPH_PLACEMENT_KIND_ACTOR",
+		3: "FLOWGRAPH_PLACEMENT_KIND_ACTOR_TEMPLATE",
 	}
 	FlowgraphPlacementKind_value = map[string]int32{
-		"FLOWGRAPH_PLACEMENT_KIND_UNKNOWN": 0,
-		"FLOWGRAPH_PLACEMENT_KIND_DEVICE":  1,
-		"FLOWGRAPH_PLACEMENT_KIND_ACTOR":   2,
+		"FLOWGRAPH_PLACEMENT_KIND_UNKNOWN":        0,
+		"FLOWGRAPH_PLACEMENT_KIND_DEVICE":         1,
+		"FLOWGRAPH_PLACEMENT_KIND_ACTOR":          2,
+		"FLOWGRAPH_PLACEMENT_KIND_ACTOR_TEMPLATE": 3,
 	}
 )
 
@@ -950,6 +954,8 @@ type FlowgraphRun struct {
 	// event-source node, by node ID. A delivery applies only when it names the
 	// stored cursor, so two readers of the same events deliver each once.
 	Cursor map[string][]byte `protobuf:"bytes,12,rep,name=cursor,proto3" json:"cursor,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
+	// Placements is the immutable placement snapshot at FlowgraphRevision.
+	Placements map[string]*FlowgraphPlacement `protobuf:"bytes,13,rep,name=placements,proto3" json:"placements,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
 }
 
 func (x *FlowgraphRun) Reset() {
@@ -1042,6 +1048,13 @@ func (x *FlowgraphRun) GetCursor() map[string][]byte {
 	return nil
 }
 
+func (x *FlowgraphRun) GetPlacements() map[string]*FlowgraphPlacement {
+	if x != nil {
+		return x.Placements
+	}
+	return nil
+}
+
 // FlowgraphActivation is one activation of a Step, run as one Forge Task.
 type FlowgraphActivation struct {
 	unknownFields []byte
@@ -1066,6 +1079,9 @@ type FlowgraphActivation struct {
 	// LastInputSeq is the sequence number of the latest live input. It only
 	// grows, so a sequence number is never reused after an acknowledgement.
 	LastInputSeq uint64 `protobuf:"varint,8,opt,name=last_input_seq,json=lastInputSeq,proto3" json:"lastInputSeq,omitempty"`
+	// ActorKey is the immutable receipt of the actor started for this activation.
+	// RecordActivationActor sets it once; restarted execs reattach to this actor.
+	ActorKey string `protobuf:"bytes,9,opt,name=actor_key,json=actorKey,proto3" json:"actorKey,omitempty"`
 }
 
 func (x *FlowgraphActivation) Reset() {
@@ -1128,6 +1144,62 @@ func (x *FlowgraphActivation) GetLastInputSeq() uint64 {
 		return x.LastInputSeq
 	}
 	return 0
+}
+
+func (x *FlowgraphActivation) GetActorKey() string {
+	if x != nil {
+		return x.ActorKey
+	}
+	return ""
+}
+
+// FlowgraphActivationContext is supplied as the flowgraph/context Task input.
+// An exec uses it to record its actor and watch or acknowledge live inputs.
+type FlowgraphActivationContext struct {
+	unknownFields []byte
+	// RunKey names the owning run, an immutable execution snapshot.
+	RunKey string `protobuf:"bytes,1,opt,name=run_key,json=runKey,proto3" json:"runKey,omitempty"`
+	// ActivationId is the activation's Task key within that run.
+	ActivationId string `protobuf:"bytes,2,opt,name=activation_id,json=activationId,proto3" json:"activationId,omitempty"`
+	// Key is the activation's arrival key, empty for an unkeyed Step.
+	Key string `protobuf:"bytes,3,opt,name=key,proto3" json:"key,omitempty"`
+	// TemplateKey names the template in the run's immutable placement snapshot.
+	// It is empty unless the Step is placed on an actor template.
+	TemplateKey string `protobuf:"bytes,4,opt,name=template_key,json=templateKey,proto3" json:"templateKey,omitempty"`
+}
+
+func (x *FlowgraphActivationContext) Reset() {
+	*x = FlowgraphActivationContext{}
+}
+
+func (*FlowgraphActivationContext) ProtoMessage() {}
+
+func (x *FlowgraphActivationContext) GetRunKey() string {
+	if x != nil {
+		return x.RunKey
+	}
+	return ""
+}
+
+func (x *FlowgraphActivationContext) GetActivationId() string {
+	if x != nil {
+		return x.ActivationId
+	}
+	return ""
+}
+
+func (x *FlowgraphActivationContext) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *FlowgraphActivationContext) GetTemplateKey() string {
+	if x != nil {
+		return x.TemplateKey
+	}
+	return ""
 }
 
 // FlowgraphLiveInput is an arrival delivered to a running keyed activation.
@@ -1280,6 +1352,8 @@ type FlowgraphEvent struct {
 	ObjectKey string `protobuf:"bytes,1,opt,name=object_key,json=objectKey,proto3" json:"objectKey,omitempty"`
 	// EventId identifies the event within its event source.
 	EventId string `protobuf:"bytes,2,opt,name=event_id,json=eventId,proto3" json:"eventId,omitempty"`
+	// Port is the source output port, or empty for every outgoing connection.
+	Port string `protobuf:"bytes,3,opt,name=port,proto3" json:"port,omitempty"`
 }
 
 func (x *FlowgraphEvent) Reset() {
@@ -1298,6 +1372,13 @@ func (x *FlowgraphEvent) GetObjectKey() string {
 func (x *FlowgraphEvent) GetEventId() string {
 	if x != nil {
 		return x.EventId
+	}
+	return ""
+}
+
+func (x *FlowgraphEvent) GetPort() string {
+	if x != nil {
+		return x.Port
 	}
 	return ""
 }
@@ -1611,6 +1692,32 @@ func (x *FlowgraphRun_CursorEntry) GetKey() string {
 }
 
 func (x *FlowgraphRun_CursorEntry) GetValue() []byte {
+	if x != nil {
+		return x.Value
+	}
+	return nil
+}
+
+type FlowgraphRun_PlacementsEntry struct {
+	unknownFields []byte
+	Key           string              `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	Value         *FlowgraphPlacement `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+}
+
+func (x *FlowgraphRun_PlacementsEntry) Reset() {
+	*x = FlowgraphRun_PlacementsEntry{}
+}
+
+func (*FlowgraphRun_PlacementsEntry) ProtoMessage() {}
+
+func (x *FlowgraphRun_PlacementsEntry) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *FlowgraphRun_PlacementsEntry) GetValue() *FlowgraphPlacement {
 	if x != nil {
 		return x.Value
 	}
@@ -1988,6 +2095,7 @@ func (m *FlowgraphRun) CloneVT() *FlowgraphRun {
 	r.Arrivals = protobuf_go_lite.CloneVTSlice(m.Arrivals)
 	r.Visits = protobuf_go_lite.CloneVTMap(m.Visits)
 	r.Cursor = protobuf_go_lite.CloneBytesMap(m.Cursor)
+	r.Placements = protobuf_go_lite.CloneVTMap(m.Placements)
 	if len(m.unknownFields) > 0 {
 		r.unknownFields = slices.Clone(m.unknownFields)
 	}
@@ -2009,6 +2117,7 @@ func (m *FlowgraphActivation) CloneVT() *FlowgraphActivation {
 	r.Output = m.Output
 	r.Key = m.Key
 	r.LastInputSeq = m.LastInputSeq
+	r.ActorKey = m.ActorKey
 	r.Inputs = protobuf_go_lite.CloneVTSlice(m.Inputs)
 	r.Inbox = protobuf_go_lite.CloneVTSlice(m.Inbox)
 	if len(m.unknownFields) > 0 {
@@ -2018,6 +2127,25 @@ func (m *FlowgraphActivation) CloneVT() *FlowgraphActivation {
 }
 
 func (m *FlowgraphActivation) CloneMessageVT() protobuf_go_lite.CloneMessage {
+	return m.CloneVT()
+}
+
+func (m *FlowgraphActivationContext) CloneVT() *FlowgraphActivationContext {
+	if m == nil {
+		return (*FlowgraphActivationContext)(nil)
+	}
+	r := new(FlowgraphActivationContext)
+	r.RunKey = m.RunKey
+	r.ActivationId = m.ActivationId
+	r.Key = m.Key
+	r.TemplateKey = m.TemplateKey
+	if len(m.unknownFields) > 0 {
+		r.unknownFields = slices.Clone(m.unknownFields)
+	}
+	return r
+}
+
+func (m *FlowgraphActivationContext) CloneMessageVT() protobuf_go_lite.CloneMessage {
 	return m.CloneVT()
 }
 
@@ -2111,6 +2239,7 @@ func (m *FlowgraphEvent) CloneVT() *FlowgraphEvent {
 	r := new(FlowgraphEvent)
 	r.ObjectKey = m.ObjectKey
 	r.EventId = m.EventId
+	r.Port = m.Port
 	if len(m.unknownFields) > 0 {
 		r.unknownFields = slices.Clone(m.unknownFields)
 	}
@@ -2682,6 +2811,9 @@ func (this *FlowgraphRun) EqualVT(that *FlowgraphRun) bool {
 	if !protobuf_go_lite.EqualBytesMap(this.Cursor, that.Cursor) {
 		return false
 	}
+	if !protobuf_go_lite.EqualVTMapImplicit(this.Placements, that.Placements, func() *FlowgraphPlacement { return &FlowgraphPlacement{} }) {
+		return false
+	}
 	return string(this.unknownFields) == string(that.unknownFields)
 }
 
@@ -2723,11 +2855,43 @@ func (this *FlowgraphActivation) EqualVT(that *FlowgraphActivation) bool {
 	if this.LastInputSeq != that.LastInputSeq {
 		return false
 	}
+	if this.ActorKey != that.ActorKey {
+		return false
+	}
 	return string(this.unknownFields) == string(that.unknownFields)
 }
 
 func (this *FlowgraphActivation) EqualMessageVT(thatMsg any) bool {
 	that, ok := thatMsg.(*FlowgraphActivation)
+	if !ok {
+		return false
+	}
+	return this.EqualVT(that)
+}
+
+func (this *FlowgraphActivationContext) EqualVT(that *FlowgraphActivationContext) bool {
+	if this == that {
+		return true
+	} else if this == nil || that == nil {
+		return false
+	}
+	if this.RunKey != that.RunKey {
+		return false
+	}
+	if this.ActivationId != that.ActivationId {
+		return false
+	}
+	if this.Key != that.Key {
+		return false
+	}
+	if this.TemplateKey != that.TemplateKey {
+		return false
+	}
+	return string(this.unknownFields) == string(that.unknownFields)
+}
+
+func (this *FlowgraphActivationContext) EqualMessageVT(thatMsg any) bool {
+	that, ok := thatMsg.(*FlowgraphActivationContext)
 	if !ok {
 		return false
 	}
@@ -2862,6 +3026,9 @@ func (this *FlowgraphEvent) EqualVT(that *FlowgraphEvent) bool {
 		return false
 	}
 	if this.EventId != that.EventId {
+		return false
+	}
+	if this.Port != that.Port {
 		return false
 	}
 	return string(this.unknownFields) == string(that.unknownFields)
@@ -5026,6 +5193,60 @@ func (x *FlowgraphRun_CursorEntry) UnmarshalJSON(b []byte) error {
 	return json.DefaultUnmarshalerConfig.Unmarshal(b, x)
 }
 
+// MarshalProtoJSON marshals the FlowgraphRun_PlacementsEntry message to JSON.
+func (x *FlowgraphRun_PlacementsEntry) MarshalProtoJSON(s *json.MarshalState) {
+	if x == nil {
+		s.WriteNil()
+		return
+	}
+	s.WriteObjectStart()
+	var wroteField bool
+	if x.Key != "" || s.HasField("key") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("key")
+		s.WriteString(x.Key)
+	}
+	if x.Value != nil || s.HasField("value") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("value")
+		x.Value.MarshalProtoJSON(s.WithField("value"))
+	}
+	s.WriteObjectEnd()
+}
+
+// MarshalJSON marshals the FlowgraphRun_PlacementsEntry to JSON.
+func (x *FlowgraphRun_PlacementsEntry) MarshalJSON() ([]byte, error) {
+	return json.DefaultMarshalerConfig.Marshal(x)
+}
+
+// UnmarshalProtoJSON unmarshals the FlowgraphRun_PlacementsEntry message from JSON.
+func (x *FlowgraphRun_PlacementsEntry) UnmarshalProtoJSON(s *json.UnmarshalState) {
+	if s.ReadNil() {
+		return
+	}
+	s.ReadObject(func(key string) {
+		switch key {
+		default:
+			s.Skip() // ignore unknown field
+		case "key":
+			s.AddField("key")
+			x.Key = s.ReadString()
+		case "value":
+			if s.ReadNil() {
+				x.Value = nil
+				return
+			}
+			x.Value = &FlowgraphPlacement{}
+			x.Value.UnmarshalProtoJSON(s.WithField("value", true))
+		}
+	})
+}
+
+// UnmarshalJSON unmarshals the FlowgraphRun_PlacementsEntry from JSON.
+func (x *FlowgraphRun_PlacementsEntry) UnmarshalJSON(b []byte) error {
+	return json.DefaultUnmarshalerConfig.Unmarshal(b, x)
+}
+
 // MarshalProtoJSON marshals the FlowgraphRun message to JSON.
 func (x *FlowgraphRun) MarshalProtoJSON(s *json.MarshalState) {
 	if x == nil {
@@ -5119,6 +5340,19 @@ func (x *FlowgraphRun) MarshalProtoJSON(s *json.MarshalState) {
 			s.WriteMoreIf(&wroteElement)
 			s.WriteObjectStringField(k)
 			s.WriteBytes(v)
+		}
+		s.WriteObjectEnd()
+	}
+	if x.Placements != nil || s.HasField("placements") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("placements")
+		s.WriteObjectStart()
+		var wroteElement bool
+		for _, k := range slices.Sorted(maps.Keys(x.Placements)) {
+			v := x.Placements[k]
+			s.WriteMoreIf(&wroteElement)
+			s.WriteObjectStringField(k)
+			v.MarshalProtoJSON(s.WithField("placements"))
 		}
 		s.WriteObjectEnd()
 	}
@@ -5225,6 +5459,18 @@ func (x *FlowgraphRun) UnmarshalProtoJSON(s *json.UnmarshalState) {
 			s.ReadStringMap(func(key string) {
 				x.Cursor[key] = s.ReadBytes()
 			})
+		case "placements":
+			s.AddField("placements")
+			if s.ReadNil() {
+				x.Placements = nil
+				return
+			}
+			x.Placements = make(map[string]*FlowgraphPlacement)
+			s.ReadStringMap(func(key string) {
+				var v FlowgraphPlacement
+				v.UnmarshalProtoJSON(s)
+				x.Placements[key] = &v
+			})
 		}
 	})
 }
@@ -5293,6 +5539,11 @@ func (x *FlowgraphActivation) MarshalProtoJSON(s *json.MarshalState) {
 		s.WriteMoreIf(&wroteField)
 		s.WriteObjectField("lastInputSeq")
 		s.WriteUint64(x.LastInputSeq)
+	}
+	if x.ActorKey != "" || s.HasField("actorKey") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("actorKey")
+		s.WriteString(x.ActorKey)
 	}
 	s.WriteObjectEnd()
 }
@@ -5365,12 +5616,81 @@ func (x *FlowgraphActivation) UnmarshalProtoJSON(s *json.UnmarshalState) {
 		case "last_input_seq", "lastInputSeq":
 			s.AddField("last_input_seq")
 			x.LastInputSeq = s.ReadUint64()
+		case "actor_key", "actorKey":
+			s.AddField("actor_key")
+			x.ActorKey = s.ReadString()
 		}
 	})
 }
 
 // UnmarshalJSON unmarshals the FlowgraphActivation from JSON.
 func (x *FlowgraphActivation) UnmarshalJSON(b []byte) error {
+	return json.DefaultUnmarshalerConfig.Unmarshal(b, x)
+}
+
+// MarshalProtoJSON marshals the FlowgraphActivationContext message to JSON.
+func (x *FlowgraphActivationContext) MarshalProtoJSON(s *json.MarshalState) {
+	if x == nil {
+		s.WriteNil()
+		return
+	}
+	s.WriteObjectStart()
+	var wroteField bool
+	if x.RunKey != "" || s.HasField("runKey") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("runKey")
+		s.WriteString(x.RunKey)
+	}
+	if x.ActivationId != "" || s.HasField("activationId") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("activationId")
+		s.WriteString(x.ActivationId)
+	}
+	if x.Key != "" || s.HasField("key") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("key")
+		s.WriteString(x.Key)
+	}
+	if x.TemplateKey != "" || s.HasField("templateKey") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("templateKey")
+		s.WriteString(x.TemplateKey)
+	}
+	s.WriteObjectEnd()
+}
+
+// MarshalJSON marshals the FlowgraphActivationContext to JSON.
+func (x *FlowgraphActivationContext) MarshalJSON() ([]byte, error) {
+	return json.DefaultMarshalerConfig.Marshal(x)
+}
+
+// UnmarshalProtoJSON unmarshals the FlowgraphActivationContext message from JSON.
+func (x *FlowgraphActivationContext) UnmarshalProtoJSON(s *json.UnmarshalState) {
+	if s.ReadNil() {
+		return
+	}
+	s.ReadObject(func(key string) {
+		switch key {
+		default:
+			s.Skip() // ignore unknown field
+		case "run_key", "runKey":
+			s.AddField("run_key")
+			x.RunKey = s.ReadString()
+		case "activation_id", "activationId":
+			s.AddField("activation_id")
+			x.ActivationId = s.ReadString()
+		case "key":
+			s.AddField("key")
+			x.Key = s.ReadString()
+		case "template_key", "templateKey":
+			s.AddField("template_key")
+			x.TemplateKey = s.ReadString()
+		}
+	})
+}
+
+// UnmarshalJSON unmarshals the FlowgraphActivationContext from JSON.
+func (x *FlowgraphActivationContext) UnmarshalJSON(b []byte) error {
 	return json.DefaultUnmarshalerConfig.Unmarshal(b, x)
 }
 
@@ -5584,6 +5904,11 @@ func (x *FlowgraphEvent) MarshalProtoJSON(s *json.MarshalState) {
 		s.WriteObjectField("eventId")
 		s.WriteString(x.EventId)
 	}
+	if x.Port != "" || s.HasField("port") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("port")
+		s.WriteString(x.Port)
+	}
 	s.WriteObjectEnd()
 }
 
@@ -5607,6 +5932,9 @@ func (x *FlowgraphEvent) UnmarshalProtoJSON(s *json.UnmarshalState) {
 		case "event_id", "eventId":
 			s.AddField("event_id")
 			x.EventId = s.ReadString()
+		case "port":
+			s.AddField("port")
+			x.Port = s.ReadString()
 		}
 	})
 }
@@ -6804,6 +7132,26 @@ func (m *FlowgraphRun) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	if m.unknownFields != nil {
 		i = protobuf_go_lite.EncodeRawBytes(dAtA, i, m.unknownFields)
 	}
+	if len(m.Placements) > 0 {
+		for k := range m.Placements {
+			v := m.Placements[k]
+			baseI := i
+			size, err := v.MarshalToSizedBufferVT(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(size))
+			i--
+			dAtA[i] = 0x12
+			i = protobuf_go_lite.EncodeString(dAtA, i, k)
+			i--
+			dAtA[i] = 0xa
+			i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(baseI-i))
+			i--
+			dAtA[i] = 0x6a
+		}
+	}
 	if len(m.Cursor) > 0 {
 		for k := range m.Cursor {
 			v := m.Cursor[k]
@@ -6940,6 +7288,11 @@ func (m *FlowgraphActivation) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	if m.unknownFields != nil {
 		i = protobuf_go_lite.EncodeRawBytes(dAtA, i, m.unknownFields)
 	}
+	if len(m.ActorKey) > 0 {
+		i = protobuf_go_lite.EncodeString(dAtA, i, m.ActorKey)
+		i--
+		dAtA[i] = 0x4a
+	}
 	if m.LastInputSeq != 0 {
 		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(m.LastInputSeq))
 		i--
@@ -6991,6 +7344,58 @@ func (m *FlowgraphActivation) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	}
 	if len(m.NodeId) > 0 {
 		i = protobuf_go_lite.EncodeString(dAtA, i, m.NodeId)
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *FlowgraphActivationContext) MarshalVT() (dAtA []byte, err error) {
+	if m == nil {
+		return nil, nil
+	}
+	size := m.SizeVT()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBufferVT(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *FlowgraphActivationContext) MarshalToVT(dAtA []byte) (int, error) {
+	size := m.SizeVT()
+	return m.MarshalToSizedBufferVT(dAtA[:size])
+}
+
+func (m *FlowgraphActivationContext) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
+	if m == nil {
+		return 0, nil
+	}
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.unknownFields != nil {
+		i = protobuf_go_lite.EncodeRawBytes(dAtA, i, m.unknownFields)
+	}
+	if len(m.TemplateKey) > 0 {
+		i = protobuf_go_lite.EncodeString(dAtA, i, m.TemplateKey)
+		i--
+		dAtA[i] = 0x22
+	}
+	if len(m.Key) > 0 {
+		i = protobuf_go_lite.EncodeString(dAtA, i, m.Key)
+		i--
+		dAtA[i] = 0x1a
+	}
+	if len(m.ActivationId) > 0 {
+		i = protobuf_go_lite.EncodeString(dAtA, i, m.ActivationId)
+		i--
+		dAtA[i] = 0x12
+	}
+	if len(m.RunKey) > 0 {
+		i = protobuf_go_lite.EncodeString(dAtA, i, m.RunKey)
 		i--
 		dAtA[i] = 0xa
 	}
@@ -7218,6 +7623,11 @@ func (m *FlowgraphEvent) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	_ = l
 	if m.unknownFields != nil {
 		i = protobuf_go_lite.EncodeRawBytes(dAtA, i, m.unknownFields)
+	}
+	if len(m.Port) > 0 {
+		i = protobuf_go_lite.EncodeString(dAtA, i, m.Port)
+		i--
+		dAtA[i] = 0x1a
 	}
 	if len(m.EventId) > 0 {
 		i = protobuf_go_lite.EncodeString(dAtA, i, m.EventId)
@@ -7678,6 +8088,16 @@ func (m *FlowgraphRun) SizeVT() (n int) {
 		mapEntrySize := protobuf_go_lite.SizeStringValue(1, k) + protobuf_go_lite.SizeBytesValue(1, len(v))
 		n += protobuf_go_lite.SizeMessage(1, mapEntrySize)
 	}
+	for k, v := range m.Placements {
+		_ = k
+		_ = v
+		l = 0
+		if v != nil {
+			l = v.SizeVT()
+		}
+		mapEntrySize := protobuf_go_lite.SizeStringValue(1, k) + protobuf_go_lite.SizeMessage(1, l)
+		n += protobuf_go_lite.SizeMessage(1, mapEntrySize)
+	}
 	n += len(m.unknownFields)
 	return n
 }
@@ -7702,6 +8122,21 @@ func (m *FlowgraphActivation) SizeVT() (n int) {
 		n += protobuf_go_lite.SizeMessage(1, l)
 	}
 	n += protobuf_go_lite.SizeVarintNonZero(1, m.LastInputSeq)
+	n += protobuf_go_lite.SizeStringNonEmpty(1, m.ActorKey)
+	n += len(m.unknownFields)
+	return n
+}
+
+func (m *FlowgraphActivationContext) SizeVT() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	n += protobuf_go_lite.SizeStringNonEmpty(1, m.RunKey)
+	n += protobuf_go_lite.SizeStringNonEmpty(1, m.ActivationId)
+	n += protobuf_go_lite.SizeStringNonEmpty(1, m.Key)
+	n += protobuf_go_lite.SizeStringNonEmpty(1, m.TemplateKey)
 	n += len(m.unknownFields)
 	return n
 }
@@ -7787,6 +8222,7 @@ func (m *FlowgraphEvent) SizeVT() (n int) {
 	_ = l
 	n += protobuf_go_lite.SizeStringNonEmpty(1, m.ObjectKey)
 	n += protobuf_go_lite.SizeStringNonEmpty(1, m.EventId)
+	n += protobuf_go_lite.SizeStringNonEmpty(1, m.Port)
 	n += len(m.unknownFields)
 	return n
 }
@@ -8568,6 +9004,24 @@ func (x *FlowgraphRun_CursorEntry) String() string {
 	return x.MarshalProtoText()
 }
 
+func (x *FlowgraphRun_PlacementsEntry) MarshalProtoText() string {
+	var sb protobuf_go_lite.TextBuilder
+	initialLen := protobuf_go_lite.TextStartMessage(&sb, "PlacementsEntry")
+	if x.Key != "" {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "key")
+		protobuf_go_lite.TextWriteString(&sb, x.Key)
+	}
+	if x.Value != nil {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "value")
+		protobuf_go_lite.TextWriteTextMarshaler(&sb, x.Value)
+	}
+	return protobuf_go_lite.TextFinishMessage(&sb)
+}
+
+func (x *FlowgraphRun_PlacementsEntry) String() string {
+	return x.MarshalProtoText()
+}
+
 func (x *FlowgraphRun) MarshalProtoText() string {
 	var sb protobuf_go_lite.TextBuilder
 	initialLen := protobuf_go_lite.TextStartMessage(&sb, "FlowgraphRun")
@@ -8653,6 +9107,21 @@ func (x *FlowgraphRun) MarshalProtoText() string {
 		}
 		protobuf_go_lite.TextWriteMapEnd(&sb)
 	}
+	if len(x.Placements) > 0 {
+		protobuf_go_lite.TextWriteMapStart(&sb, initialLen, "placements")
+		for _, k := range slices.Sorted(maps.Keys(x.Placements)) {
+			v := x.Placements[k]
+			protobuf_go_lite.TextWriteMapEntryPrefix(&sb)
+			protobuf_go_lite.TextWriteString(&sb, k)
+			protobuf_go_lite.TextWriteMapKeyValueSeparator(&sb)
+			if v == nil {
+				protobuf_go_lite.TextWriteTextMarshaler(&sb, &FlowgraphPlacement{})
+			} else {
+				protobuf_go_lite.TextWriteTextMarshaler(&sb, v)
+			}
+		}
+		protobuf_go_lite.TextWriteMapEnd(&sb)
+	}
 	return protobuf_go_lite.TextFinishMessage(&sb)
 }
 
@@ -8711,10 +9180,40 @@ func (x *FlowgraphActivation) MarshalProtoText() string {
 		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "last_input_seq")
 		protobuf_go_lite.TextWriteUint(&sb, x.LastInputSeq)
 	}
+	if x.ActorKey != "" {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "actor_key")
+		protobuf_go_lite.TextWriteString(&sb, x.ActorKey)
+	}
 	return protobuf_go_lite.TextFinishMessage(&sb)
 }
 
 func (x *FlowgraphActivation) String() string {
+	return x.MarshalProtoText()
+}
+
+func (x *FlowgraphActivationContext) MarshalProtoText() string {
+	var sb protobuf_go_lite.TextBuilder
+	initialLen := protobuf_go_lite.TextStartMessage(&sb, "FlowgraphActivationContext")
+	if x.RunKey != "" {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "run_key")
+		protobuf_go_lite.TextWriteString(&sb, x.RunKey)
+	}
+	if x.ActivationId != "" {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "activation_id")
+		protobuf_go_lite.TextWriteString(&sb, x.ActivationId)
+	}
+	if x.Key != "" {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "key")
+		protobuf_go_lite.TextWriteString(&sb, x.Key)
+	}
+	if x.TemplateKey != "" {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "template_key")
+		protobuf_go_lite.TextWriteString(&sb, x.TemplateKey)
+	}
+	return protobuf_go_lite.TextFinishMessage(&sb)
+}
+
+func (x *FlowgraphActivationContext) String() string {
 	return x.MarshalProtoText()
 }
 
@@ -8802,6 +9301,10 @@ func (x *FlowgraphEvent) MarshalProtoText() string {
 	if x.EventId != "" {
 		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "event_id")
 		protobuf_go_lite.TextWriteString(&sb, x.EventId)
+	}
+	if x.Port != "" {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "port")
+		protobuf_go_lite.TextWriteString(&sb, x.Port)
 	}
 	return protobuf_go_lite.TextFinishMessage(&sb)
 }
@@ -10821,6 +11324,53 @@ func (m *FlowgraphRun) UnmarshalVT(dAtA []byte) error {
 			}
 			m.Cursor[mapkey] = mapvalue
 			iNdEx = postIndex
+		case 13:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Placements", wireType)
+			}
+			msgStart, postIndex, err := protobuf_go_lite.DecodeLengthDelimited(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			iNdEx = msgStart
+			if m.Placements == nil {
+				m.Placements = make(map[string]*FlowgraphPlacement)
+			}
+			var mapkey string
+			var mapvalue *FlowgraphPlacement
+			for iNdEx < postIndex {
+				entryPreIndex := iNdEx
+				var wire uint64
+				wire, iNdEx, err = protobuf_go_lite.DecodeVarint(dAtA, iNdEx)
+				if err != nil {
+					return err
+				}
+				fieldNum := int32(wire >> 3)
+				if fieldNum == 1 {
+					mapkey, iNdEx, err = protobuf_go_lite.DecodeString(dAtA, iNdEx)
+					if err != nil {
+						return err
+					}
+				} else if fieldNum == 2 {
+					msgStartmapvalue, postmsgIndexmapvalue, err := protobuf_go_lite.DecodeLengthDelimited(dAtA, iNdEx)
+					if err != nil {
+						return err
+					}
+					mapvalue = &FlowgraphPlacement{}
+					if err := mapvalue.UnmarshalVT(dAtA[msgStartmapvalue:postmsgIndexmapvalue]); err != nil {
+						return err
+					}
+					iNdEx = postmsgIndexmapvalue
+				} else {
+					iNdEx = entryPreIndex
+					iNdEx, err = protobuf_go_lite.SkipWithin(dAtA, iNdEx, postIndex)
+					if err != nil {
+						return err
+					}
+				}
+			}
+			m.Placements[mapkey] = mapvalue
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := protobuf_go_lite.Skip(dAtA[iNdEx:])
@@ -10949,6 +11499,99 @@ func (m *FlowgraphActivation) UnmarshalVT(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
+		case 9:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ActorKey", wireType)
+			}
+			var v string
+			v, iNdEx, err = protobuf_go_lite.DecodeString(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			m.ActorKey = v
+		default:
+			iNdEx = preIndex
+			skippy, err := protobuf_go_lite.Skip(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return protobuf_go_lite.ErrInvalidLength
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.unknownFields = append(m.unknownFields, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+
+func (m *FlowgraphActivationContext) UnmarshalVT(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	var err error
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		wire, iNdEx, err = protobuf_go_lite.DecodeVarint(dAtA, iNdEx)
+		if err != nil {
+			return err
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: FlowgraphActivationContext: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: FlowgraphActivationContext: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RunKey", wireType)
+			}
+			var v string
+			v, iNdEx, err = protobuf_go_lite.DecodeString(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			m.RunKey = v
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ActivationId", wireType)
+			}
+			var v string
+			v, iNdEx, err = protobuf_go_lite.DecodeString(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			m.ActivationId = v
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Key", wireType)
+			}
+			var v string
+			v, iNdEx, err = protobuf_go_lite.DecodeString(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			m.Key = v
+		case 4:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TemplateKey", wireType)
+			}
+			var v string
+			v, iNdEx, err = protobuf_go_lite.DecodeString(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			m.TemplateKey = v
 		default:
 			iNdEx = preIndex
 			skippy, err := protobuf_go_lite.Skip(dAtA[iNdEx:])
@@ -11255,6 +11898,16 @@ func (m *FlowgraphEvent) UnmarshalVT(dAtA []byte) error {
 				return err
 			}
 			m.EventId = v
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Port", wireType)
+			}
+			var v string
+			v, iNdEx, err = protobuf_go_lite.DecodeString(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			m.Port = v
 		default:
 			iNdEx = preIndex
 			skippy, err := protobuf_go_lite.Skip(dAtA[iNdEx:])
