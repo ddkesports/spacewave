@@ -16,8 +16,12 @@
 \* history, not additional Go fields. Correct runs never distinguish their
 \* histories by old watermark/counter values that no future action reads.
 \* next is normalized to at least 1, as name does in Go. Fast configs check
-\* one record and three saves; two/three-record cases are manual. At most
-\* two saves are in flight, including across one restart.
+\* one record and three saves total; two/three-record cases are manual. At
+\* most two saves are in flight, including across one restart. Generation
+\* IDs are globally unique model ordinals. Go resets its generation at
+\* restart; no surviving comparison can distinguish that reset from these
+\* fresh IDs because restart clears flight, carried and recountGen. Keeping
+\* the ordinal bounds total saves without renewing the budget at restart.
 \* Manual configs: DeadlistLedger-two.cfg (2 records, 3 saves) and
 \* DeadlistLedger-full.cfg (3 records, 2 saves); the adoption contract needs
 \* at least two records. Slow configs stay outside automatic discovery.
@@ -232,7 +236,7 @@ RestoreDeadlists ==
   /\ flight' = {} /\ landed' = {} /\ restarted' = TRUE /\ carried' = [r \in Records |-> 0]
   /\ status' = driveCursor /\ next' = IF RestoreNext THEN driveNext ELSE next
   /\ adopted' = IF RestoreAdopted THEN driveAdopted ELSE adopted
-  /\ gen' = 0 /\ pin' = 3
+  /\ pin' = 3
   /\ recount' = TRUE /\ recountGen' = 0 /\ lostAt' = lostAt + 1
   /\ snapshot' = [g \in Saves |-> [r \in Records |-> None]]
   /\ puts' = [g \in Saves |-> {}]
@@ -241,7 +245,7 @@ RestoreDeadlists ==
   /\ savedNext' = [g \in Saves |-> 1]
   /\ savedAdopted' = [g \in Saves |-> 0]
   /\ restoreOK' = (restoreOK /\ next' = driveNext /\ adopted' = driveAdopted)
-  /\ UNCHANGED <<stored, durable, covered, watermarkOK, parent,
+  /\ UNCHANGED <<stored, durable, gen, covered, watermarkOK, parent,
       nameLost, driveCursor, rebuilding, applied, used, seq,
       driveNext, driveAdopted, adoptOK, orphanOK>>
 \* Completing the store's recount is independent of confirming its receipt.
