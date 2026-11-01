@@ -42,6 +42,13 @@ const dialTimeout = 30 * time.Second
 // with thousands of connections opens them a few at a time.
 const maxDials = 8
 
+// dialAttempts bounds the attempts of one dial, and dialBackoff is the wait
+// after the first failure, doubled after each later one.
+const (
+	dialAttempts = 6
+	dialBackoff  = 250 * time.Millisecond
+)
+
 // keepaliveInterval is the time between keepalive requests on an idle
 // connection, and keepaliveTimeout the wait for the answer. A connection that
 // does not answer is closed, which fails the requests stuck on it.
@@ -426,7 +433,8 @@ func (s *slot) reset(cn *conn) {
 }
 
 // dial connects, runs the SSH handshake and logs in, then starts the SFTP
-// session and the keepalive.
+// session and the keepalive. A server under load drops handshakes and refuses
+// sessions past its limits, so a failed attempt is retried with backoff.
 func (c *Client) dial(ctx context.Context) (*conn, error) {
 	// Wait for a turn to dial.
 	select {
@@ -436,6 +444,24 @@ func (c *Client) dial(ctx context.Context) (*conn, error) {
 	}
 	defer func() { <-c.dials }()
 
+	// Try until an attempt succeeds, the attempts run out or ctx ends.
+	wait := dialBackoff
+	for attempt := 1; ; attempt++ {
+		cn, err := c.dialOnce(ctx)
+		if err == nil || attempt == dialAttempts {
+			return cn, err
+		}
+		select {
+		case <-time.After(wait):
+		case <-ctx.Done():
+			return nil, context.Cause(ctx)
+		}
+		wait *= 2
+	}
+}
+
+// dialOnce makes one attempt to connect, log in and start the SFTP session.
+func (c *Client) dialOnce(ctx context.Context) (*conn, error) {
 	// Connect and run the handshake. The error names the server, never the
 	// credentials.
 	d := net.Dialer{Timeout: dialTimeout}
