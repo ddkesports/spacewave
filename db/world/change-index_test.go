@@ -1,6 +1,7 @@
 package world
 
 import (
+	"maps"
 	"math/rand/v2"
 	"slices"
 	"strconv"
@@ -446,4 +447,33 @@ func BenchmarkChangeIndexMergedDeliver(b *testing.B) {
 	}
 	b.Run("test-all", func(b *testing.B) { deliver(b, true) })
 	b.Run("accept-keyed", func(b *testing.B) { deliver(b, false) })
+}
+
+// TestNameEntriesPromoteOnRemove keeps every other entry of a name reachable
+// when the entry held inline leaves, and drops the name with its last entry.
+func TestNameEntriesPromoteOnRemove(t *testing.T) {
+	index := make(map[string]nameEntries[int])
+	for w := range 3 {
+		addIndexed(index, "k", w)
+	}
+	addIndexed(index, "k", 1)
+	found := func() map[int]struct{} {
+		out := make(map[int]struct{})
+		if entries, ok := index["k"]; ok {
+			entries.collect(out)
+		}
+		return out
+	}
+	want := map[int]struct{}{0: {}, 1: {}, 2: {}}
+	for _, w := range []int{0, 2, 1} {
+		removeIndexed(index, "k", w)
+		removeIndexed(index, "k", w)
+		delete(want, w)
+		if got := found(); !maps.Equal(got, want) {
+			t.Fatalf("found %v after removing %d, want %v", got, w, want)
+		}
+	}
+	if len(index) != 0 {
+		t.Fatalf("index keeps %v after its last entry left", index)
+	}
 }

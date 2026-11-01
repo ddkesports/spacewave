@@ -223,9 +223,9 @@ func (x *ChangeIndex[T]) releaseUnheld(entry *heldSet[T]) {
 // collected for every change.
 type nameIndex[T comparable] struct {
 	// keys maps each named object key to its entries.
-	keys map[string]map[T]struct{}
+	keys map[string]nameEntries[T]
 	// terms maps each named quad field to its entries.
-	terms map[quadTerm]map[T]struct{}
+	terms map[quadTerm]nameEntries[T]
 	// all holds the entries collected for every change.
 	all map[T]struct{}
 }
@@ -233,8 +233,8 @@ type nameIndex[T comparable] struct {
 // newNameIndex constructs an empty nameIndex.
 func newNameIndex[T comparable]() nameIndex[T] {
 	return nameIndex[T]{
-		keys:  make(map[string]map[T]struct{}),
-		terms: make(map[quadTerm]map[T]struct{}),
+		keys:  make(map[string]nameEntries[T]),
+		terms: make(map[quadTerm]nameEntries[T]),
 		all:   make(map[T]struct{}),
 	}
 }
@@ -276,7 +276,9 @@ func (x *nameIndex[T]) remove(e T, names *ChangeInterest) {
 // collectKeys adds to found the entries a changed object key names.
 func (x *nameIndex[T]) collectKeys(changes *ChangeSet, found map[T]struct{}) {
 	for _, key := range changes.Keys {
-		maps.Copy(found, x.keys[key])
+		if entries, ok := x.keys[key]; ok {
+			entries.collect(found)
+		}
 	}
 }
 
@@ -286,26 +288,62 @@ func (x *nameIndex[T]) collectOthers(changes *ChangeSet, found map[T]struct{}) {
 	maps.Copy(found, x.all)
 	for _, q := range changes.Quads {
 		for _, term := range quadTerms(q) {
-			maps.Copy(found, x.terms[term])
+			if entries, ok := x.terms[term]; ok {
+				entries.collect(found)
+			}
 		}
 	}
 }
 
+// nameEntries are the entries one name indexes. Most names index one entry,
+// so the first is held inline and only the others take a map; an index of
+// many names then costs no map per name.
+type nameEntries[T comparable] struct {
+	// first is an entry of the name; every name in an index has one.
+	first T
+	// rest holds the name's other entries, or nil.
+	rest map[T]struct{}
+}
+
+// collect adds the entries to found.
+func (n nameEntries[T]) collect(found map[T]struct{}) {
+	found[n.first] = struct{}{}
+	maps.Copy(found, n.rest)
+}
+
 // addIndexed adds w to the watchers of name.
-func addIndexed[K comparable, T comparable](index map[K]map[T]struct{}, name K, w T) {
-	set := index[name]
-	if set == nil {
-		set = make(map[T]struct{})
-		index[name] = set
+func addIndexed[K comparable, T comparable](index map[K]nameEntries[T], name K, w T) {
+	entries, ok := index[name]
+	switch {
+	case !ok:
+		index[name] = nameEntries[T]{first: w}
+	case entries.first == w:
+	case entries.rest == nil:
+		entries.rest = map[T]struct{}{w: {}}
+		index[name] = entries
+	default:
+		entries.rest[w] = struct{}{}
 	}
-	set[w] = struct{}{}
 }
 
 // removeIndexed removes w from the watchers of name, and name once empty.
-func removeIndexed[K comparable, T comparable](index map[K]map[T]struct{}, name K, w T) {
-	set := index[name]
-	delete(set, w)
-	if len(set) == 0 {
-		delete(index, name)
+func removeIndexed[K comparable, T comparable](index map[K]nameEntries[T], name K, w T) {
+	entries, ok := index[name]
+	if !ok {
+		return
 	}
+	if entries.first != w {
+		delete(entries.rest, w)
+		return
+	}
+	for next := range entries.rest {
+		delete(entries.rest, next)
+		entries.first = next
+		if len(entries.rest) == 0 {
+			entries.rest = nil
+		}
+		index[name] = entries
+		return
+	}
+	delete(index, name)
 }
