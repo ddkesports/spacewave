@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 
 import {
+  DeviceAvailabilityState,
   DeviceCapabilityState,
   DeviceLiveness,
   DeviceSetupState,
@@ -66,7 +67,7 @@ let currentState: Device | undefined = {
 vi.mock('@s4wave/web/hooks/useAccessTypedHandle.js', () => ({
   useAccessTypedHandle: () => ({
     value: {
-      watchDeviceState: vi.fn(),
+      watchDeviceAvailability: vi.fn(),
     },
     loading: false,
     error: null,
@@ -76,7 +77,9 @@ vi.mock('@s4wave/web/hooks/useAccessTypedHandle.js', () => ({
 
 vi.mock('@aptre/bldr-sdk/hooks/useStreamingResource.js', () => ({
   useStreamingResource: () => ({
-    value: currentState,
+    value: currentState
+      ? { device: currentState, state: DeviceAvailabilityState.OFFLINE }
+      : undefined,
     loading: false,
     error: null,
     retry: vi.fn(),
@@ -127,7 +130,7 @@ describe('DeviceViewer', () => {
     )
 
     expect(screen.getByText('Build Host')).toBeTruthy()
-    expect(screen.getByText('Degraded')).toBeTruthy()
+    expect(screen.getByText('Offline')).toBeTruthy()
     expect(screen.getAllByText('Ready')).toHaveLength(2)
     expect(screen.getByText('network limited')).toBeTruthy()
     expect(screen.getByText('12D3KooWDevice')).toBeTruthy()

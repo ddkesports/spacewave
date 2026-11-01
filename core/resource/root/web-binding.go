@@ -136,7 +136,8 @@ var webBindingMethods = map[string]webBindingCheck{
 
 	// A Device object of the bound Space streams its state; status reports
 	// and checkout stay denied.
-	webMethod(s4wave_device.SRPCDeviceResourceServiceServiceID, "WatchDeviceState"): nil,
+	webMethod(s4wave_device.SRPCDeviceResourceServiceServiceID, "WatchDeviceState"):        nil,
+	webMethod(s4wave_device.SRPCDeviceResourceServiceServiceID, "WatchDeviceAvailability"): nil,
 
 	// Prom objects of the bound Space answer queries and stream Dashboards;
 	// their panel and target edits stay denied.

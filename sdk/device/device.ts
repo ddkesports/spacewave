@@ -8,6 +8,7 @@ import {
   DeviceCapabilityLocalState,
   DeviceSetupState,
   type Device,
+  type DeviceAvailability,
   type AccessCheckoutRootRequest,
   type AccessCheckoutRootResponse,
   type DeviceCapability,
@@ -163,6 +164,11 @@ export interface AccessCheckoutRootOptions {
 
 // IDeviceHandle contains the DeviceHandle interface.
 export interface IDeviceHandle {
+  /** watchDeviceAvailability streams durable Device and live transport changes. */
+  watchDeviceAvailability(
+    abortSignal?: AbortSignal,
+  ): AsyncIterable<DeviceAvailability>
+
   // watchDeviceState streams Device state changes.
   watchDeviceState(abortSignal?: AbortSignal): AsyncIterable<Device | undefined>
 
@@ -186,6 +192,13 @@ export class DeviceHandle extends Resource implements IDeviceHandle {
   constructor(resourceRef: ClientResourceRef) {
     super(resourceRef)
     this.service = new DeviceResourceServiceClient(resourceRef.client)
+  }
+
+  /** watchDeviceAvailability observes reachability without durable status writes. */
+  public watchDeviceAvailability(
+    abortSignal?: AbortSignal,
+  ): AsyncIterable<DeviceAvailability> {
+    return this.service.WatchDeviceAvailability({}, abortSignal)
   }
 
   // watchDeviceState streams Device state changes.

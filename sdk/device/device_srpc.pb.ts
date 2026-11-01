@@ -5,8 +5,10 @@
 import {
   AccessCheckoutRootRequest,
   AccessCheckoutRootResponse,
+  DeviceAvailability,
   ReportDeviceStatusRequest,
   ReportDeviceStatusResponse,
+  WatchDeviceAvailabilityRequest,
   WatchDeviceStateRequest,
   WatchDeviceStateResponse,
 } from './device.pb.js'
@@ -31,6 +33,15 @@ export const DeviceResourceServiceDefinition = {
       name: 'WatchDeviceState',
       I: WatchDeviceStateRequest,
       O: WatchDeviceStateResponse,
+      kind: MethodKind.ServerStreaming,
+    },
+    /**
+     * @generated from rpc s4wave.device.DeviceResourceService.WatchDeviceAvailability
+     */
+    WatchDeviceAvailability: {
+      name: 'WatchDeviceAvailability',
+      I: WatchDeviceAvailabilityRequest,
+      O: DeviceAvailability,
       kind: MethodKind.ServerStreaming,
     },
     /**
@@ -67,6 +78,14 @@ export interface DeviceResourceService {
   ): MessageStream<WatchDeviceStateResponse>
 
   /**
+   * @generated from rpc s4wave.device.DeviceResourceService.WatchDeviceAvailability
+   */
+  WatchDeviceAvailability(
+    request: WatchDeviceAvailabilityRequest,
+    abortSignal?: AbortSignal,
+  ): MessageStream<DeviceAvailability>
+
+  /**
    * @generated from rpc s4wave.device.DeviceResourceService.ReportDeviceStatus
    */
   ReportDeviceStatus(
@@ -97,6 +116,15 @@ export interface DeviceResourceServiceHandler {
   ): MessageStream<WatchDeviceStateResponse>
 
   /**
+   * @generated from rpc s4wave.device.DeviceResourceService.WatchDeviceAvailability
+   */
+  WatchDeviceAvailability(
+    request: WatchDeviceAvailabilityRequest,
+    abortSignal: AbortSignal,
+    context: ServerContext,
+  ): MessageStream<DeviceAvailability>
+
+  /**
    * @generated from rpc s4wave.device.DeviceResourceService.ReportDeviceStatus
    */
   ReportDeviceStatus(
@@ -125,6 +153,7 @@ export class DeviceResourceServiceClient implements DeviceResourceService {
     this.service = opts?.service || DeviceResourceServiceServiceName
     this.rpc = rpc
     this.WatchDeviceState = this.WatchDeviceState.bind(this)
+    this.WatchDeviceAvailability = this.WatchDeviceAvailability.bind(this)
     this.ReportDeviceStatus = this.ReportDeviceStatus.bind(this)
     this.AccessCheckoutRoot = this.AccessCheckoutRoot.bind(this)
   }
@@ -143,6 +172,23 @@ export class DeviceResourceServiceClient implements DeviceResourceService {
       abortSignal || undefined,
     )
     return buildDecodeMessageTransform(WatchDeviceStateResponse)(result)
+  }
+
+  /**
+   * @generated from rpc s4wave.device.DeviceResourceService.WatchDeviceAvailability
+   */
+  WatchDeviceAvailability(
+    request: WatchDeviceAvailabilityRequest,
+    abortSignal?: AbortSignal,
+  ): MessageStream<DeviceAvailability> {
+    const requestMsg = WatchDeviceAvailabilityRequest.create(request)
+    const result = this.rpc.serverStreamingRequest(
+      this.service,
+      DeviceResourceServiceDefinition.methods.WatchDeviceAvailability.name,
+      WatchDeviceAvailabilityRequest.toBinary(requestMsg),
+      abortSignal || undefined,
+    )
+    return buildDecodeMessageTransform(DeviceAvailability)(result)
   }
 
   /**

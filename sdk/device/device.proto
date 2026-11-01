@@ -38,7 +38,8 @@ enum DeviceUpdateState {
   DEVICE_UPDATE_STATE_FAILED = 6;
 }
 
-// DeviceLiveness is durable liveness as last reported by the daemon.
+// DeviceLiveness is historical liveness as last reported by the daemon.
+// Current reachability comes from DeviceAvailability, not this stored report.
 enum DeviceLiveness {
   // DEVICE_LIVENESS_UNKNOWN is unset.
   DEVICE_LIVENESS_UNKNOWN = 0;
@@ -244,9 +245,32 @@ message CreateComputersDashboardOp {
 
 service DeviceResourceService {
   rpc WatchDeviceState(WatchDeviceStateRequest) returns (stream WatchDeviceStateResponse);
+  rpc WatchDeviceAvailability(WatchDeviceAvailabilityRequest) returns (stream DeviceAvailability);
   rpc ReportDeviceStatus(ReportDeviceStatusRequest) returns (ReportDeviceStatusResponse);
   rpc AccessCheckoutRoot(AccessCheckoutRootRequest) returns (AccessCheckoutRootResponse);
 }
+
+// DeviceAvailabilityState describes reachability over the authenticated transport.
+enum DeviceAvailabilityState {
+  // DEVICE_AVAILABILITY_STATE_UNKNOWN means either peer identity is unavailable.
+  DEVICE_AVAILABILITY_STATE_UNKNOWN = 0;
+  // DEVICE_AVAILABILITY_STATE_OFFLINE means the Device has no live authenticated link.
+  DEVICE_AVAILABILITY_STATE_OFFLINE = 1;
+  // DEVICE_AVAILABILITY_STATE_ONLINE means the Device has a live authenticated link.
+  DEVICE_AVAILABILITY_STATE_ONLINE = 2;
+}
+
+// DeviceAvailability joins the durable Device with its current transport reachability.
+// It is an ephemeral projection and is never written into the World.
+message DeviceAvailability {
+  // Device is the current durable Device object.
+  Device device = 1;
+  // State is reachability from the observing Session's authenticated transport.
+  DeviceAvailabilityState state = 2;
+}
+
+// WatchDeviceAvailabilityRequest subscribes to Device and authenticated link changes.
+message WatchDeviceAvailabilityRequest {}
 
 // WatchDeviceStateRequest is a request to watch Device state.
 message WatchDeviceStateRequest {}

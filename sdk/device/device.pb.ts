@@ -106,7 +106,8 @@ export const DeviceUpdateState_Enum = /* @__PURE__ */ createEnumType(
 )
 
 /**
- * DeviceLiveness is durable liveness as last reported by the daemon.
+ * DeviceLiveness is historical liveness as last reported by the daemon.
+ * Current reachability comes from DeviceAvailability, not this stored report.
  *
  * @generated from enum s4wave.device.DeviceLiveness
  */
@@ -288,6 +289,37 @@ export const DeviceCheckoutRootAccess_Enum = /* @__PURE__ */ createEnumType(
     [0, 'DEVICE_CHECKOUT_ROOT_ACCESS_UNKNOWN'],
     [1, 'DEVICE_CHECKOUT_ROOT_ACCESS_READ_ONLY'],
     [2, 'DEVICE_CHECKOUT_ROOT_ACCESS_READ_WRITE'],
+  ],
+)
+
+/**
+ * DeviceAvailabilityState describes reachability over the authenticated transport.
+ *
+ * @generated from enum s4wave.device.DeviceAvailabilityState
+ */
+export enum DeviceAvailabilityState {
+  /**
+   * DEVICE_AVAILABILITY_STATE_UNKNOWN means either peer identity is unavailable.
+   */
+  UNKNOWN = 0,
+
+  /**
+   * DEVICE_AVAILABILITY_STATE_OFFLINE means the Device has no live authenticated link.
+   */
+  OFFLINE = 1,
+
+  /**
+   * DEVICE_AVAILABILITY_STATE_ONLINE means the Device has a live authenticated link.
+   */
+  ONLINE = 2,
+}
+
+export const DeviceAvailabilityState_Enum = /* @__PURE__ */ createEnumType(
+  's4wave.device.DeviceAvailabilityState',
+  [
+    [0, 'DEVICE_AVAILABILITY_STATE_UNKNOWN'],
+    [1, 'DEVICE_AVAILABILITY_STATE_OFFLINE'],
+    [2, 'DEVICE_AVAILABILITY_STATE_ONLINE'],
   ],
 )
 
@@ -674,6 +706,45 @@ export const CreateComputersDashboardOp: MessageType<CreateComputersDashboardOp>
       [2, 'name', 9],
       [3, 'timestamp', 11, 0, Timestamp.codec],
     ],
+  )
+
+/**
+ * DeviceAvailability joins the durable Device with its current transport reachability.
+ * It is an ephemeral projection and is never written into the World.
+ *
+ * @generated from message s4wave.device.DeviceAvailability
+ */
+export interface DeviceAvailability {
+  /**
+   * Device is the current durable Device object.
+   */
+  device?: Device
+  /**
+   * State is reachability from the observing Session's authenticated transport.
+   */
+  state?: DeviceAvailabilityState
+}
+
+export const DeviceAvailability: MessageType<DeviceAvailability> =
+  /* @__PURE__ */ createMessageType<DeviceAvailability>(
+    's4wave.device.DeviceAvailability',
+    () => [
+      [1, 'device', 11, 0, Device.codec],
+      [2, 'state', 14, 0, DeviceAvailabilityState_Enum],
+    ],
+  )
+
+/**
+ * WatchDeviceAvailabilityRequest subscribes to Device and authenticated link changes.
+ *
+ * @generated from message s4wave.device.WatchDeviceAvailabilityRequest
+ */
+export interface WatchDeviceAvailabilityRequest {}
+
+export const WatchDeviceAvailabilityRequest: MessageType<WatchDeviceAvailabilityRequest> =
+  /* @__PURE__ */ createMessageType<WatchDeviceAvailabilityRequest>(
+    's4wave.device.WatchDeviceAvailabilityRequest',
+    () => [],
   )
 
 /**

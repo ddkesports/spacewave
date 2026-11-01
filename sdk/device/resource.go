@@ -4,14 +4,15 @@ import (
 	"context"
 	"strings"
 
+	"github.com/aperturerobotics/controllerbus/bus"
 	"github.com/aperturerobotics/starpc/srpc"
-	"github.com/aperturerobotics/util/broadcast"
 	"github.com/pkg/errors"
 	resource_server "github.com/s4wave/spacewave/bldr/resource/server"
 	resource_unixfs "github.com/s4wave/spacewave/core/resource/unixfs"
 	"github.com/s4wave/spacewave/db/unixfs"
 	unixfs_world "github.com/s4wave/spacewave/db/unixfs/world"
 	"github.com/s4wave/spacewave/db/world"
+	"github.com/s4wave/spacewave/net/peer"
 	s4wave_unixfs_world "github.com/s4wave/spacewave/sdk/unixfs/world"
 	s4wave_world "github.com/s4wave/spacewave/sdk/world"
 	"github.com/sirupsen/logrus"
@@ -19,31 +20,44 @@ import (
 
 // DeviceResource implements the DeviceResourceService SRPC interface.
 type DeviceResource struct {
-	le     *logrus.Entry
+	// bus resolves the observing Session's authenticated transport.
+	bus bus.Bus
+	// sessionPeerID is the observing Session selected by the granting mount.
+	sessionPeerID peer.ID
+	// le records resource failures.
+	le *logrus.Entry
+	// engine supplies checkout-root transactions.
 	engine world.Engine
-	ws     world.WorldState
+	// ws is the granted World state.
+	ws world.WorldState
+	// objKey identifies this Device in the World.
 	objKey string
-	state  *Device
-	bcast  broadcast.Broadcast
-	mux    srpc.Mux
+	// mux dispatches Device resource methods.
+	mux srpc.Mux
 }
 
 // NewDeviceResource creates a new DeviceResource.
-func NewDeviceResource(le *logrus.Entry, engine world.Engine, ws world.WorldState, objKey string, state *Device) *DeviceResource {
-	if state == nil {
-		state = &Device{}
-	}
+func NewDeviceResource(le *logrus.Entry, b bus.Bus, sessionPeerID peer.ID, engine world.Engine, ws world.WorldState, objKey string) *DeviceResource {
+	// Retain the World grant and observing Session for Device methods.
 	r := &DeviceResource{
-		le:     le,
-		engine: engine,
-		ws:     ws,
-		objKey: objKey,
-		state:  state,
+		bus:           b,
+		sessionPeerID: sessionPeerID,
+		le:            le,
+		engine:        engine,
+		ws:            ws,
+		objKey:        objKey,
 	}
+
+	// Register the Device service on its resource mux.
 	r.mux = resource_server.NewResourceMux(func(mux srpc.Mux) error {
 		return SRPCRegisterDeviceResourceService(mux, r)
 	})
 	return r
+}
+
+// WatchDeviceAvailability streams the Device's durable record and live reachability.
+func (r *DeviceResource) WatchDeviceAvailability(_ *WatchDeviceAvailabilityRequest, strm SRPCDeviceResourceService_WatchDeviceAvailabilityStream) error {
+	return WatchDeviceAvailability(strm.Context(), r.bus, r.sessionPeerID, r.ws, r.objKey, strm.Send)
 }
 
 // GetMux returns the srpc mux for this resource.
@@ -55,10 +69,6 @@ func (r *DeviceResource) GetMux() srpc.Mux {
 func (r *DeviceResource) WatchDeviceState(_ *WatchDeviceStateRequest, strm SRPCDeviceResourceService_WatchDeviceStateStream) error {
 	return s4wave_world.WatchWorldObject(strm.Context(), r.ws, r.objKey, readDeviceObject,
 		func(state *Device, changed bool) error {
-			r.bcast.HoldLock(func(broadcast func(), _ func() <-chan struct{}) {
-				r.state = state.CloneVT()
-				broadcast()
-			})
 			if changed {
 				return strm.Send(&WatchDeviceStateResponse{State: state.CloneVT()})
 			}

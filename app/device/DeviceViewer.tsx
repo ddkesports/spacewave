@@ -11,10 +11,9 @@ import { LuTerminal } from 'react-icons/lu'
 
 import {
   DeviceCapabilityState,
-  DeviceLiveness,
+  DeviceAvailabilityState,
   DeviceSetupState,
   DeviceUpdateState,
-  type Device,
 } from '@s4wave/sdk/device/device.pb.js'
 import { DeviceHandle, DeviceTypeID } from '@s4wave/sdk/device/device.js'
 import { CREATE_TERMINAL_OP_ID } from '@s4wave/sdk/terminal/create-terminal.js'
@@ -30,9 +29,9 @@ export function DeviceViewer({
   objectInfo,
   worldState,
 }: ObjectViewerComponentProps) {
+  // Open the Device through the current Space's typed resource grant.
   const deviceObjectKey = getObjectKey(objectInfo)
   const { navigateToObjects, spaceWorld } = SpaceContainerContext.useContext()
-
   const handle = useAccessTypedHandle(
     worldState,
     deviceObjectKey,
@@ -40,15 +39,17 @@ export function DeviceViewer({
     DeviceTypeID,
   )
 
+  // Observe transport reachability and the durable record through one projection.
   const streamFactory = useCallback(
-    (h: DeviceHandle, signal: AbortSignal) => h.watchDeviceState(signal),
+    (h: DeviceHandle, signal: AbortSignal) => h.watchDeviceAvailability(signal),
     [],
   )
-
   const stateResource = useStreamingResource(handle, streamFactory, [])
-  const state: Device | undefined = stateResource.value ?? undefined
+  const state = stateResource.value?.device
   const capabilities = state?.capabilities ?? []
   const terminalCapability = findOpenableTerminalCapability(state)
+
+  // Open a Terminal from the Device's declared capability.
   const handleOpenTerminal = async () => {
     if (!state || !terminalCapability) return
     try {
@@ -102,7 +103,7 @@ export function DeviceViewer({
               <DeviceField label="Name" value={state.label || 'Device'} />
               <DeviceField
                 label="Liveness"
-                value={formatLiveness(state.lastStatus?.liveness)}
+                value={formatLiveness(stateResource.value?.state)}
               />
               <DeviceField
                 label="Setup"
@@ -237,13 +238,11 @@ function formatUpdateState(state?: DeviceUpdateState): string {
   }
 }
 
-function formatLiveness(state?: DeviceLiveness): string {
+function formatLiveness(state?: DeviceAvailabilityState): string {
   switch (state) {
-    case DeviceLiveness.ONLINE:
+    case DeviceAvailabilityState.ONLINE:
       return 'Online'
-    case DeviceLiveness.DEGRADED:
-      return 'Degraded'
-    case DeviceLiveness.OFFLINE:
+    case DeviceAvailabilityState.OFFLINE:
       return 'Offline'
     default:
       return 'Unknown'

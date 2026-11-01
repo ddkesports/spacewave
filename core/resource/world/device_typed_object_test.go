@@ -114,6 +114,23 @@ func TestTypedObjectResourceDevice(t *testing.T) {
 	}
 	deviceSvc := s4wave_device.NewSRPCDeviceResourceServiceClient(deviceClient)
 
+	// Read transport availability through the same typed Resource used by Computers.
+	availabilityStream, err := deviceSvc.WatchDeviceAvailability(ctx, &s4wave_device.WatchDeviceAvailabilityRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer availabilityStream.Close()
+	availability, err := availabilityStream.Recv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if availability.GetState() != s4wave_device.DeviceAvailabilityState_DEVICE_AVAILABILITY_STATE_UNKNOWN {
+		t.Fatal("a Device without observable peer identities reported known availability")
+	}
+	if !availability.GetDevice().EqualVT(device) {
+		t.Fatal("availability did not preserve the durable Device record")
+	}
+
 	// watchDeviceState stream,err via deviceSvc.
 	stream, err := deviceSvc.WatchDeviceState(ctx, &s4wave_device.WatchDeviceStateRequest{})
 	if err != nil {

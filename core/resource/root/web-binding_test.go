@@ -245,6 +245,7 @@ func TestWebBindingNarrowsSpacesList(t *testing.T) {
 // TestWebBindingObjectMethods admits the prom and Device reads their viewers
 // need and keeps their edits denied.
 func TestWebBindingObjectMethods(t *testing.T) {
+	// Admit the Device and Prom reads consumed by the bound Space's viewers.
 	query, dash := s4wave_prom.SRPCPromQueryResourceServiceServiceID, s4wave_prom.SRPCPromDashboardResourceServiceServiceID
 	device := s4wave_device.SRPCDeviceResourceServiceServiceID
 	for _, key := range []string{
@@ -254,11 +255,14 @@ func TestWebBindingObjectMethods(t *testing.T) {
 		webMethod(query, "WatchTargets"),
 		webMethod(dash, "WatchDashboard"),
 		webMethod(device, "WatchDeviceState"),
+		webMethod(device, "WatchDeviceAvailability"),
 	} {
 		if _, ok := webBindingMethods[key]; !ok {
 			t.Errorf("%s is denied, want admitted", key)
 		}
 	}
+
+	// Preserve the same boundary for writes and checkout access.
 	for _, key := range []string{
 		webMethod(dash, "PutPanel"),
 		webMethod(dash, "RemovePanel"),

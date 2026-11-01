@@ -22,7 +22,7 @@ import { InfoCard } from '@s4wave/web/ui/InfoCard.js'
 import { toast } from '@s4wave/web/ui/toaster.js'
 import { cn } from '@s4wave/web/style/utils.js'
 import { DeviceHandle, DeviceTypeID } from '@s4wave/sdk/device/device.js'
-import { DeviceLiveness } from '@s4wave/sdk/device/device.pb.js'
+import { DeviceAvailabilityState } from '@s4wave/sdk/device/device.pb.js'
 import { SshHostHandle, SshHostTypeID } from '@s4wave/sdk/sshhost/sshhost.js'
 
 import { buildWizardObjectKey } from '../space/create-op-builders.js'
@@ -351,26 +351,32 @@ interface RowProps {
 }
 
 const watchDevice = (h: DeviceHandle, signal: AbortSignal) =>
-  h.watchDeviceState(signal)
+  h.watchDeviceAvailability(signal)
 
 function DeviceRow({ objectKey, worldState, onOnline, onOpen }: RowProps) {
+  // Observe the Device record together with its authenticated transport.
   const handle = useAccessTypedHandle(
     worldState,
     objectKey,
     DeviceHandle,
     DeviceTypeID,
   )
-  const device = useStreamingResource(handle, watchDevice, []).value
-  const liveness = device?.lastStatus?.liveness ?? DeviceLiveness.UNKNOWN
+  const availability = useStreamingResource(handle, watchDevice, []).value
+  const device = availability?.device
+  const liveness = availability?.state ?? DeviceAvailabilityState.UNKNOWN
+
+  // Render reachability separately from the daemon's last status report.
   const view: RowView = {
     name: device?.label || 'Device',
     platform:
       [device?.platform?.os, device?.platform?.arch]
         .filter(Boolean)
         .join(' / ') || '',
-    ...livenessChip(liveness),
+    ...(availability
+      ? livenessChip(liveness)
+      : { state: 'Loading', tone: 'idle' as const }),
     capabilities: device ? (device.capabilities?.length ?? 0) : undefined,
-    online: liveness === DeviceLiveness.ONLINE,
+    online: liveness === DeviceAvailabilityState.ONLINE,
   }
   return (
     <InventoryRow
@@ -421,16 +427,14 @@ function HostRow({ objectKey, worldState, onOnline, onOpen }: RowProps) {
   )
 }
 
-function livenessChip(liveness: DeviceLiveness): {
+function livenessChip(liveness: DeviceAvailabilityState): {
   state: string
   tone: ChipTone
 } {
   switch (liveness) {
-    case DeviceLiveness.ONLINE:
+    case DeviceAvailabilityState.ONLINE:
       return { state: 'Online', tone: 'success' }
-    case DeviceLiveness.DEGRADED:
-      return { state: 'Degraded', tone: 'warning' }
-    case DeviceLiveness.OFFLINE:
+    case DeviceAvailabilityState.OFFLINE:
       return { state: 'Offline', tone: 'error' }
     default:
       return { state: 'Unknown', tone: 'idle' }

@@ -16,6 +16,8 @@ type SRPCDeviceResourceServiceClient interface {
 
 	WatchDeviceState(ctx context.Context, in *WatchDeviceStateRequest) (SRPCDeviceResourceService_WatchDeviceStateClient, error)
 
+	WatchDeviceAvailability(ctx context.Context, in *WatchDeviceAvailabilityRequest) (SRPCDeviceResourceService_WatchDeviceAvailabilityClient, error)
+
 	ReportDeviceStatus(ctx context.Context, in *ReportDeviceStatusRequest) (*ReportDeviceStatusResponse, error)
 
 	AccessCheckoutRoot(ctx context.Context, in *AccessCheckoutRootRequest) (*AccessCheckoutRootResponse, error)
@@ -72,6 +74,39 @@ func (x *srpcDeviceResourceService_WatchDeviceStateClient) RecvTo(m *WatchDevice
 	return x.MsgRecv(m)
 }
 
+func (c *srpcDeviceResourceServiceClient) WatchDeviceAvailability(ctx context.Context, in *WatchDeviceAvailabilityRequest) (SRPCDeviceResourceService_WatchDeviceAvailabilityClient, error) {
+	stream, err := c.cc.NewStream(ctx, c.serviceID, "WatchDeviceAvailability", in)
+	if err != nil {
+		return nil, err
+	}
+	strm := &srpcDeviceResourceService_WatchDeviceAvailabilityClient{stream}
+	// A failed half-close means the call ended; MsgRecv reports its outcome.
+	_ = strm.CloseSend()
+	return strm, nil
+}
+
+type SRPCDeviceResourceService_WatchDeviceAvailabilityClient interface {
+	srpc.Stream
+	Recv() (*DeviceAvailability, error)
+	RecvTo(*DeviceAvailability) error
+}
+
+type srpcDeviceResourceService_WatchDeviceAvailabilityClient struct {
+	srpc.Stream
+}
+
+func (x *srpcDeviceResourceService_WatchDeviceAvailabilityClient) Recv() (*DeviceAvailability, error) {
+	m := new(DeviceAvailability)
+	if err := x.MsgRecv(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+func (x *srpcDeviceResourceService_WatchDeviceAvailabilityClient) RecvTo(m *DeviceAvailability) error {
+	return x.MsgRecv(m)
+}
+
 func (c *srpcDeviceResourceServiceClient) ReportDeviceStatus(ctx context.Context, in *ReportDeviceStatusRequest) (*ReportDeviceStatusResponse, error) {
 	out := new(ReportDeviceStatusResponse)
 	err := c.cc.ExecCall(ctx, c.serviceID, "ReportDeviceStatus", in, out)
@@ -92,6 +127,8 @@ func (c *srpcDeviceResourceServiceClient) AccessCheckoutRoot(ctx context.Context
 
 type SRPCDeviceResourceServiceServer interface {
 	WatchDeviceState(*WatchDeviceStateRequest, SRPCDeviceResourceService_WatchDeviceStateStream) error
+
+	WatchDeviceAvailability(*WatchDeviceAvailabilityRequest, SRPCDeviceResourceService_WatchDeviceAvailabilityStream) error
 
 	ReportDeviceStatus(context.Context, *ReportDeviceStatusRequest) (*ReportDeviceStatusResponse, error)
 
@@ -125,6 +162,7 @@ func (d *SRPCDeviceResourceServiceHandler) GetServiceID() string { return d.serv
 func (SRPCDeviceResourceServiceHandler) GetMethodIDs() []string {
 	return []string{
 		"WatchDeviceState",
+		"WatchDeviceAvailability",
 		"ReportDeviceStatus",
 		"AccessCheckoutRoot",
 	}
@@ -141,6 +179,8 @@ func (d *SRPCDeviceResourceServiceHandler) InvokeMethod(
 	switch methodID {
 	case "WatchDeviceState":
 		return true, d.InvokeMethod_WatchDeviceState(d.impl, strm)
+	case "WatchDeviceAvailability":
+		return true, d.InvokeMethod_WatchDeviceAvailability(d.impl, strm)
 	case "ReportDeviceStatus":
 		return true, d.InvokeMethod_ReportDeviceStatus(d.impl, strm)
 	case "AccessCheckoutRoot":
@@ -157,6 +197,15 @@ func (SRPCDeviceResourceServiceHandler) InvokeMethod_WatchDeviceState(impl SRPCD
 	}
 	serverStrm := &srpcDeviceResourceService_WatchDeviceStateStream{strm}
 	return impl.WatchDeviceState(req, serverStrm)
+}
+
+func (SRPCDeviceResourceServiceHandler) InvokeMethod_WatchDeviceAvailability(impl SRPCDeviceResourceServiceServer, strm srpc.Stream) error {
+	req := new(WatchDeviceAvailabilityRequest)
+	if err := strm.MsgRecv(req); err != nil {
+		return err
+	}
+	serverStrm := &srpcDeviceResourceService_WatchDeviceAvailabilityStream{strm}
+	return impl.WatchDeviceAvailability(req, serverStrm)
 }
 
 func (SRPCDeviceResourceServiceHandler) InvokeMethod_ReportDeviceStatus(impl SRPCDeviceResourceServiceServer, strm srpc.Stream) error {
@@ -198,6 +247,29 @@ func (x *srpcDeviceResourceService_WatchDeviceStateStream) Send(m *WatchDeviceSt
 }
 
 func (x *srpcDeviceResourceService_WatchDeviceStateStream) SendAndClose(m *WatchDeviceStateResponse) error {
+	if m != nil {
+		if err := x.MsgSend(m); err != nil {
+			return err
+		}
+	}
+	return x.CloseSend()
+}
+
+type SRPCDeviceResourceService_WatchDeviceAvailabilityStream interface {
+	srpc.Stream
+	Send(*DeviceAvailability) error
+	SendAndClose(*DeviceAvailability) error
+}
+
+type srpcDeviceResourceService_WatchDeviceAvailabilityStream struct {
+	srpc.Stream
+}
+
+func (x *srpcDeviceResourceService_WatchDeviceAvailabilityStream) Send(m *DeviceAvailability) error {
+	return x.MsgSend(m)
+}
+
+func (x *srpcDeviceResourceService_WatchDeviceAvailabilityStream) SendAndClose(m *DeviceAvailability) error {
 	if m != nil {
 		if err := x.MsgSend(m); err != nil {
 			return err
