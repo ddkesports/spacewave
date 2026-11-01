@@ -204,16 +204,16 @@ func (n *pendingNet) counted(from *block.BlockRef, recounts uint64, recounting b
 	return false
 }
 
-// net returns what died in the interval ending at to. A page a successful put
-// reported the store held is found; a page no successful put stored is never
-// listed dead, which leaks when another path stored it. Without steps, the
+// net returns what died in the interval ending at to. A page every successful
+// put of it reported the store held is found; one any put stored afresh is not,
+// since that put deferred the edges to its children and the record counts
+// them. A page no successful put stored is never listed dead, which leaks when
+// another path stored it. Without steps, the
 // record counts the edges of the pages the successful puts stored afresh and
 // kills nothing, as block.NetPuts describes. Call it once ready.
 func (n *pendingNet) net(to *block.BlockRef) *block.Replacements {
-	// Gather which successful puts stored and found each page, and the pages
-	// they carried. A page one put found and another stored afresh is found
-	// for the steps, and fresh for the puts alone, whose edges it added.
-	puts := make(map[string]bool)
+	// Gather the pages the successful puts carried, and which of them a put
+	// stored afresh.
 	fresh := make(map[string]bool)
 	carried := make(map[string]struct{})
 	var pages []*block.PutBatchEntry
@@ -228,9 +228,7 @@ func (n *pendingNet) net(to *block.BlockRef) *block.Replacements {
 				carried[key] = struct{}{}
 				pages = append(pages, e)
 			}
-			found := i < len(existed) && existed[i]
-			puts[key] = puts[key] || found
-			fresh[key] = fresh[key] || !found
+			fresh[key] = fresh[key] || i >= len(existed) || !existed[i]
 		}
 	}
 
@@ -238,7 +236,11 @@ func (n *pendingNet) net(to *block.BlockRef) *block.Replacements {
 	if n.steps == nil {
 		return block.NetPuts(pages, fresh)
 	}
-	return n.steps.Join().Net(puts)
+	found := make(map[string]bool, len(fresh))
+	for key, isFresh := range fresh {
+		found[key] = !isFresh
+	}
+	return n.steps.Join().Net(found)
 }
 
 // worldDeaths gathers the World transitions the engine's block engines commit,
