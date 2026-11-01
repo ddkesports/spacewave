@@ -524,8 +524,10 @@ func (db *DB) localPin() pin {
 // the published state, so a pin computed under pinMtx never rises above a
 // snapshot that starts later.
 func (db *DB) updatePin(ctx context.Context) error {
-	// A read-only handle has no slot to write.
+	// A read-only handle has no slot to write, but still forgets the states
+	// no snapshot reads, which only localPin prunes.
 	if db.opts.ReadOnly {
+		db.localPin()
 		return nil
 	}
 

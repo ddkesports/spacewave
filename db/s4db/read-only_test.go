@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -80,6 +81,35 @@ func TestReadOnly(t *testing.T) {
 
 	// A writer still opens the file afterwards.
 	db = openTest(t, path, Options{})
-	defer db.Close()
 	m.check(t, db)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// A read-only handle following another process's commits through many
+	// refreshes keeps only the states its snapshots read.
+	ro = openTest(t, path, Options{ReadOnly: true})
+	defer ro.Close()
+	for range 8 {
+		cmd := exec.Command(os.Args[0], "-test.run=^$")
+		cmd.Env = append(os.Environ(), childEnv+"="+path)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("child: %v: %s", err, out)
+		}
+		if err := ro.Refresh(ctx); err != nil {
+			t.Fatal(err)
+		}
+		tx, err := ro.NewTransaction(ctx, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tx.Discard()
+	}
+	for i := range childKeys {
+		m[string(processKey("child", i))] = processValue(i)
+	}
+	m.check(t, ro)
+	if n := len(ro.retired); n > 1 {
+		t.Fatalf("read-only handle retains %d replaced states", n)
+	}
 }
