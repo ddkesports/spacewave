@@ -36,6 +36,9 @@ type queueEntry struct {
 	at time.Time
 	// hash is the block hash.
 	hash *hash.Hash
+	// markedKey is the key of the block's marker, built from the hash text
+	// the queue key holds, so a scan encodes no hash.
+	markedKey []byte
 	// size is the block size in bytes.
 	size int64
 	// value is the entry's value, owned by the entry. A repeated write of the
@@ -43,12 +46,29 @@ type queueEntry struct {
 	value []byte
 }
 
-// scanQueue calls cb with each queue entry in write order until cb returns an
-// error.
-func scanQueue(ctx context.Context, tx kvtx.Tx, cb func(queueEntry) error) error {
+// queueEnd sorts after every queue key, so a floor at it starts a scan past
+// the queue.
+const queueEnd = "queue0"
+
+// scanQueue calls cb with each queue entry in write order from the key from,
+// or from the queue's start when from is nil, until cb returns an error.
+//
+// A floor below every live entry skips the deletes the store keeps for the
+// entries already cleared, which an iteration from the queue's start walks
+// one by one until the store checkpoints.
+func scanQueue(ctx context.Context, tx kvtx.Tx, from []byte, cb func(queueEntry) error) error {
 	it := tx.Iterate(ctx, []byte(queuePrefix), true, false)
 	defer it.Close()
-	for it.Next() {
+	ok := false
+	if from != nil {
+		if err := it.Seek(from); err != nil {
+			return err
+		}
+		ok = it.Valid()
+	} else {
+		ok = it.Next()
+	}
+	for ; ok; ok = it.Next() {
 		entry, err := parseQueueKey(it.Key())
 		if err != nil {
 			return err
@@ -82,15 +102,19 @@ func queueTime(at time.Time) time.Time {
 	return time.Unix(0, max(at.UnixNano(), 0))
 }
 
+// queueFloor returns a key at or before every queue key of a block written
+// at at or later, which queueTime has normalized.
+func queueFloor(at time.Time) []byte {
+	var stamp [8]byte
+	binary.BigEndian.PutUint64(stamp[:], uint64(at.UnixNano()))
+	return hex.AppendEncode([]byte(queuePrefix), stamp[:])
+}
+
 // queueKey returns the queue key of a block written at at, which queueTime
 // has normalized.
 func queueKey(at time.Time, h *hash.Hash) []byte {
 	// Encode the write time as fixed-width hex, so keys sort by time.
-	var stamp [8]byte
-	binary.BigEndian.PutUint64(stamp[:], uint64(at.UnixNano()))
-	key := []byte(queuePrefix)
-	key = hex.AppendEncode(key, stamp[:])
-	key = append(key, '/')
+	key := append(queueFloor(at), '/')
 	return append(key, h.MarshalString()...)
 }
 
@@ -117,10 +141,12 @@ func parseQueueKey(key []byte) (queueEntry, error) {
 	if err := h.ParseFromB58(string(rest[queueTimeLen+1:])); err != nil {
 		return queueEntry{}, errors.Wrap(err, "parse upload queue hash")
 	}
+	text := rest[queueTimeLen+1:]
 	return queueEntry{
-		key:  bytes.Clone(key),
-		at:   time.Unix(0, int64(nanos)),
-		hash: h,
+		key:       bytes.Clone(key),
+		at:        time.Unix(0, int64(nanos)),
+		hash:      h,
+		markedKey: append([]byte(markedPrefix), text...),
 	}, nil
 }
 

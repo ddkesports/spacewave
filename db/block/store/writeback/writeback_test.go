@@ -614,6 +614,31 @@ func TestUploadFillsBatches(t *testing.T) {
 	if sizes := remote.getBatches(); !slices.Equal(sizes, []int{10, 10, 10, 5}) {
 		t.Fatalf("batches %v, want a final batch of 5", sizes)
 	}
+
+	// The drained queue raised its scan floor past every entry. A new write
+	// and a backfilled block dated before every cleared entry lower it, so
+	// both still upload.
+	ref, _, err := s.PutBlock(ctx, []byte("after the drain"), leafOpts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, _, err := s.PutBlock(ctx, []byte("backfilled"), leafOpts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitStatus(t, s, func(st Status) bool { return st.Pending == 0 })
+	if err := s.queue(ctx, []Mark{{Hash: old.GetHash(), Size: 10}}); err != nil {
+		t.Fatal(err)
+	}
+	waitStatus(t, s, func(st Status) bool { return st.Pending == 0 })
+	for _, r := range []*block.BlockRef{ref, old} {
+		if env.isMarked(t, r) {
+			t.Fatalf("block %s still queued after the drain", r.MarshalString())
+		}
+	}
+	if sizes := remote.getBatches(); !slices.Equal(sizes, []int{10, 10, 10, 5, 2, 1}) {
+		t.Fatalf("batches %v, want the new write and the backfill uploaded", sizes)
+	}
 	cancel()
 	<-done
 }

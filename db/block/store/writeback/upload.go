@@ -200,8 +200,10 @@ func (s *Store) scanHead(ctx context.Context, limits block.BatchLimits) (*queueH
 	var policy Policy
 	var oldest time.Time
 	var pendingBytes int64
+	var floor []byte
 	s.bcast.HoldLock(func(_ func(), _ func() <-chan struct{}) {
 		policy, oldest, pendingBytes = s.status.Policy, s.status.Oldest, s.status.PendingBytes
+		floor = s.floor
 	})
 	settled := time.Now().Add(-policy.Settle)
 
@@ -213,7 +215,9 @@ func (s *Store) scanHead(ctx context.Context, limits block.BatchLimits) (*queueH
 		var batchBlocks int
 		var batchBytes, dueBytes int64
 		ended := false
-		err := scanQueue(ctx, tx, func(entry queueEntry) error {
+		// A transaction that commits after the floor read lowered the floor
+		// first, so the next round reads its blocks if this one misses them.
+		err := scanQueue(ctx, tx, floor, func(entry queueEntry) error {
 			// Close the open batch when the entry does not fit it.
 			if batchBlocks != 0 && (batchBlocks == limits.Blocks || batchBytes+entry.size > limits.Bytes) {
 				head.ends = append(head.ends, len(head.entries))
@@ -247,7 +251,7 @@ func (s *Store) scanHead(ctx context.Context, limits block.BatchLimits) (*queueH
 			// Add the entry to the open batch.
 			head.entries = append(head.entries, pendingBlock{
 				queueKey:  entry.key,
-				markedKey: markedKey(entry.hash),
+				markedKey: entry.markedKey,
 				value:     entry.value,
 				ref:       block.NewBlockRef(entry.hash),
 				size:      entry.size,
