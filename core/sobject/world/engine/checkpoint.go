@@ -227,6 +227,7 @@ func (e *soEngine) nameWorld(ctx context.Context, world *InnerState, n int, heig
 		Heads:   []*block.AtomicHeadUpdate{countHead(cursor, WriteKindReplay)},
 		Roots:   roots,
 		After:   e.lastReceipt(),
+		Recount: r.ledger.carryRecount(),
 	})
 	if err != nil {
 		return nil, false, err
@@ -234,7 +235,7 @@ func (e *soEngine) nameWorld(ctx context.Context, world *InnerState, n int, heig
 	countPublication(nil, pages, save)
 
 	// Hand the naming put to the interval's record.
-	put := newWorldPut(receipt, entries, pages)
+	put := newWorldPut(receipt, entries, pages, r.ledger.recounts)
 	named = &put
 	e.admit(receipt, e.retained, seqno)
 	go receipt.Release()

@@ -55,6 +55,9 @@ func (v *Volume) openPhysical(ctx context.Context) (*physicalTx, error) {
 	}
 	p := &physicalTx{tx: tx, store: kvtx.NewTxStore(tx)}
 	p.rg = OpenRefGraph(p.store)
+	if v.holdCounts {
+		p.rg.CountOwnerEdges()
+	}
 
 	// Serve blocks from the domain's transaction, or as records. Either view
 	// reads tx's uncommitted writes, so neither marks reads durable.

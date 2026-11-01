@@ -796,7 +796,7 @@ func (e *soEngine) updateEngineState(ctx context.Context, state *InnerState) err
 	// Hold changed retained roots and the Worlds the replay reads.
 	rootsChanged := !slices.EqualFunc(state.GetRetainedRoots(), e.retainedRoots, (*RetainedRoot).EqualVT)
 	if rootsChanged {
-		if err := hold.rootSet(retainedRootsName, state.GetRetainedRoots()); err != nil {
+		if err := hold.rootSet(ctx, retainedRootsName, state.GetRetainedRoots()); err != nil {
 			return err
 		}
 	}
@@ -851,6 +851,7 @@ func (e *soEngine) applyHold(ctx context.Context, hold *rootHold) error {
 		Entries: hold.entries,
 		Heads:   []*block.AtomicHeadUpdate{countHead(head, WriteKindReplay)},
 		Roots:   hold.roots,
+		Recount: hold.recount,
 	})
 	if errors.Is(err, block.ErrAtomicPublicationUnsupported) || errors.Is(err, block.ErrPublicationTooLarge) {
 		return e.holdThenSave(ctx, hold)
@@ -881,6 +882,10 @@ func (e *soEngine) holdThenSave(ctx context.Context, hold *rootHold) error {
 	}
 	if err := e.replay.save(ctx); err != nil {
 		return err
+	}
+	if hold.recount {
+		// The hold carries no recount, so a later save asks again.
+		e.replay.ledger.lost()
 	}
 	e.storedPages(ctx, named)
 	return nil

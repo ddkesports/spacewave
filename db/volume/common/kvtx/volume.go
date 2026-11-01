@@ -149,6 +149,12 @@ type Volume struct {
 	// changes that would go below zero.
 	deadlistsChecked, deadlistLivePages          atomic.Uint64
 	deadlistLeakedPages, deadlistCountUnderflows atomic.Uint64
+	// releasesResolved, releaseFreedBlocks, releaseLiveBlocks and
+	// releaseUnderflows count, for the flows, the shared count releases the
+	// collector resolved, the blocks they freed, the freed blocks its next
+	// mark reached, and the releases beyond a block's count.
+	releasesResolved, releaseFreedBlocks atomic.Uint64
+	releaseLiveBlocks, releaseUnderflows atomic.Uint64
 	// revivedPuts counts the marked entries puts found absent and stored
 	// afresh, for the flows.
 	revivedPuts atomic.Uint64

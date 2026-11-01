@@ -75,6 +75,10 @@ type WriteFlows struct {
 	// Stalled is the number of pending deadlist entries the ledger orphaned
 	// while they still waited on their puts or their encoding.
 	Stalled uint64
+	// Unfunded is the number of records that netted from their puts alone
+	// because the store's counts may not hold their old root's lineage, which
+	// leaks the tree at that root.
+	Unfunded uint64
 }
 
 // writeFlows holds the process's counters.
@@ -87,6 +91,7 @@ var writeFlows struct {
 	forfeits    atomic.Uint64
 	unrecorded  atomic.Uint64
 	stalled     atomic.Uint64
+	unfunded    atomic.Uint64
 }
 
 // GetWriteFlows returns the process's counters as of now.
@@ -107,6 +112,7 @@ func GetWriteFlows() WriteFlows {
 	f.DeathForfeits = writeFlows.forfeits.Load()
 	f.Unrecorded = writeFlows.unrecorded.Load()
 	f.Stalled = writeFlows.stalled.Load()
+	f.Unfunded = writeFlows.unfunded.Load()
 	return f
 }
 

@@ -116,7 +116,7 @@ func validateRetainedRootName(name string) error {
 // local root name, or releases the name when roots is empty.
 func holdRootSet(ctx context.Context, so sobject.SharedObject, name string, roots []*RetainedRoot) error {
 	hold := newRootHold(so.GetBlockStore())
-	if err := hold.rootSet(name, roots); err != nil {
+	if err := hold.rootSet(ctx, name, roots); err != nil {
 		return err
 	}
 	return hold.apply(ctx)

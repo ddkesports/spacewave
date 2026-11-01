@@ -144,13 +144,13 @@ func TestReplacementsMatchDiff(t *testing.T) {
 	r.root.SetRef(1, nmid)
 	check("move", r, from)
 
-	// Make mid the root.
+	// Make mid the root. The record holds no root: its owner edge counts it.
 	from = chain("reroot")
 	r = open(from)
 	if err := r.tx.SetRoot(r.mid); err != nil {
 		t.Fatal(err)
 	}
-	check("reroot", r, from, r.mid.GetRef())
+	check("reroot", r, from)
 
 	// Two writes in one interval: the first write's pages die in the second.
 	from = chain("twice")

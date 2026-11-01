@@ -346,6 +346,7 @@ func (t *soEngineWriteTx) publish(ctx context.Context, publisher sobject.StatePu
 		Roots:    roots,
 		After:    t.eng.lastReceipt(),
 		Ordered:  world.OrderedCommit(ctx),
+		Recount:  t.eng.replay.ledger.carryRecount(),
 	}
 	if kept := t.eng.replay.pages; kept != nil {
 		pages = kept.keep(pages)
