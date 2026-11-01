@@ -222,6 +222,15 @@ export interface FtpsLocation {
    * later connection of the backend while it runs.
    */
   hostKey?: string
+  /**
+   * FtpsPort, when not zero with Sftp set, also reaches the directory over
+   * FTPS on this port, with the same host and netrc logins. Each call goes to
+   * whichever protocol has fewer calls in flight, so the faster one carries
+   * more of them, and calls go over FTPS alone for a few seconds after SFTP
+   * fails to connect. The FTPS sessions follow ConnsPerLogin and the FTPS
+   * default for MaxConns, which counts the SSH connections.
+   */
+  ftpsPort?: number
 }
 
 export const FtpsLocation: MessageType<FtpsLocation> =
@@ -237,6 +246,7 @@ export const FtpsLocation: MessageType<FtpsLocation> =
       [7, 'conns_per_login', 13],
       [8, 'sftp', 8],
       [9, 'host_key', 9],
+      [10, 'ftps_port', 13],
     ],
   )
 

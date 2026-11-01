@@ -1,5 +1,3 @@
-//go:build !tinygo
-
 // Package block_store_sftp stores the objects of a block_store_s3.PackStore on
 // an SFTP server.
 //
@@ -414,7 +412,10 @@ func (s *slot) connect(ctx context.Context) (*conn, error) {
 	// Dial a new one.
 	cn, err := s.c.dial(ctx)
 	if err != nil {
-		return nil, err
+		if ctx.Err() != nil {
+			return nil, err
+		}
+		return nil, &ConnectError{Err: err}
 	}
 	cn.slot = s
 	s.conn = cn

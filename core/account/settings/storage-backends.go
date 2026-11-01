@@ -298,6 +298,7 @@ func (l *SqlLocation) Validate() error {
 // Validate checks that the FTPS location names a host, a login file and a
 // root directory.
 func (l *FtpsLocation) Validate() error {
+	// Check the required fields, then the ports.
 	if l.GetHost() == "" {
 		return errors.New("host is required")
 	}
@@ -309,6 +310,12 @@ func (l *FtpsLocation) Validate() error {
 	}
 	if l.GetPort() > 65535 {
 		return errors.Errorf("port %d is out of range", l.GetPort())
+	}
+	if l.GetFtpsPort() > 65535 {
+		return errors.Errorf("ftps_port %d is out of range", l.GetFtpsPort())
+	}
+	if l.GetFtpsPort() != 0 && !l.GetSftp() {
+		return errors.New("ftps_port needs sftp")
 	}
 	return nil
 }

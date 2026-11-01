@@ -1,5 +1,3 @@
-//go:build !tinygo
-
 package provider_local
 
 import (
@@ -138,6 +136,28 @@ func TestFTPSPlacementAndFallback(t *testing.T) {
 	}
 	if !f.packHolds(ref) {
 		t.Fatal("a fresh pack store lacks the uploaded block")
+	}
+
+	// An SFTP location whose server refuses connections lists the same packs
+	// over its FTPS port.
+	refused, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = refused.Close()
+	viaSFTP := location.CloneVT()
+	viaSFTP.Sftp, viaSFTP.Port, viaSFTP.FtpsPort = true, uint32(refused.Addr().(*net.TCPAddr).Port), port //nolint:gosec // a TCP port fits.
+	client, err := buildFTPSClient(logrus.NewEntry(logrus.New()), viaSFTP, tlsConf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	var listed int
+	if err := client.ListObjects(f.ctx, location.GetRoot(), location.GetPrefix(), func(string, int64) error {
+		listed++
+		return nil
+	}); err != nil || listed == 0 {
+		t.Fatalf("list over the FTPS port = %d packs, %v; want the uploaded pack", listed, err)
 	}
 
 	// Count a tracked read after eviction separately from a first cache fill.
