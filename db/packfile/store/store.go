@@ -85,6 +85,9 @@ type PackfileStore struct {
 	manifest *btree.BTreeG[*manifestEntry]
 	// manifestByID permits point replacement and removal, guarded by bcast.
 	manifestByID map[string]*manifestEntry
+	// manifestIDs holds the manifest entries in id order, guarded by bcast.
+	// Each snapshot takes a copy-on-write copy to find a pack by id.
+	manifestIDs *btree.BTreeG[*manifestEntry]
 	// current is the immutable catalog published after each manifest change,
 	// so lookups share one snapshot and its locator cache.
 	current atomic.Pointer[ManifestSnapshot]
@@ -98,6 +101,7 @@ func NewPackfileStore(opener Opener, cache IndexCache) *PackfileStore {
 		engines:         make(map[string]*PackReader),
 		manifest:        newManifestTree(),
 		manifestByID:    make(map[string]*manifestEntry),
+		manifestIDs:     newManifestIDTree(),
 		writebackCtx:    context.Background(),
 		writebackWindow: defaultWritebackWindow,
 		budget:          newResidentBudget(defaultResidentBudget),
@@ -140,6 +144,7 @@ func (s *PackfileStore) Close() {
 		// Publish the empty manifest and wake the waiters.
 		s.manifest = newManifestTree()
 		s.manifestByID = nil
+		s.manifestIDs = newManifestIDTree()
 		s.closeComplete = true
 		s.publishManifest()
 		broadcast()
@@ -679,6 +684,7 @@ func (s *PackfileStore) updateManifest(entries []*packfile.PackfileEntry, remove
 			// Remove the pack descriptor from both catalog indexes.
 			if old := s.manifestByID[id]; old != nil {
 				s.manifest.Delete(old)
+				s.manifestIDs.Delete(old)
 				delete(s.manifestByID, id)
 			}
 
@@ -726,6 +732,7 @@ func (s *PackfileStore) updateManifest(entries []*packfile.PackfileEntry, remove
 			item := parseManifestEntry(entry)
 			s.manifestByID[id] = item
 			s.manifest.Set(item)
+			s.manifestIDs.Set(item)
 		}
 
 		// Wake catalog observers after publishing the manifest changes.

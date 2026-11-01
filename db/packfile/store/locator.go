@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/s4wave/spacewave/db/block/bloom"
+	"github.com/s4wave/spacewave/db/packfile"
 )
 
 // Locator places a block key in a pack without the bloom filters.
@@ -32,37 +33,42 @@ func (s *PackfileStore) SetLocator(l Locator) {
 type unindexedPacks struct {
 	// version is the locator version the split was computed at.
 	version uint64
-	// byID holds every pack of the snapshot by id.
-	byID map[string]*manifestEntry
 	// open holds the packs the locator has not indexed, in lookup order.
 	open []*manifestEntry
 }
 
-// unindexedPacks returns the snapshot's packs split by loc, computing the
-// split once per snapshot and locator version. The version is read before
-// the split, so a change during it makes the next lookup recompute.
+// unindexedPacks returns the snapshot's packs the locator has not indexed,
+// computing the split once per snapshot and locator version; concurrent
+// lookups wait for the one computing it. The version is read before the
+// split, so a change during it makes the next lookup recompute.
 func (v *ManifestSnapshot) unindexedPacks(loc Locator) *unindexedPacks {
 	// Reuse the split while the locator answers as it did.
 	version := loc.Version()
 	if packs := v.unindexed.Load(); packs != nil && packs.version == version {
 		return packs
 	}
-
-	// Index every pack and collect those the locator has not indexed.
-	packs := &unindexedPacks{
-		version: version,
-		byID:    make(map[string]*manifestEntry, v.entries.Len()),
+	v.unindexedMtx.Lock()
+	defer v.unindexedMtx.Unlock()
+	if packs := v.unindexed.Load(); packs != nil && packs.version >= version {
+		return packs
 	}
+
+	// Collect the packs the locator has not indexed.
+	packs := &unindexedPacks{version: version}
 	v.entries.Scan(func(item *manifestEntry) bool {
-		id := item.entry.GetId()
-		packs.byID[id] = item
-		if !loc.Indexed(id) {
+		if !loc.Indexed(item.entry.GetId()) {
 			packs.open = append(packs.open, item)
 		}
 		return true
 	})
 	v.unindexed.Store(packs)
 	return packs
+}
+
+// entryByID returns the snapshot's entry for pack id, or nil.
+func (v *ManifestSnapshot) entryByID(id string) *manifestEntry {
+	item, _ := v.ids.Get(&manifestEntry{entry: &packfile.PackfileEntry{Id: id}})
+	return item
 }
 
 // candidates returns the packs of view that may hold key, the pack the locator
@@ -86,7 +92,7 @@ func (s *PackfileStore) candidates(ctx context.Context, view *ManifestSnapshot, 
 	packs := view.unindexedPacks(loc)
 	var out []*manifestEntry
 	if found {
-		hit := packs.byID[located]
+		hit := view.entryByID(located)
 		if hit == nil {
 			return view.filterCandidates(bloomKey), nil
 		}

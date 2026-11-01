@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"sort"
+	"sync/atomic"
 	"time"
 
 	"github.com/aperturerobotics/go-kvfile"
@@ -117,12 +118,15 @@ type PackReader struct {
 	indexTailResponseBytes int64
 
 	// Block index. published holds the keys handed to the writeback target.
-	// indexUseSeq orders the last index use on the budget clock.
+	// indexRef is set by each index use and cleared by the budget's ring
+	// sweep. indexElem is the reader's place in that ring, guarded by the
+	// budget's mtx.
 	published             map[string]struct{}
 	entriesByOff          []*kvfile.IndexEntry
 	entriesByKey          []*kvfile.IndexEntry
 	indexLoaded           bool
-	indexUseSeq           uint64
+	indexRef              atomic.Bool
+	indexElem             *list.Element
 	indexDrops            uint64
 	indexLoadCh           chan struct{}
 	indexLoadErr          error

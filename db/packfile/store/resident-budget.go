@@ -1,6 +1,7 @@
 package store
 
 import (
+	"container/list"
 	"maps"
 	"slices"
 	"sync"
@@ -14,8 +15,8 @@ import (
 // one limit however many packs are open. Readers charge span bytes as spans
 // are inserted and removed, and index entries as an index is published and
 // dropped. reclaim evicts the least recently used span across all readers
-// until the bytes fit, and reclaimIndexes drops the least recently used
-// index until the entries fit. A hot pack keeps its bytes and index while cold
+// until the bytes fit, and reclaimIndexes drops a cold index, chosen by the
+// CLOCK ring of loaded indexes, until the entries fit. A hot pack keeps its bytes and index while cold
 // packs give theirs up; a dropped index reloads from the index cache on its
 // next use.
 type residentBudget struct {
@@ -31,10 +32,15 @@ type residentBudget struct {
 	// indexUsed is the parsed index entries charged by every reader.
 	indexUsed atomic.Int64
 
-	// mtx guards readers.
+	// mtx guards readers, indexes and each reader's indexElem. A reader takes
+	// mtx under its own lock; the budget never takes a reader lock under mtx.
 	mtx sync.Mutex
 	// readers are the readers charging the budget.
 	readers map[*PackReader]struct{}
+	// indexes is the CLOCK ring of readers holding parsed index entries, the
+	// next candidate in front. A use sets the reader's indexRef; the sweep
+	// gives a referenced reader a second chance at the back of the ring.
+	indexes list.List
 }
 
 // newResidentBudget builds a budget with the given byte limit.
@@ -54,18 +60,76 @@ func (b *residentBudget) overage() int64 {
 	return max(b.used.Load()-limit, 0)
 }
 
-// attach registers a reader as an eviction source.
+// attach registers a reader as an eviction source. The caller holds the
+// reader lock.
 func (b *residentBudget) attach(e *PackReader) {
 	b.mtx.Lock()
 	b.readers[e] = struct{}{}
+	if len(e.entriesByKey) != 0 {
+		b.ringIndexLocked(e)
+	}
 	b.mtx.Unlock()
 }
 
-// detach unregisters a reader.
+// detach unregisters a reader. The caller holds the reader lock.
 func (b *residentBudget) detach(e *PackReader) {
 	b.mtx.Lock()
 	delete(b.readers, e)
+	b.unringIndexLocked(e)
 	b.mtx.Unlock()
+}
+
+// indexChanged keeps a reader's place in the index ring in step with its
+// parsed entries: a reader holding entries joins the back of the ring as just
+// used, and one holding none leaves it. The caller holds the reader lock.
+func (b *residentBudget) indexChanged(e *PackReader, entries int) {
+	b.mtx.Lock()
+	if entries != 0 {
+		b.ringIndexLocked(e)
+	} else {
+		b.unringIndexLocked(e)
+	}
+	b.mtx.Unlock()
+}
+
+// ringIndexLocked puts the reader at the back of the index ring as just used.
+func (b *residentBudget) ringIndexLocked(e *PackReader) {
+	e.indexRef.Store(true)
+	if e.indexElem != nil {
+		b.indexes.MoveToBack(e.indexElem)
+		return
+	}
+	e.indexElem = b.indexes.PushBack(e)
+}
+
+// unringIndexLocked removes the reader from the index ring.
+func (b *residentBudget) unringIndexLocked(e *PackReader) {
+	if e.indexElem != nil {
+		b.indexes.Remove(e.indexElem)
+		e.indexElem = nil
+	}
+}
+
+// nextIndexVictimLocked sweeps the index ring and returns the first reader
+// not used since the sweep last passed it, or nil when the ring holds fewer
+// than two indexes. The newest index joins the back as used, so the sweep
+// reaches every other index first.
+func (b *residentBudget) nextIndexVictimLocked() *PackReader {
+	n := b.indexes.Len()
+	if n < 2 {
+		return nil
+	}
+	// Two passes clear every reference unless uses keep setting them; then
+	// the front is the coldest choice the sweep found.
+	for range 2 * n {
+		front := b.indexes.Front()
+		e := front.Value.(*PackReader)
+		if !e.indexRef.Swap(false) {
+			return e
+		}
+		b.indexes.MoveToBack(front)
+	}
+	return b.indexes.Front().Value.(*PackReader)
 }
 
 // reclaim evicts until the budget fits or nothing more can be released.
@@ -93,9 +157,10 @@ func (b *residentBudget) reclaim() {
 	}
 }
 
-// reclaimIndexes drops the least recently used parsed index until the entries
-// fit. It never drops the most recently used index, so a reader that just
-// loaded its index can use it even when that one index exceeds the limit.
+// reclaimIndexes drops cold parsed indexes until the entries fit. It never
+// drops the last index in the ring, so a reader that just loaded its index can
+// use it even when that one index exceeds the limit. Each drop costs a short
+// sweep of the ring rather than a visit to every reader.
 //
 // The caller must not hold any reader lock.
 func (b *residentBudget) reclaimIndexes() {
@@ -105,24 +170,11 @@ func (b *residentBudget) reclaimIndexes() {
 			return
 		}
 		b.mtx.Lock()
-		readers := slices.Collect(maps.Keys(b.readers))
+		victim := b.nextIndexVictimLocked()
 		b.mtx.Unlock()
-
-		var victim *PackReader
-		var victimSeq, newestSeq uint64
-		for _, e := range readers {
-			seq, ok := e.lastIndexUse()
-			if !ok {
-				continue
-			}
-			newestSeq = max(newestSeq, seq)
-			if victim == nil || seq < victimSeq {
-				victim, victimSeq = e, seq
-			}
-		}
-		if victim == nil || victimSeq == newestSeq {
+		if victim == nil {
 			return
 		}
-		victim.dropIndex(victimSeq)
+		victim.dropIndex()
 	}
 }

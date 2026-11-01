@@ -7,7 +7,6 @@ import (
 	"cmp"
 	"context"
 	"io"
-	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -723,8 +722,11 @@ func (s *PackStore) readEntry(ctx context.Context, id string) (*packfile.Packfil
 	return entry, nil
 }
 
-// updateEntries adds and removes known packfiles and publishes the result to
-// the reader. Publishing under the lock keeps concurrent updates in order.
+// updateEntries adds and removes known packfiles and publishes the change to
+// the reader as a delta, so an upload costs the packs it changes rather than
+// the whole catalog. Every catalog change passes through here, so the reader's
+// manifest stays equal to entries. Publishing under the lock keeps concurrent
+// updates in order.
 func (s *PackStore) updateEntries(add []*packfile.PackfileEntry, remove []string) {
 	if s.index != nil {
 		if err := s.index.remove(context.Background(), remove); err != nil {
@@ -739,7 +741,7 @@ func (s *PackStore) updateEntries(add []*packfile.PackfileEntry, remove []string
 		for _, entry := range add {
 			s.entries[entry.GetId()] = entry
 		}
-		s.packs.UpdateManifest(slices.Collect(maps.Values(s.entries)))
+		s.packs.ApplyManifestDelta(add, remove)
 	})
 }
 
