@@ -24,11 +24,11 @@ import (
 )
 
 // TestDeadlistsRandomWrites drives one World through random writes, renames,
-// payload roots, bursts of writes with the change log on, abandoned writes,
-// failed publications with a fork behind them, engine restarts, and restarts
-// of the Volume's sharing walk, as an upgrade to format 6 begins one, and
-// checks after each step that no deadlist record lists a page the World it
-// runs to reaches. A collector pass every 20 steps resolves the shared count
+// payload roots, copies of an object's root, bursts of writes with the change
+// log on, abandoned writes, failed publications with a fork behind them,
+// engine restarts, and restarts of the Volume's sharing walk, as an upgrade
+// to format 6 begins one, and checks after each step that no deadlist record
+// lists a page the World it runs to reaches. A collector pass every 20 steps resolves the shared count
 // releases and applies the due records in shadow: none may free a block its
 // mark reaches or take a shared count below zero.
 // DEADLIST_SEED replays a seed the log printed.
@@ -103,7 +103,7 @@ type deadlistRun struct {
 
 	// live holds the keys of the objects the World holds.
 	live []string
-	// next numbers the next new key, so no two objects share content.
+	// next numbers the next new key; only a copy makes two objects share content.
 	next int
 	// checked holds the sequence of each record checked.
 	checked map[uint64]bool
@@ -128,6 +128,7 @@ func (r *deadlistRun) step() {
 		{"delete", 14, r.delete},
 		{"rename", 10, r.rename},
 		{"batch", 10, r.batch},
+		{"copy", 10, r.copy},
 		{"rev", 10, r.rev},
 		{"abandon", 5, r.abandon},
 		{"fork", 5, r.fork},
@@ -219,6 +220,46 @@ func (r *deadlistRun) batch() {
 		return err
 	})
 	r.live = append(r.live, a, b)
+}
+
+// copy commits one write that creates two objects at a random object's root,
+// deleting that object half the time, so the root's page gains two parents in
+// the interval that may kill its only one.
+func (r *deadlistRun) copy() {
+	from, a, b := r.pick(), r.newKey(), r.newKey()
+	gone := r.rng.IntN(2) == 0
+	r.write(func(tx world.Tx) error {
+		// Read the root of the object copied.
+		ctx := r.t.Context()
+		obj, err := world.MustGetObject(ctx, tx, from)
+		if err != nil {
+			return err
+		}
+		ref, _, err := obj.GetRootRef(ctx)
+		world.ReleaseObjectState(obj)
+		if err != nil {
+			return err
+		}
+
+		// Create both copies at it.
+		for _, key := range []string{a, b} {
+			obj, err := tx.CreateObject(ctx, key, ref.Clone())
+			world.ReleaseObjectState(obj)
+			if err != nil {
+				return err
+			}
+		}
+
+		// Delete the object copied when the step says so.
+		if gone {
+			_, err = tx.DeleteObject(ctx, from)
+		}
+		return err
+	})
+	r.live = append(r.live, a, b)
+	if !gone {
+		r.live = append(r.live, from)
+	}
 }
 
 // rev commits a write that bumps a random object's revision.

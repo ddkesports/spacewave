@@ -150,11 +150,13 @@ func (s ReplacementSteps) Join() *ReplacementStep {
 // page created and dropped in memory never reached the store, and a later write
 // may store the same page afresh, which the listing would free.
 //
-// A live page that was not put, that no replaced page named, and that is
-// neither root, is held when the new root or a created page names it: it
-// gained a holder unless its old parent died untouched, which only applying
-// the record can see. A found page's holders were counted at its put, and its
-// children gained none, since the stored copy already named them.
+// A live page that was not put and is neither root is held once for each
+// written page, or the new root, that names it: each such edge is a holder no
+// put counted. A page whose old parent died moved, and applying the record
+// takes that parent's count back when it frees, which only applying can see;
+// a page a write copied under two parents keeps one more holder. A found
+// page's holders were counted at its put, and its children gained none, since
+// the stored copy already named them.
 //
 // A live page existed when its edge from the new tree was counted already: a
 // put found it, or no created or replaced page and not the new root names it
@@ -179,14 +181,24 @@ func (s *ReplacementStep) Net(puts map[string]bool) *Replacements {
 	}
 
 	// Walk the live pages from the new root through the written pages,
-	// marking each page the new root or a created page names.
+	// counting the written pages that name each page, and the new root.
 	type step struct {
 		ref    *BlockRef
 		direct bool
 	}
 	live := make(map[string]*BlockRef)
-	direct := make(map[string]struct{})
+	direct := make(map[string]int)
 	stk := []step{{s.To, true}}
+	push := func(page pageBase, direct bool) {
+		seen := make(map[string]struct{}, len(page.refs))
+		for _, ref := range page.refs {
+			key := ref.MarshalString()
+			if _, dup := seen[key]; !dup {
+				seen[key] = struct{}{}
+				stk = append(stk, step{ref, direct})
+			}
+		}
+	}
 	for len(stk) != 0 {
 		st := stk[len(stk)-1]
 		stk = stk[:len(stk)-1]
@@ -195,24 +207,18 @@ func (s *ReplacementStep) Net(puts map[string]bool) *Replacements {
 		}
 		key := st.ref.MarshalString()
 		if st.direct {
-			direct[key] = struct{}{}
+			direct[key]++
 		}
 		if _, ok := live[key]; ok {
 			continue
 		}
 		live[key] = st.ref
 		if page, ok := created[key]; ok {
-			for _, ref := range page.refs {
-				stk = append(stk, step{ref, true})
-			}
+			push(page, true)
 		} else if page, ok := s.replaced[key]; ok {
-			for _, ref := range page.refs {
-				stk = append(stk, step{ref, true})
-			}
+			push(page, true)
 		} else if page, ok := foundPages[key]; ok {
-			for _, ref := range page.refs {
-				stk = append(stk, step{ref, false})
-			}
+			push(page, false)
 		}
 	}
 
@@ -274,24 +280,29 @@ func (s *ReplacementStep) Net(puts map[string]bool) *Replacements {
 	// Keep the live pages that no dead original page named: attached here
 	// from a position outside the touched pages, or written by this step. A
 	// written page may equal a stored page inside a removed subtree.
+	//
+	// Hold each stored page once per written page naming it, whose edge no put
+	// counted. A dead page's edge to it is taken back when the record frees
+	// that page, so a page that only moved between parents nets nothing, and a
+	// page a write copied under two parents nets one.
 	from, to := s.From.MarshalString(), s.To.MarshalString()
 	for key, ref := range live {
-		if _, isNamed := readNamed[key]; isNamed {
-			continue
-		}
-		out.Kept = append(out.Kept, ref)
-		_, isDirect := direct[key]
 		_, isReplaced := s.replaced[key]
 		_, isWritten := s.created[key]
-		if isDirect && !isReplaced && !isWritten && key != from && key != to {
-			out.Held = append(out.Held, ref)
+		if !isReplaced && !isWritten && key != from && key != to {
+			for range direct[key] {
+				out.Held = append(out.Held, ref)
+			}
+		}
+		if _, isNamed := readNamed[key]; !isNamed {
+			out.Kept = append(out.Kept, ref)
 		}
 	}
 
 	// List the live pages whose edge from the new tree existed.
 	for key, ref := range live {
 		_, isFound := foundPages[key]
-		_, isDirect := direct[key]
+		isDirect := direct[key] != 0
 		_, isCreated := created[key]
 		if isFound || (!isDirect && !isCreated) {
 			out.Existed = append(out.Existed, ref)
