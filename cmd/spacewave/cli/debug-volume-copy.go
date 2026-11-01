@@ -203,10 +203,16 @@ func copyVolumeFile(ctx context.Context, src, dst string, reachable *volume_kvtx
 // formatCopyProgress describes the work of a copy, with what a reachable copy
 // dropped.
 func formatCopyProgress(p volume_kvtx.CopyProgress) string {
+	// Describe the copied keys, then the blocks the mark could not walk.
 	line := fmt.Sprintf("%d keys, %s, %d graph edges", p.Keys, humanize.IBytes(p.Bytes), p.Edges)
+	if p.AbsentBlocks != 0 {
+		line = fmt.Sprintf("%s; %d absent blocks", line, p.AbsentBlocks)
+	}
 	if p.UnknownBlocks != 0 {
 		line = fmt.Sprintf("%s; %d reached blocks without a child list", line, p.UnknownBlocks)
 	}
+
+	// Describe what a reachable copy left out.
 	if p.DroppedBytes == 0 {
 		return line
 	}

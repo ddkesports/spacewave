@@ -24,6 +24,9 @@ type CopyProgress struct {
 	// UnknownBlocks is the number of blocks without a child list that a
 	// reachable copy's walk reached. The blocks they name are not reached.
 	UnknownBlocks uint64
+	// AbsentBlocks is the number of reached blocks a parent block names that
+	// the source does not hold: holes, which name nothing a reader can reach.
+	AbsentBlocks uint64
 	// DroppedBlocks is the number of blocks a reachable copy left out.
 	DroppedBlocks uint64
 	// UnownedBlocks is the number of dropped blocks no graph record owned,
@@ -156,6 +159,7 @@ func copyStore(
 		w.blockPrefix = keys.GetBlockFullPrefix()
 	}
 	if reachable != nil {
+		// Mark the nodes the graph root reaches.
 		w.graph = OpenRefGraph(kvtx.NewTxStore(stx))
 		w.blockPrefix = keys.GetBlockFullPrefix()
 		w.countUnowned = reachable.CountUnowned
@@ -164,6 +168,28 @@ func copyStore(
 			return fmt.Errorf("mark reachable nodes: %w", err)
 		}
 		w.live = mark.Live
+
+		// Settle the holes among the blocks without a child list against the
+		// same snapshot, as the collector does: a block a parent names that
+		// the source does not hold names nothing a reader can reach.
+		absent, err := mark.SettleAbsent(func(node string) (bool, error) {
+			// Look the block up by its key, keeping any other node.
+			ref, ok := block_gc.ParseBlockIRI(node)
+			if !ok {
+				return true, nil
+			}
+			rm, err := ref.MarshalKey()
+			if err != nil {
+				return false, err
+			}
+			return stx.Exists(ctx, keys.GetBlockKey(rm))
+		})
+		if err != nil {
+			return fmt.Errorf("settle absent blocks: %w", err)
+		}
+
+		// Report the counts, and refuse the blocks still unknown.
+		w.counts.AbsentBlocks = uint64(absent)        //nolint:gosec // counts are never negative.
 		w.counts.UnknownBlocks = uint64(mark.Unknown) //nolint:gosec // counts are never negative.
 		w.report()
 		if mark.Unknown != 0 && !reachable.AllowUnknown {

@@ -754,6 +754,13 @@ func testCopyReachable(t *testing.T, src, dst db_kvtx.Store) {
 		refs[name] = ref
 	}
 
+	// Name a hole: a block the store does not hold.
+	hole, err := block.BuildBlockRef([]byte("g"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs["g"] = hole
+
 	// Register a root, as a version 2 graph carried, and write the key
 	// outside the graph and the current format version.
 	if err := tx.Set(ctx, testRootKey(block_gc.BucketIRI("pinned")), nil); err != nil {
@@ -776,6 +783,7 @@ func testCopyReachable(t *testing.T, src, dst db_kvtx.Store) {
 		{Subject: block_gc.NodeGCRoot, Object: block_gc.BucketIRI("live")},
 		{Subject: block_gc.BucketIRI("live"), Object: iri("a")},
 		{Subject: iri("a"), Object: iri("b")},
+		{Subject: iri("a"), Object: iri("g")},
 		{Subject: block_gc.NodeUnreferenced, Object: iri("b")},
 		{Subject: block_gc.NodeUnreferenced, Object: iri("c")},
 		{Subject: block_gc.BucketIRI("gone"), Object: iri("e")},
@@ -785,7 +793,8 @@ func testCopyReachable(t *testing.T, src, dst db_kvtx.Store) {
 		t.Fatal(err)
 	}
 
-	// The copy refuses the unknown block f and writes nothing.
+	// The copy settles the hole g, refuses the unknown block f, which an
+	// owner names, and writes nothing.
 	if err := CopyReachable(ctx, src, dst, keys, CopyReachableOptions{}, nil); err == nil {
 		t.Fatal("reachable copy past an unknown block succeeded")
 	}
@@ -805,7 +814,7 @@ func testCopyReachable(t *testing.T, src, dst db_kvtx.Store) {
 	// record: the copy keeps the reachable edges and lists and the root's
 	// record, and drops c's list, the unreachable bucket's edge and the young
 	// log the writes appended.
-	want := CopyProgress{Keys: 13, UnknownBlocks: 1, DroppedBlocks: 3, UnownedBlocks: 1, DroppedRecords: 5}
+	want := CopyProgress{Keys: 13, UnknownBlocks: 1, AbsentBlocks: 1, DroppedBlocks: 3, UnownedBlocks: 1, DroppedRecords: 5}
 	last.Bytes, last.DroppedBytes = 0, 0
 	if last != want {
 		t.Fatalf("progress %+v, want %+v", last, want)
@@ -823,7 +832,7 @@ func testCopyReachable(t *testing.T, src, dst db_kvtx.Store) {
 		t.Fatal(err)
 	}
 	defer rtx.Discard()
-	for name, kept := range map[string]bool{"a": true, "b": true, "c": false, "d": false, "e": false, "f": true} {
+	for name, kept := range map[string]bool{"a": true, "b": true, "c": false, "d": false, "e": false, "f": true, "g": false} {
 		rm, err := refs[name].MarshalKey()
 		if err != nil {
 			t.Fatal(err)
@@ -840,7 +849,7 @@ func testCopyReachable(t *testing.T, src, dst db_kvtx.Store) {
 	for node, want := range map[string][]string{
 		block_gc.NodeGCRoot:          {block_gc.BucketIRI("live")},
 		block_gc.BucketIRI("live"):   {iri("a")},
-		iri("a"):                     {iri("b")},
+		iri("a"):                     {iri("b"), iri("g")},
 		block_gc.NodeUnreferenced:    nil,
 		block_gc.BucketIRI("gone"):   nil,
 		block_gc.BucketIRI("pinned"): {iri("f")},
