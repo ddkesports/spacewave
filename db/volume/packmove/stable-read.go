@@ -38,7 +38,7 @@ type staleTx interface {
 // refresh or report staleness, such as an in-memory one, runs fn once.
 func readStable(ctx context.Context, src kvtx.Store, fn func(tx kvtx.Tx) error) error {
 	var last error
-	for attempt := 0; attempt < maxReadAttempts; attempt++ {
+	for range maxReadAttempts {
 		// Follow the writer before taking the snapshot.
 		if r, ok := src.(refresher); ok {
 			if err := r.Refresh(ctx); err != nil {

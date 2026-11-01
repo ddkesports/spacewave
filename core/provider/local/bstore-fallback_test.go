@@ -556,9 +556,7 @@ func TestReadFallbackFillRacesEviction(t *testing.T) {
 	// Keep evicting while the blocks read.
 	stop := make(chan struct{})
 	var evicting sync.WaitGroup
-	evicting.Add(1)
-	go func() {
-		defer evicting.Done()
+	evicting.Go(func() {
 		for {
 			select {
 			case <-stop:
@@ -567,7 +565,7 @@ func TestReadFallbackFillRacesEviction(t *testing.T) {
 				_, _ = f.wb.Evict(f.ctx, f.packs, 1<<30, nil, nil)
 			}
 		}
-	}()
+	})
 	for round := range 3 {
 		for ref, data := range datas {
 			f.read(ref, data)
