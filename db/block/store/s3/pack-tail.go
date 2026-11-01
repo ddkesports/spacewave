@@ -117,7 +117,7 @@ func (s *PackStore) pickTail(limit int64) *packfile.PackfileEntry {
 	var tail *packfile.PackfileEntry
 	s.bcast.HoldLock(func(func(), func() <-chan struct{}) {
 		for _, entry := range s.entries {
-			if int64(entry.GetSizeBytes()) >= s.mergeTailBytes {
+			if int64(entry.GetSizeBytes()) >= s.mergeTailBytes { //nolint:gosec // a packfile is at most writer.DefaultMaxPackBytes.
 				continue
 			}
 			if tail == nil || cmp.Or(
@@ -128,7 +128,7 @@ func (s *PackStore) pickTail(limit int64) *packfile.PackfileEntry {
 			}
 		}
 	})
-	if tail == nil || int64(tail.GetSizeBytes()) >= limit {
+	if tail == nil || int64(tail.GetSizeBytes()) >= limit { //nolint:gosec // a packfile is at most writer.DefaultMaxPackBytes.
 		return nil
 	}
 	return tail
