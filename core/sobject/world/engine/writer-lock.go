@@ -22,7 +22,7 @@ var slowHoldThreshold = time.Second
 // goroutine's stack to a file and logs its path, so a hold that a release
 // only reports afterwards can be traced to what the holder waited on.
 // Tests set it.
-var stuckHoldThreshold = 20 * time.Second
+var stuckHoldThreshold = 10 * time.Second
 
 // stuckDumpInterval spaces the stack dumps, since each one walks every
 // goroutine. Tests set it.
