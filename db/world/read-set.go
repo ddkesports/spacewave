@@ -200,9 +200,13 @@ func (r *ReadSet) nameReads(interest *ChangeInterest) []*ReadSet {
 		return r.joined.list
 	}
 
-	// Name the read keys, the pattern endpoints, and a field of each pattern.
+	// Name the read keys, the pattern endpoints, and a field of each pattern,
+	// sized once: a view's set can read thousands of keys, and growing the
+	// list by doubling copies it each time.
+	interest.keys = slices.Grow(interest.keys, len(r.keys)+len(r.endpoints))
 	interest.keys = slices.AppendSeq(interest.keys, maps.Keys(r.keys))
 	interest.keys = slices.AppendSeq(interest.keys, maps.Keys(r.endpoints))
+	interest.terms = slices.Grow(interest.terms, len(r.patterns))
 	for _, p := range r.patterns {
 		term, ok := p.term()
 		if !ok {
