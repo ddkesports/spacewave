@@ -66,19 +66,28 @@ func (x *ChangeIndex[T]) All() iter.Seq[T] {
 }
 
 // Add indexes watcher w by the names in interest, replacing an earlier entry.
-// A nil interest is tested on every change.
+// A nil interest is tested on every change. Replacing an entry touches only
+// the names and shared sets that differ, so a watcher that renews a similar
+// interest after each change costs what changed, not every name it holds.
 func (x *ChangeIndex[T]) Add(w T, interest *ChangeInterest) {
-	// Replace an earlier entry, then index the watcher's own names.
-	x.Remove(w)
+	// Index the watcher's own names, moving an earlier entry by its diff.
+	prev, replaced := x.interests[w]
 	x.interests[w] = interest
-	x.watchers.add(w, interest)
-	if interest == nil || interest.all {
-		return
+	if !replaced {
+		x.watchers.add(w, interest)
+	} else {
+		x.watchers.replace(w, prev, interest)
 	}
 
-	// Hold each shared set for w.
-	for _, set := range interest.shared {
-		x.hold(set).watchers[w] = struct{}{}
+	// Hold each shared set for w, then release the earlier ones it no
+	// longer holds, so a set held by both stays indexed.
+	if interest != nil && !interest.all {
+		for _, set := range interest.shared {
+			x.hold(set).watchers[w] = struct{}{}
+		}
+	}
+	if replaced {
+		x.releaseShared(w, prev, interest)
 	}
 }
 
@@ -91,12 +100,23 @@ func (x *ChangeIndex[T]) Remove(w T) {
 	}
 	delete(x.interests, w)
 	x.watchers.remove(w, interest)
-	if interest == nil || interest.all {
+	x.releaseShared(w, interest, nil)
+}
+
+// releaseShared releases each shared set prev held for w that next does not
+// hold.
+func (x *ChangeIndex[T]) releaseShared(w T, prev, next *ChangeInterest) {
+	if prev == nil || prev.all {
 		return
 	}
-
-	// Release each shared set w held.
-	for _, set := range interest.shared {
+	var keep []*ReadSet
+	if next != nil && !next.all {
+		keep = next.shared
+	}
+	for _, set := range prev.shared {
+		if slices.Contains(keep, set) {
+			continue
+		}
 		if entry := x.held[set]; entry != nil {
 			delete(entry.watchers, w)
 			x.releaseUnheld(entry)
@@ -270,6 +290,43 @@ func (x *nameIndex[T]) remove(e T, names *ChangeInterest) {
 	}
 	for _, term := range names.terms {
 		removeIndexed(x.terms, term, e)
+	}
+}
+
+// replace moves e from the names in prev to those in next, adding and
+// dropping only the names that differ.
+func (x *nameIndex[T]) replace(e T, prev, next *ChangeInterest) {
+	// An entry that sees every change on either side moves whole.
+	if prev == nil || prev.all || next == nil || next.all {
+		x.remove(e, prev)
+		x.add(e, next)
+		return
+	}
+
+	// Index the new names, then drop the old names next lacks.
+	replaceIndexed(x.keys, e, prev.keys, next.keys)
+	replaceIndexed(x.terms, e, prev.terms, next.terms)
+}
+
+// replaceIndexed moves w from the names in prev to those in next. A name in
+// both stays as it is, so the shared index sees only the names that differ.
+func replaceIndexed[K comparable, T comparable](index map[K]nameEntries[T], w T, prev, next []K) {
+	// Add the new names, crossing off each old name next keeps.
+	dropped := make(map[K]struct{}, len(prev))
+	for _, name := range prev {
+		dropped[name] = struct{}{}
+	}
+	for _, name := range next {
+		if _, ok := dropped[name]; ok {
+			delete(dropped, name)
+			continue
+		}
+		addIndexed(index, name, w)
+	}
+
+	// Drop the old names next lacks.
+	for name := range dropped {
+		removeIndexed(index, name, w)
 	}
 }
 
