@@ -182,7 +182,7 @@ func waitFor(t *testing.T, what string, ok func() bool) {
 // closes, as a cold disk holds the entry load after a start.
 type gatedKV struct {
 	kvtx.Store
-	allow   map[string]bool
+	allow   string
 	release chan struct{}
 }
 
@@ -202,7 +202,7 @@ type gatedTx struct {
 }
 
 func (g *gatedTx) Get(ctx context.Context, key []byte) ([]byte, bool, error) {
-	if k := string(key); strings.HasPrefix(k, indexEntryPrefix) && !g.kv.allow[k[len(indexEntryPrefix):]] {
+	if k := string(key); strings.HasPrefix(k, indexEntryPrefix) && k != indexEntryPrefix+g.kv.allow {
 		g.Tx.Discard()
 		select {
 		case <-g.kv.release:
@@ -263,40 +263,8 @@ func TestPackStoreEarlyLookup(t *testing.T) {
 		t.Fatalf("cold read = %v, %v", found, err)
 	}
 	waitFor(t, "cold start indexes the packs", func() bool { return len(store.index.pendingIDs()) == 0 })
-	allowed, unindexed := packOf(t, store, refs[1][0]), packOf(t, store, refs[0][0])
-	gated := &gatedKV{
-		Store:   kv,
-		allow:   map[string]bool{allowed: true, unindexed: true},
-		release: make(chan struct{}),
-	}
+	gated := &gatedKV{Store: kv, allow: packOf(t, store, refs[1][0]), release: make(chan struct{})}
 	store.Close()
-
-	// Unindex pack 0 as a listing leaves a pack the indexer has not reached:
-	// its row unmarked and no h row for its keys.
-	tx, err := kv.NewTransaction(ctx, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	value, _, err := tx.Get(ctx, []byte(indexPackPrefix+unindexed))
-	if err != nil {
-		t.Fatal(err)
-	}
-	row, err := unmarshalPackRow(value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	row.indexed = false
-	if err := tx.Set(ctx, []byte(indexPackPrefix+unindexed), row.marshal()); err != nil {
-		t.Fatal(err)
-	}
-	for _, ref := range refs[0] {
-		if err := tx.Delete(ctx, hashRowKey(hashKey(ref))); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		t.Fatal(err)
-	}
 	store = open(gated)
 	t.Cleanup(store.Close)
 	go func() { _ = store.Preload(ctx) }()
@@ -307,14 +275,6 @@ func TestPackStoreEarlyLookup(t *testing.T) {
 	}
 	if store.loaded.Load() {
 		t.Fatal("entries loaded past the gate")
-	}
-
-	// A block in the unindexed pack reads before the load too.
-	if data, found, err := store.GetBlock(ctx, refs[0][4]); err != nil || !found || string(data) != "pack 0 block 4" {
-		t.Fatalf("unindexed read = %q, %v, %v", data, found, err)
-	}
-	if store.loaded.Load() || store.early.unindexed.Load() != 1 {
-		t.Fatalf("unindexed read: loaded %v, early unindexed %d", store.loaded.Load(), store.early.unindexed.Load())
 	}
 
 	// A block in a stalled pack and a missing block wait for the load.
@@ -351,5 +311,35 @@ func TestPackStoreEarlyLookup(t *testing.T) {
 				t.Fatalf("read after the load = %v, %v", found, err)
 			}
 		}
+	}
+}
+
+// TestPackStoreLoadSkipsListing checks that a load waiting for the listing
+// lock returns once another load completes, rather than waiting out the
+// listing that holds the lock, as the refresher's first listing does after a
+// start from the cached entries.
+func TestPackStoreLoadSkipsListing(t *testing.T) {
+	_, client := newFakeBucket(t, nil)
+	store := newTestPackStore(t, client)
+	release, err := store.listMtx.Lock(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	done := make(chan error, 1)
+	go func() { done <- store.loadEntries(t.Context()) }()
+	select {
+	case err := <-done:
+		t.Fatalf("load returned before any load completed: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	store.setLoaded()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("load waited for the listing lock after the entries loaded")
 	}
 }

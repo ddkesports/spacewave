@@ -125,10 +125,8 @@ type PackStore struct {
 	// loaded is set once a listing completed, which makes the entries the
 	// bucket's own.
 	loaded atomic.Bool
-	// unindexedOnce reads the unindexed packs' entries for the early lookups.
-	unindexedOnce sync.Once
-	// unindexedRead is set once those entries were published.
-	unindexedRead atomic.Bool
+	// loadedCh is closed once loaded is set.
+	loadedCh chan struct{}
 	// early counts the early lookups by outcome until the full load.
 	early earlyCounts
 
@@ -234,6 +232,7 @@ func NewPackStore(le *logrus.Entry, client ObjectStore, bucket, prefix string, o
 		pricing:   pricing,
 		keepPacks: opts.KeepPacks,
 		entries:   make(map[string]*packfile.PackfileEntry),
+		loadedCh:  make(chan struct{}),
 		compactor: routine.NewRoutineContainerWithLogger(
 			le.WithField("routine", "pack-compaction"),
 			routine.WithRetry(compactBackoff),
@@ -537,27 +536,18 @@ func (s *PackStore) lookup(ctx context.Context, ref *block.BlockRef, find func()
 	}
 }
 
-// unindexedLimit is the most unindexed packs whose entries an early lookup
-// reads before the full load. Past it the read costs about as much as the load.
-const unindexedLimit = 4096
-
 // earlyCounts counts the early lookups by outcome.
 type earlyCounts struct {
 	// located found the block in the pack its h row names.
 	located atomic.Int64
-	// unindexed found it in a pack the h rows do not cover yet.
-	unindexed atomic.Int64
-	// waited missed both and waited for the full load.
+	// waited missed there and waited for the full load.
 	waited atomic.Int64
 }
 
-// lookupEarly runs find while the other entries still load: first in the pack
-// the index places ref in, after publishing that pack's cached entry, then in
-// the packs whose keys the h rows do not cover yet, after publishing theirs. A
-// pack written here is indexed with its write, so the unindexed packs are the
-// few learned from listings that the background indexer has not reached. It
-// reports false when the index holds no table or find misses in both: only a
-// full load makes a miss final, so the caller waits for it.
+// lookupEarly runs find once the index places ref in a pack, after publishing
+// that pack's cached entry, while the other entries still load. It reports
+// false when the index holds no table, places ref nowhere, or find
+// misses: only a full load makes a miss final, so the caller waits for it.
 func (s *PackStore) lookupEarly(ctx context.Context, ref *block.BlockRef, find func() (bool, error)) (bool, error) {
 	h := ref.GetHash()
 	if s.index == nil || h == nil {
@@ -570,68 +560,36 @@ func (s *PackStore) lookupEarly(ctx context.Context, ref *block.BlockRef, find f
 	if err != nil {
 		return false, err
 	}
-	if ok {
-		found, err := s.findEarly(ctx, id, find)
-		if found || err != nil {
-			s.early.located.Add(1)
-			return found, err
-		}
+	if !ok {
+		s.early.waited.Add(1)
+		return false, nil
 	}
 
-	// The h rows place ref nowhere, or its pack missed: search the packs they
-	// do not cover yet.
-	if s.publishUnindexed(ctx) {
-		found, err := find()
-		if found || (err != nil && !errors.Is(err, ErrNotFound)) {
-			s.early.unindexed.Add(1)
-			return found, err
-		}
-	}
-	s.early.waited.Add(1)
-	return false, nil
-}
-
-// findEarly publishes pack id's cached entry, unless the load or an earlier
-// lookup did, and runs find. A miss or a deleted pack reports false.
-func (s *PackStore) findEarly(ctx context.Context, id string, find func() (bool, error)) (bool, error) {
+	// Publish the pack's entry unless the load or an earlier lookup did.
 	var known bool
 	s.bcast.HoldLock(func(func(), func() <-chan struct{}) {
 		_, known = s.entries[id]
 	})
 	if !known {
 		entry, err := s.index.readEntry(ctx, id)
-		if err != nil || entry == nil {
+		if err != nil {
 			return false, err
+		}
+		if entry == nil {
+			s.early.waited.Add(1)
+			return false, nil
 		}
 		s.updateEntries([]*packfile.PackfileEntry{entry}, nil)
 	}
+
+	// A miss or a deleted pack falls back to the full load.
 	found, err := find()
 	if err != nil && errors.Is(err, ErrNotFound) {
+		s.early.waited.Add(1)
 		return false, nil
 	}
+	s.early.located.Add(1)
 	return found, err
-}
-
-// publishUnindexed publishes the cached entries of the unindexed packs once,
-// and reports whether they are published. The first early lookup that needs
-// them reads them while the others wait; a failed or skipped read leaves the
-// lookups to wait for the full load.
-func (s *PackStore) publishUnindexed(ctx context.Context) bool {
-	s.unindexedOnce.Do(func() {
-		entries, ok, err := s.index.readUnindexed(ctx, unindexedLimit)
-		if err != nil {
-			s.le.WithError(err).Warn("read the unindexed packfile entries before the full load")
-			return
-		}
-		if !ok {
-			return
-		}
-		if len(entries) != 0 {
-			s.updateEntries(entries, nil)
-		}
-		s.unindexedRead.Store(true)
-	})
-	return s.unindexedRead.Load()
 }
 
 // Preload reads the cached packfile entries, or lists them when the cache is
@@ -652,10 +610,34 @@ func (s *PackStore) Preload(ctx context.Context) error {
 	return nil
 }
 
-// loadEntries lists the packfile entries unless a listing completed.
+// loadEntries lists the packfile entries unless a listing completed. A load
+// waiting for the listing lock stops waiting once another load completes, so
+// a lookup after a start does not wait behind the refresher's first listing,
+// which takes the lock as soon as the cached entries are read.
 func (s *PackStore) loadEntries(ctx context.Context) error {
 	for !s.loaded.Load() {
-		if err := s.listEntries(ctx, s.listings.Load()); err != nil {
+		listed := s.listings.Load()
+		lockCtx, cancel := context.WithCancel(ctx)
+		go func() {
+			select {
+			case <-s.loadedCh:
+				cancel()
+			case <-lockCtx.Done():
+			}
+		}()
+		release, err := s.listMtx.Lock(lockCtx)
+		cancel()
+		if err != nil {
+			if s.loaded.Load() {
+				return nil
+			}
+			return err
+		}
+		if !s.loaded.Load() && s.listings.Load() == listed {
+			err = s.listEntriesLocked(ctx)
+		}
+		release()
+		if err != nil {
 			return err
 		}
 	}
@@ -697,7 +679,11 @@ func (s *PackStore) listEntries(ctx context.Context, listed uint64) error {
 	if s.listings.Load() != listed {
 		return nil
 	}
+	return s.listEntriesLocked(ctx)
+}
 
+// listEntriesLocked runs listEntries' listing. Call with listMtx held.
+func (s *PackStore) listEntriesLocked(ctx context.Context) error {
 	// Start from the cached entries when there are any, and list in the
 	// background: the cache holds the packs the last run knew.
 	if s.index != nil && !s.cacheLoaded {
@@ -709,14 +695,13 @@ func (s *PackStore) listEntries(ctx context.Context, listed uint64) error {
 		}
 		if len(cached) != 0 {
 			s.updateEntries(cached, nil)
-			s.loaded.Store(true)
+			s.setLoaded()
 			s.le.WithFields(logrus.Fields{
-				"entries":         len(cached),
-				"unindexed":       len(s.index.pendingIDs()),
-				"elapsed":         time.Since(start).Round(time.Millisecond).String(),
-				"early-located":   s.early.located.Load(),
-				"early-unindexed": s.early.unindexed.Load(),
-				"early-waited":    s.early.waited.Load(),
+				"entries":       len(cached),
+				"unindexed":     len(s.index.pendingIDs()),
+				"elapsed":       time.Since(start).Round(time.Millisecond).String(),
+				"early-located": s.early.located.Load(),
+				"early-waited":  s.early.waited.Load(),
 			}).Info("loaded the cached packfile entries")
 			return nil
 		}
@@ -740,6 +725,7 @@ func (s *PackStore) listEntries(ctx context.Context, listed uint64) error {
 	var ids map[string]bool
 	for {
 		var vanished bool
+		var err error
 		ids, vanished, err = s.listOnce(ctx, known, read)
 		if err != nil {
 			return err
@@ -775,8 +761,16 @@ func (s *PackStore) listEntries(ctx context.Context, listed uint64) error {
 		}
 	}
 	s.updateEntries(entries, removed)
-	s.loaded.Store(true)
+	s.setLoaded()
 	return nil
+}
+
+// setLoaded marks the entries loaded and wakes the loads waiting for it.
+// Call with listMtx held.
+func (s *PackStore) setLoaded() {
+	if s.loaded.CompareAndSwap(false, true) {
+		close(s.loadedCh)
+	}
 }
 
 // listOnce lists the packfile entries and reads each one neither known nor in

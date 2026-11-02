@@ -278,47 +278,6 @@ func (x *packIndex) waitTable(ctx context.Context) (bool, error) {
 	return len(x.ids) != 0, nil
 }
 
-// readUnindexed reads the cached entries of the table's packs whose keys
-// are not all in h rows, in one read transaction, so a lookup that the h rows
-// place nowhere can search those packs while the other entries load. It
-// reports false, reading nothing, when more than limit packs are unindexed,
-// since reading them would take about as long as the full load.
-func (x *packIndex) readUnindexed(ctx context.Context, limit int) ([]*packfile.PackfileEntry, bool, error) {
-	x.mtx.RLock()
-	var ids []string
-	for id, row := range x.rows {
-		if !row.indexed {
-			ids = append(ids, id)
-		}
-	}
-	x.mtx.RUnlock()
-	if len(ids) > limit {
-		return nil, false, nil
-	}
-	if len(ids) == 0 {
-		return nil, true, nil
-	}
-
-	tx, err := x.store.NewTransaction(ctx, false)
-	if err != nil {
-		return nil, false, err
-	}
-	defer tx.Discard()
-	entries := make([]*packfile.PackfileEntry, 0, len(ids))
-	for _, id := range ids {
-		value, found, err := tx.Get(ctx, []byte(indexEntryPrefix+id))
-		if err != nil {
-			return nil, false, errors.Wrap(err, "read cached entry")
-		}
-		entry := &packfile.PackfileEntry{}
-		if !found || entry.UnmarshalVT(value) != nil || entry.GetId() != id {
-			continue
-		}
-		entries = append(entries, entry)
-	}
-	return entries, true, nil
-}
-
 // readEntry reads the cached entry of pack id, or nil when it has none.
 func (x *packIndex) readEntry(ctx context.Context, id string) (*packfile.PackfileEntry, error) {
 	tx, err := x.store.NewTransaction(ctx, false)
