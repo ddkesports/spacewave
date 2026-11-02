@@ -62,6 +62,15 @@ type Store struct {
 	// evictMtx runs one eviction pass at a time, and disabling uploads waits
 	// for the pass to end.
 	evictMtx csync.Mutex
+	// evictFrom is the eviction queue key the next eviction batch walks
+	// from, guarded by evictMtx: where the last committed batch stopped,
+	// with every entry before it walked. Entries before it are deleted, and
+	// their tombstones stay in the store until it compacts them, so a walk
+	// from the start of the queue would step over them again on every batch.
+	// Every entry queues in a write transaction at the epoch it reads there,
+	// and a pass advances the epoch before it walks, so a later entry sorts
+	// at or past it. Nil walks from the start, as after an open.
+	evictFrom []byte
 	// bcast guards status, and wakes Upload and status watchers.
 	bcast broadcast.Broadcast
 	// status projects the committed markers and the upload policy.
