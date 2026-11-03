@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
+	"os"
 	"strconv"
 
 	"github.com/pkg/errors"
@@ -28,6 +29,21 @@ const evictableBytesKey = "evictable-bytes"
 // batch dropped, zero before the first. It may wait, to pace a pass against the
 // disk's other writers; its error ends the pass.
 type EvictAdmit func(ctx context.Context, lastBytes int64) error
+
+// KeepFirstEnv names the environment variable that selects the eviction
+// order before keep-first passes when set to "off": each batch asks the stores
+// about every entry before testing keep, and a pass keeps every read either
+// read generation recorded until it ends. It is the fallback while keep-first
+// passes are new; both orders drop only values the remote reports holding.
+const KeepFirstEnv = "SPACEWAVE_EVICT_KEEP_FIRST"
+
+// keepFirstOff is read once at startup from KeepFirstEnv.
+var keepFirstOff = os.Getenv(KeepFirstEnv) == "off"
+
+// KeepFirstOff reports whether KeepFirstEnv selected the earlier order.
+func KeepFirstOff() bool {
+	return keepFirstOff
+}
 
 // evictBatchBlocks bounds the entries one eviction step reads and commits.
 const evictBatchBlocks = 1024
@@ -386,7 +402,7 @@ func (s *Store) evictBatch(
 	var requeue []evictEntry
 	var candidates []int
 	for i, entry := range batch {
-		if keep != nil && keep(entry.hash) {
+		if !keepFirstOff && keep != nil && keep(entry.hash) {
 			requeue = append(requeue, entry)
 		} else {
 			candidates = append(candidates, i)
@@ -410,7 +426,8 @@ func (s *Store) evictBatch(
 		}
 	}
 
-	// Decide each entry keep did not report.
+	// Decide each entry keep did not report, or every entry in the earlier
+	// order, which tests keep last.
 	//
 	// Invariant: a local value is dropped only when no marker awaits its
 	// upload, the remote reported holding it in this batch, and keep did not
@@ -425,6 +442,8 @@ func (s *Store) evictBatch(
 		case !held[j]:
 		case marked[i] || !stored[j]:
 			result.Refused++
+		case keepFirstOff && keep != nil && keep(entry.hash):
+			requeue = append(requeue, entry)
 		default:
 			drop = append(drop, &block.PutBatchEntry{Ref: refs[j], Tombstone: true})
 			evictedBytes += entry.size

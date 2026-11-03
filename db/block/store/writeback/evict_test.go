@@ -125,6 +125,16 @@ func (a *askedStore) GetBlockExistsBatch(ctx context.Context, refs []*block.Bloc
 // locally after the pass, the kept block must be requeued without asking the
 // remote, and only the uploaded unread block may be dropped.
 func TestEvictKeepsUnsafeBlocks(t *testing.T) {
+	defer func(off bool) { keepFirstOff = off }(keepFirstOff)
+	for _, off := range []bool{false, true} {
+		keepFirstOff = off
+		t.Run(map[bool]string{false: "keep-first", true: "earlier-order"}[off], testEvictKeepsUnsafeBlocks)
+	}
+}
+
+// testEvictKeepsUnsafeBlocks runs TestEvictKeepsUnsafeBlocks in the order
+// keepFirstOff selects; only keep-first skips asking about the kept block.
+func testEvictKeepsUnsafeBlocks(t *testing.T) {
 	// Write four blocks and upload them.
 	ctx := t.Context()
 	s := newTestEnv(t).newStore(t, true)
@@ -163,8 +173,8 @@ func TestEvictKeepsUnsafeBlocks(t *testing.T) {
 	if result.Evicted != 1 || result.Requeued != 1 || result.Refused != 2 {
 		t.Fatalf("pass = %+v, want 1 evicted, 1 requeued, 2 refused", result)
 	}
-	if remote.asked[kept] != 0 {
-		t.Fatal("pass asked the remote about a kept block")
+	if asked := remote.asked[kept] != 0; asked != keepFirstOff {
+		t.Fatalf("pass asked the remote about the kept block: %v", asked)
 	}
 
 	// Every block but the droppable one still reads locally with its bytes.

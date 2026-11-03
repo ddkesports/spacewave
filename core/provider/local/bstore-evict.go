@@ -55,6 +55,11 @@ type readStore interface {
 	DropReadsBefore(ctx context.Context, generation time.Time) error
 }
 
+// legacyReads selects the read generations before keep-first eviction, as
+// block_store_writeback.KeepFirstEnv describes: a pass keeps every read either
+// generation recorded until it ends, and a gap of two keep ages drops both.
+var legacyReads = block_store_writeback.KeepFirstOff()
+
 // readSet records the blocks read from the local store, which eviction keeps
 // for at least readKeepAge after the read. It holds two generations: the
 // reads since the last turn and the ones before it. With a store, it saves
@@ -216,6 +221,9 @@ func (r *readSet) take(ctx context.Context) (func(*hash.Hash) bool, error) {
 	switch now := r.now(); {
 	case r.turned.IsZero():
 		r.turned = now
+	case legacyReads && now.Sub(r.turned) >= 2*readKeepAge:
+		r.prev, r.hashes, r.pending = nil, nil, nil
+		r.turned, r.prevTurned, turned = now, time.Time{}, true
 	case now.Sub(r.turned) >= readKeepAge:
 		ended, endedGen = r.pending, r.turned
 		r.prev, r.hashes, r.pending = r.hashes, nil, nil
@@ -256,7 +264,7 @@ func (r *readSet) take(ctx context.Context) (func(*hash.Hash) bool, error) {
 		if _, cur := r.hashes[key]; cur {
 			return true
 		}
-		if r.now().Sub(r.turned) >= readKeepAge {
+		if !legacyReads && r.now().Sub(r.turned) >= readKeepAge {
 			return false
 		}
 		_, prev := r.prev[key]
