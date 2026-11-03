@@ -10,6 +10,7 @@ import (
 	"github.com/s4wave/spacewave/db/block"
 	block_gc "github.com/s4wave/spacewave/db/block/gc"
 	store_kvkey "github.com/s4wave/spacewave/db/store/kvkey"
+	store_kvtx "github.com/s4wave/spacewave/db/store/kvtx"
 	store_kvtx_inmem "github.com/s4wave/spacewave/db/store/kvtx/inmem"
 	"github.com/s4wave/spacewave/db/volume"
 	common_kvtx "github.com/s4wave/spacewave/db/volume/common/kvtx"
@@ -110,14 +111,22 @@ type delegatingVolume struct {
 // DelegatesGC marks the volume as a view of collected storage.
 func (delegatingVolume) DelegatesGC() {}
 
-// TestRunGCSweepSkipsDelegatingVolume checks a controller whose volume views
-// storage collected elsewhere returns without collecting.
+// TestRunGCSweepSkipsDelegatingVolume checks that a controller whose volume
+// views storage collected elsewhere, or whose store turned collection off,
+// returns without collecting.
 func TestRunGCSweepSkipsDelegatingVolume(t *testing.T) {
 	// The sweep ends at once instead of collecting on its short interval.
 	ctx := t.Context()
-	c := newTestController(delegatingVolume{newTestVolume(t)}, ctx)
-	if err := c.runGCSweep(ctx); err != nil {
-		t.Fatalf("runGCSweep error = %v, want nil", err)
+	off, err := common_kvtx.NewVolume(ctx, "test-volume-off", store_kvkey.NewDefaultKVKey(), store_kvtx_inmem.NewStore(), &store_kvtx.Config{DisableCollection: true}, false, false, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = off.Close() })
+	for name, vol := range map[string]volume.Volume{"delegating": delegatingVolume{newTestVolume(t)}, "collection off": off} {
+		c := newTestController(vol, ctx)
+		if err := c.runGCSweep(ctx); err != nil {
+			t.Fatalf("%s: runGCSweep error = %v, want nil", name, err)
+		}
 	}
 }
 

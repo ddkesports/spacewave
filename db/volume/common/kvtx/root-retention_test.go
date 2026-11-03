@@ -10,6 +10,7 @@ import (
 
 	"github.com/s4wave/spacewave/db/block"
 	block_gc "github.com/s4wave/spacewave/db/block/gc"
+	"github.com/s4wave/spacewave/db/kvtx"
 	store_kvkey "github.com/s4wave/spacewave/db/store/kvkey"
 	store_kvtx "github.com/s4wave/spacewave/db/store/kvtx"
 	store_kvtx_inmem "github.com/s4wave/spacewave/db/store/kvtx/inmem"
@@ -795,6 +796,12 @@ func TestDisableCollectionKeepsBlocks(t *testing.T) {
 	conf := &store_kvtx.Config{}
 	if err := conf.UnmarshalVT(data); err != nil || !conf.GetDisableCollection() {
 		t.Fatalf("decoded disable_collection=%v err=%v", conf.GetDisableCollection(), err)
+	}
+
+	// A store without atomic commits refuses the switch rather than collecting.
+	plain := struct{ kvtx.Store }{store_kvtx_inmem.NewStore()}
+	if _, err := NewVolume(ctx, "test/collection-plain", store_kvkey.NewDefaultKVKey(), plain, conf, false, false, nil, nil); err == nil {
+		t.Fatal("opened disable_collection on a store without atomic commits")
 	}
 
 	// Open a Volume with collection off over a store that outlives it.
