@@ -118,3 +118,38 @@ func TestReadSetKeepsReadsAcrossRestart(t *testing.T) {
 		t.Fatal("store kept the dropped generation")
 	}
 }
+
+// TestReadSetExpiresDuringPass checks that a pass's keep test stops keeping a
+// block only the previous generation read once that generation ended
+// readKeepAge ago, without waiting for the next pass to turn, and keeps a
+// block the current generation read.
+func TestReadSetExpiresDuringPass(t *testing.T) {
+	// Read a block, turn it into the previous generation, then read another.
+	ctx := t.Context()
+	now := time.Now()
+	r := readSet{clock: func() time.Time { return now }}
+	r.enabled.Store(true)
+	old, fresh := hash.NewHash(hash.HashType_HashType_SHA256, []byte("old")), hash.NewHash(hash.HashType_HashType_SHA256, []byte("fresh"))
+	r.add(old)
+	if _, err := r.take(ctx); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(readKeepAge)
+	keep, err := r.take(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.add(fresh)
+	if !keep(old) || !keep(fresh) {
+		t.Fatal("pass right after the turn dropped a read block")
+	}
+
+	// The pass runs on past readKeepAge since the turn.
+	now = now.Add(readKeepAge)
+	if keep(old) {
+		t.Fatal("long pass kept a block last read over readKeepAge ago")
+	}
+	if !keep(fresh) {
+		t.Fatal("long pass dropped a block of the current generation")
+	}
+}

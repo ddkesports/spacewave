@@ -243,15 +243,24 @@ func (r *readSet) take(ctx context.Context) (func(*hash.Hash) bool, error) {
 		}
 	}
 
-	// Keep the blocks either generation recorded.
+	// Keep the blocks the current generation recorded, and those the previous
+	// one recorded while it ended within readKeepAge. A pass can outlast a
+	// generation, and the turn waits for the next pass, so the age is checked
+	// at each decision: a block only the previous generation read was last
+	// read before it ended, and is past readKeepAge once that end is.
 	return func(h *hash.Hash) bool {
-		// Look the key up in both generations.
+		// Look the key up in the generations that still keep.
 		key := newReadKey(h)
 		r.mtx.Lock()
 		defer r.mtx.Unlock()
-		_, cur := r.hashes[key]
+		if _, cur := r.hashes[key]; cur {
+			return true
+		}
+		if r.now().Sub(r.turned) >= readKeepAge {
+			return false
+		}
 		_, prev := r.prev[key]
-		return cur || prev
+		return prev
 	}, nil
 }
 
