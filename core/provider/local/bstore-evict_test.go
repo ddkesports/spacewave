@@ -46,12 +46,17 @@ func TestReadSetKeepsRecentReads(t *testing.T) {
 		t.Fatal("second turn kept the read block")
 	}
 
-	// A generation idle for two ages drops both at once.
+	// A generation idle for two ages may hold a read from just before the
+	// pass, so the pass keeps it, and the next age drops it.
 	r.add(read)
 	take()
 	now = now.Add(2 * readKeepAge)
+	if !take()(read) {
+		t.Fatal("pass after two idle ages dropped a read of the idle generation")
+	}
+	now = now.Add(readKeepAge)
 	if take()(read) {
-		t.Fatal("pass after two idle ages kept the read block")
+		t.Fatal("pass an age after the idle turn kept the read block")
 	}
 }
 

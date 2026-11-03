@@ -205,7 +205,10 @@ func (r *readSet) saveKeys(ctx context.Context, generation time.Time, keys []rea
 // the generation that ended and dropping the saved one before it.
 func (r *readSet) take(ctx context.Context) (func(*hash.Hash) bool, error) {
 	// Turn the generations when the current one is old enough, timing the
-	// first from the first pass. A generation two ages old drops both.
+	// first from the first pass. A generation idle for longer turns once too:
+	// its reads may be minutes old, since nothing turned it while no pass ran,
+	// so it becomes the previous generation and keeps them for readKeepAge
+	// more rather than dropping them.
 	r.mtx.Lock()
 	turned := false
 	var ended []readKey
@@ -213,9 +216,6 @@ func (r *readSet) take(ctx context.Context) (func(*hash.Hash) bool, error) {
 	switch now := r.now(); {
 	case r.turned.IsZero():
 		r.turned = now
-	case now.Sub(r.turned) >= 2*readKeepAge:
-		r.prev, r.hashes, r.pending = nil, nil, nil
-		r.turned, r.prevTurned, turned = now, time.Time{}, true
 	case now.Sub(r.turned) >= readKeepAge:
 		ended, endedGen = r.pending, r.turned
 		r.prev, r.hashes, r.pending = r.hashes, nil, nil
