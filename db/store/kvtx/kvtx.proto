@@ -31,6 +31,12 @@ message Config {
   // shared counts; an empty Volume moves to format 6 either way. It conflicts
   // with DisableHoldCounts, so setting both fails the Volume's open.
   bool upgrade_shared_counts = 6;
+  // DisableCollection stops the Volume collecting: no collector removes a
+  // node or a block, whatever starts it, including a volume entering its disk
+  // reserve, which then refuses writes until space returns. The reference
+  // graph stays current, so collection is safe to turn back on. The Volume's
+  // store must commit atomically; opening any other fails.
+  bool disable_collection = 7;
 
   // reserved: 1 mqueue_config
 }

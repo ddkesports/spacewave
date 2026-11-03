@@ -15,6 +15,11 @@ import (
 // cannot outlive Close.
 type transactionRefGraph struct{ volume *Volume }
 
+// CollectionDisabled reports whether the Volume's Config turned collection off.
+func (g *transactionRefGraph) CollectionDisabled() bool {
+	return g.volume.collectionOff
+}
+
 // read runs fn against a fresh read-scoped reference graph in one transaction.
 func (g *transactionRefGraph) read(ctx context.Context, fn func(*block_gc.RefGraph) error) error {
 	// Join Volume operations while reading the reference graph.

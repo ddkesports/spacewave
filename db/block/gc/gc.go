@@ -92,6 +92,18 @@ type Collector struct {
 	nextMark time.Time
 }
 
+// CollectionSwitch is a reference graph whose owner can turn collection off.
+type CollectionSwitch interface {
+	// CollectionDisabled reports whether collection is off.
+	CollectionDisabled() bool
+}
+
+// CollectionDisabled reports whether the owner of graph turned collection off.
+func CollectionDisabled(graph RefGraphOps) bool {
+	sw, ok := graph.(CollectionSwitch)
+	return ok && sw.CollectionDisabled()
+}
+
 // maxMarkBackoff caps the doublings of the mark interval at 8x.
 const maxMarkBackoff = 3
 
@@ -198,6 +210,12 @@ func (c *Collector) collect(ctx context.Context, removeBlocks bool, budget time.
 	stats := &Stats{}
 	defer func() { stats.Duration = time.Since(start) }()
 	spent := func() bool { return budget != 0 && time.Since(start) >= budget }
+
+	// Collect nothing while the graph's owner has collection off. Every
+	// collection passes here, so no caller can start one by another route.
+	if CollectionDisabled(c.refGraph) {
+		return stats, nil
+	}
 
 	// Sweep the queue, then the blocks.
 	if err := c.collectQueue(ctx, removeBlocks, spent, stats); err != nil || stats.More {

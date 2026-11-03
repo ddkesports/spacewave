@@ -44,6 +44,8 @@ type Volume struct {
 	kvKey *store_kvkey.KVKey
 	// refGraph is the volume's GC reference graph.
 	refGraph block_gc.RefGraphOps
+	// collectionOff stops every collection, as DisableCollection describes.
+	collectionOff bool
 	// statsFn returns storage stats, may be nil.
 	statsFn StatsFn
 	// statsBcast wakes watchers when storage stats may have changed.
@@ -213,6 +215,15 @@ func NewVolume(
 		return nil, volume.Permanent(errors.New("store config sets both disable_hold_counts and upgrade_shared_counts"))
 	}
 
+	// Refuse to collect by default on a store that cannot honor the switch,
+	// since the Config asked to keep every block.
+	atomicStore, atomicCommit := store.(kvtx.AtomicCommitStore)
+	atomicCommit = atomicCommit && atomicStore.SupportsAtomicCommit()
+	if conf.GetDisableCollection() && !atomicCommit {
+		return nil, volume.Permanent(errors.New("store config sets disable_collection on a store without atomic commits"))
+	}
+	v.collectionOff = conf.GetDisableCollection()
+
 	// Load or claim the Volume identity and initialize its storage.
 	v, format, err := initVolume(ctx, v, storeID, conf.GetUpgradeSharedCounts(), noGenerateKey, noWriteKey)
 	if err != nil {
@@ -223,7 +234,7 @@ func NewVolume(
 	v.Coordinator = coord_inmem.ForVolume(v.GetID())
 
 	// Route atomic publications through transaction-local reference graphs.
-	if atomicStore, ok := store.(kvtx.AtomicCommitStore); ok && atomicStore.SupportsAtomicCommit() {
+	if atomicCommit {
 		v.atomicHashGet = !conf.GetDisableHashGet()
 		v.gcMarkWalk = conf.GetGcMarkWalk()
 		v.refGraph = &transactionRefGraph{volume: v}

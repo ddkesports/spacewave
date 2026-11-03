@@ -2,10 +2,11 @@
 // @generated from file github.com/s4wave/spacewave/db/store/kvtx/kvtx.proto (package store.kvtx, syntax proto3)
 /* eslint-disable */
 
-import type { HashType } from '@go/github.com/s4wave/spacewave/net/hash/hash.pb.js'
-import { HashType_Enum } from '@go/github.com/s4wave/spacewave/net/hash/hash.pb.js'
-import type { MessageType } from '@aptre/protobuf-es-lite/message'
-import { createMessageType } from '@aptre/protobuf-es-lite/message'
+import type { HashType } from "@go/github.com/s4wave/spacewave/net/hash/hash.pb.js";
+import { HashType_Enum } from "@go/github.com/s4wave/spacewave/net/hash/hash.pb.js";
+import type { MessageType } from "@aptre/protobuf-es-lite/message";
+import { createMessageType } from "@aptre/protobuf-es-lite/message";
+
 
 /**
  * Config is the configuration for the kvtx store.
@@ -17,7 +18,7 @@ export interface Config {
    * HashType is the hash type to use for block refs.
    * If unset (0 value) will use the Spacewave default (SHA256).
    */
-  hashType?: HashType
+  hashType?: HashType;
   /**
    * DisableHashGet disables hashing values for Get requests.
    * This improves performance if the underlying store is trusted & consistent.
@@ -25,13 +26,13 @@ export interface Config {
    * If the store may return invalid data or mismatch the requested block ref,
    * do not enable this option. It is important to hash the data for each read.
    */
-  disableHashGet?: boolean
+  disableHashGet?: boolean;
   /**
    * GcMarkWalk marks blocks in a GC block pass by walking from the roots in
    * one read snapshot, as before, instead of scanning the child lists in key
    * order in short read transactions.
    */
-  gcMarkWalk?: boolean
+  gcMarkWalk?: boolean;
   /**
    * DisableHoldCounts stops the Volume keeping the shared counts that let a
    * World's deadlist records free pages a later World stored again. The
@@ -40,7 +41,7 @@ export interface Config {
    * as a Volume whose World engine stores every World, to save the graph
    * reads and writes they cost each put.
    */
-  disableHoldCounts?: boolean
+  disableHoldCounts?: boolean;
   /**
    * UpgradeSharedCounts moves a Volume of store format 5 that already tracks
    * blocks to format 6, which starts the walk that counts the holders of every
@@ -48,14 +49,22 @@ export interface Config {
    * shared counts; an empty Volume moves to format 6 either way. It conflicts
    * with DisableHoldCounts, so setting both fails the Volume's open.
    */
-  upgradeSharedCounts?: boolean
+  upgradeSharedCounts?: boolean;
+  /**
+   * DisableCollection stops the Volume collecting: no collector removes a
+   * node or a block, whatever starts it, including a volume entering its disk
+   * reserve, which then refuses writes until space returns. The reference
+   * graph stays current, so collection is safe to turn back on. The Volume's
+   * store must commit atomically; opening any other fails.
+   */
+  disableCollection?: boolean;
 }
 
-export const Config: MessageType<Config> =
-  /* @__PURE__ */ createMessageType<Config>('store.kvtx.Config', () => [
-    [2, 'hash_type', 14, 0, HashType_Enum],
-    [3, 'disable_hash_get', 8],
-    [4, 'gc_mark_walk', 8],
-    [5, 'disable_hold_counts', 8],
-    [6, 'upgrade_shared_counts', 8],
-  ])
+export const Config: MessageType<Config> = /* @__PURE__ */ createMessageType<Config>("store.kvtx.Config", () => [
+  [2, "hash_type", 14, 0, HashType_Enum],
+  [3, "disable_hash_get", 8],
+  [4, "gc_mark_walk", 8],
+  [5, "disable_hold_counts", 8],
+  [6, "upgrade_shared_counts", 8],
+  [7, "disable_collection", 8],
+]);

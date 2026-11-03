@@ -43,6 +43,12 @@ type Config struct {
 	// shared counts; an empty Volume moves to format 6 either way. It conflicts
 	// with DisableHoldCounts, so setting both fails the Volume's open.
 	UpgradeSharedCounts bool `protobuf:"varint,6,opt,name=upgrade_shared_counts,json=upgradeSharedCounts,proto3" json:"upgradeSharedCounts,omitempty"`
+	// DisableCollection stops the Volume collecting: no collector removes a
+	// node or a block, whatever starts it, including a volume entering its disk
+	// reserve, which then refuses writes until space returns. The reference
+	// graph stays current, so collection is safe to turn back on. The Volume's
+	// store must commit atomically; opening any other fails.
+	DisableCollection bool `protobuf:"varint,7,opt,name=disable_collection,json=disableCollection,proto3" json:"disableCollection,omitempty"`
 }
 
 func (x *Config) Reset() {
@@ -86,6 +92,13 @@ func (x *Config) GetUpgradeSharedCounts() bool {
 	return false
 }
 
+func (x *Config) GetDisableCollection() bool {
+	if x != nil {
+		return x.DisableCollection
+	}
+	return false
+}
+
 func (m *Config) CloneVT() *Config {
 	if m == nil {
 		return (*Config)(nil)
@@ -96,6 +109,7 @@ func (m *Config) CloneVT() *Config {
 	r.GcMarkWalk = m.GcMarkWalk
 	r.DisableHoldCounts = m.DisableHoldCounts
 	r.UpgradeSharedCounts = m.UpgradeSharedCounts
+	r.DisableCollection = m.DisableCollection
 	if len(m.unknownFields) > 0 {
 		r.unknownFields = slices.Clone(m.unknownFields)
 	}
@@ -125,6 +139,9 @@ func (this *Config) EqualVT(that *Config) bool {
 		return false
 	}
 	if this.UpgradeSharedCounts != that.UpgradeSharedCounts {
+		return false
+	}
+	if this.DisableCollection != that.DisableCollection {
 		return false
 	}
 	return string(this.unknownFields) == string(that.unknownFields)
@@ -171,6 +188,11 @@ func (x *Config) MarshalProtoJSON(s *json.MarshalState) {
 		s.WriteObjectField("upgradeSharedCounts")
 		s.WriteBool(x.UpgradeSharedCounts)
 	}
+	if x.DisableCollection || s.HasField("disableCollection") {
+		s.WriteMoreIf(&wroteField)
+		s.WriteObjectField("disableCollection")
+		s.WriteBool(x.DisableCollection)
+	}
 	s.WriteObjectEnd()
 }
 
@@ -203,6 +225,9 @@ func (x *Config) UnmarshalProtoJSON(s *json.UnmarshalState) {
 		case "upgrade_shared_counts", "upgradeSharedCounts":
 			s.AddField("upgrade_shared_counts")
 			x.UpgradeSharedCounts = s.ReadBool()
+		case "disable_collection", "disableCollection":
+			s.AddField("disable_collection")
+			x.DisableCollection = s.ReadBool()
 		}
 	})
 }
@@ -240,6 +265,11 @@ func (m *Config) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	_ = l
 	if m.unknownFields != nil {
 		i = protobuf_go_lite.EncodeRawBytes(dAtA, i, m.unknownFields)
+	}
+	if m.DisableCollection {
+		i = protobuf_go_lite.EncodeBool(dAtA, i, m.DisableCollection)
+		i--
+		dAtA[i] = 0x38
 	}
 	if m.UpgradeSharedCounts {
 		i = protobuf_go_lite.EncodeBool(dAtA, i, m.UpgradeSharedCounts)
@@ -280,6 +310,7 @@ func (m *Config) SizeVT() (n int) {
 	n += protobuf_go_lite.SizeBoolNonZero(1, m.GcMarkWalk)
 	n += protobuf_go_lite.SizeBoolNonZero(1, m.DisableHoldCounts)
 	n += protobuf_go_lite.SizeBoolNonZero(1, m.UpgradeSharedCounts)
+	n += protobuf_go_lite.SizeBoolNonZero(1, m.DisableCollection)
 	n += len(m.unknownFields)
 	return n
 }
@@ -306,6 +337,10 @@ func (x *Config) MarshalProtoText() string {
 	if x.UpgradeSharedCounts != false {
 		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "upgrade_shared_counts")
 		protobuf_go_lite.TextWriteBool(&sb, x.UpgradeSharedCounts)
+	}
+	if x.DisableCollection != false {
+		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "disable_collection")
+		protobuf_go_lite.TextWriteBool(&sb, x.DisableCollection)
 	}
 	return protobuf_go_lite.TextFinishMessage(&sb)
 }
@@ -385,6 +420,16 @@ func (m *Config) UnmarshalVT(dAtA []byte) error {
 				return err
 			}
 			m.UpgradeSharedCounts = bool(v)
+		case 7:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field DisableCollection", wireType)
+			}
+			var v bool
+			v, iNdEx, err = protobuf_go_lite.DecodeVarintBool(dAtA, iNdEx)
+			if err != nil {
+				return err
+			}
+			m.DisableCollection = bool(v)
 		default:
 			iNdEx = preIndex
 			skippy, err := protobuf_go_lite.Skip(dAtA[iNdEx:])

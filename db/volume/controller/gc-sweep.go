@@ -85,6 +85,12 @@ func (c *Controller) runGCSweep(ctx context.Context) error {
 		return nil
 	}
 
+	// Run no schedule, reserve watch or pin reaper while collection is off.
+	if block_gc.CollectionDisabled(rg) {
+		c.le.Info("volume collection is off, gc sweep disabled")
+		return nil
+	}
+
 	// The collector is background work: its commits wait for a checkpoint
 	// the volume's writes outpaced, and its scans leave the index cache.
 	ctx = block.WithBackground(ctx)
@@ -114,13 +120,12 @@ func (c *Controller) runGCSweep(ctx context.Context) error {
 	// marked however long that takes. A collection that stops with candidates
 	// left continues at once.
 	// A volume entering its disk reserve starts a block pass at once, since
-	// only collection frees the space its writes wait on, unless
-	// ReservePassEnv turns that off.
+	// only collection frees the space its writes wait on.
 	timer := time.NewTimer(interval)
 	defer timer.Stop()
 	var traced bool
 	hw, _ := vol.(volume.HealthWatcher)
-	reserve := newReserveWatch(hw)
+	reserve := &reserveWatch{hw: hw}
 	for {
 		// Pull the block pass in when the volume entered the reserve.
 		entered, healthCh := reserve.entered()

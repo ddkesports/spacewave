@@ -6,9 +6,13 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/s4wave/spacewave/db/block"
 	block_gc "github.com/s4wave/spacewave/db/block/gc"
+	store_kvkey "github.com/s4wave/spacewave/db/store/kvkey"
+	store_kvtx "github.com/s4wave/spacewave/db/store/kvtx"
+	store_kvtx_inmem "github.com/s4wave/spacewave/db/store/kvtx/inmem"
 )
 
 // rootComplete reads the proof of one root.
@@ -773,5 +777,76 @@ func TestDueDeadlistCheckedAgainstMark(t *testing.T) {
 		if n := holds(c.ref); n != c.want {
 			t.Fatalf("%s page holds=%d after the revived put, want %d", c.name, n, c.want)
 		}
+	}
+}
+
+// TestDisableCollectionKeepsBlocks walks a Volume with collection off through
+// every way to start a collection: its Config survives the wire, no collector
+// removes an unowned block, the graph stays current, and reopening with
+// collection on sweeps the same block.
+func TestDisableCollectionKeepsBlocks(t *testing.T) {
+	ctx := t.Context()
+
+	// Carry the switch through the Config's encoding.
+	data, err := (&store_kvtx.Config{DisableCollection: true}).MarshalVT()
+	if err != nil {
+		t.Fatal(err)
+	}
+	conf := &store_kvtx.Config{}
+	if err := conf.UnmarshalVT(data); err != nil || !conf.GetDisableCollection() {
+		t.Fatalf("decoded disable_collection=%v err=%v", conf.GetDisableCollection(), err)
+	}
+
+	// Open a Volume with collection off over a store that outlives it.
+	kv := &publicationTestStore{Store: store_kvtx_inmem.NewStore()}
+	open := func(conf *store_kvtx.Config) *Volume {
+		t.Helper()
+		v, err := NewVolume(ctx, "test/collection", store_kvkey.NewDefaultKVKey(), kv, conf, false, false, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	v := open(conf)
+
+	// Store a block, then drop the only named root that owns it.
+	root, _, err := v.PrepareOwnedBlock(ctx, "bucket", []byte("root"), &block.PutOpts{RefsKnown: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := v.SetBucketRoots(ctx, "bucket", nil, []block.NamedRoot{{Name: "head", Ref: root}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.SetBucketRoots(ctx, "bucket", nil, []block.NamedRoot{{Name: "head"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// No collection keeps going, however it starts.
+	collector := block_gc.NewCollector(v.GetRefGraph(), v, nil)
+	collector.SetMarkInterval(time.Nanosecond, time.Now())
+	for name, collect := range map[string]func() (*block_gc.Stats, error){
+		"collect":    func() (*block_gc.Stats, error) { return collector.Collect(ctx) },
+		"budget":     func() (*block_gc.Stats, error) { return collector.CollectFor(ctx, time.Minute) },
+		"graph only": func() (*block_gc.Stats, error) { return collector.CollectGraphOnly(ctx) },
+	} {
+		if stats, err := collect(); err != nil || stats.BlockPasses != 0 || stats.MinorPasses != 0 {
+			t.Fatalf("%s with collection off: stats=%+v err=%v", name, stats, err)
+		}
+		if found, err := v.GetBlockExists(ctx, root); err != nil || !found {
+			t.Fatalf("%s removed the block: found=%v err=%v", name, found, err)
+		}
+	}
+
+	// Reopen with collection on: the graph stayed current, so it sweeps.
+	if err := v.Close(); err != nil {
+		t.Fatal(err)
+	}
+	v = open(&store_kvtx.Config{})
+	defer v.Close()
+	if _, err := block_gc.NewCollector(v.GetRefGraph(), v, nil).Collect(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if found, err := v.GetBlockExists(ctx, root); err != nil || found {
+		t.Fatalf("block after collection came back on: found=%v err=%v", found, err)
 	}
 }
