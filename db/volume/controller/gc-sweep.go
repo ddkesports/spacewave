@@ -114,12 +114,13 @@ func (c *Controller) runGCSweep(ctx context.Context) error {
 	// marked however long that takes. A collection that stops with candidates
 	// left continues at once.
 	// A volume entering its disk reserve starts a block pass at once, since
-	// only collection frees the space its writes wait on.
+	// only collection frees the space its writes wait on, unless
+	// ReservePassEnv turns that off.
 	timer := time.NewTimer(interval)
 	defer timer.Stop()
 	var traced bool
 	hw, _ := vol.(volume.HealthWatcher)
-	reserve := &reserveWatch{hw: hw}
+	reserve := newReserveWatch(hw)
 	for {
 		// Pull the block pass in when the volume entered the reserve.
 		entered, healthCh := reserve.entered()

@@ -1,6 +1,29 @@
 package volume_controller
 
-import "github.com/s4wave/spacewave/db/volume"
+import (
+	"os"
+
+	"github.com/s4wave/spacewave/db/volume"
+)
+
+// ReservePassEnv names the environment variable that stops a volume entering
+// its disk reserve from starting a block pass when set to "off". A process
+// that keeps block GC off by a long interval sets it, so a full disk refuses
+// writes instead of running a pass over a reference graph it never completed;
+// unset keeps the pass, which frees the space a collected volume waits on.
+const ReservePassEnv = "SPACEWAVE_GC_RESERVE_PASS" // #nosec G101 -- an environment variable name, not a credential.
+
+// reservePassOff is read once at startup from ReservePassEnv.
+var reservePassOff = os.Getenv(ReservePassEnv) == "off"
+
+// newReserveWatch returns the reserve watch of a volume's health, which
+// never reports entering when reserve passes are off.
+func newReserveWatch(hw volume.HealthWatcher) *reserveWatch {
+	if reservePassOff {
+		return &reserveWatch{}
+	}
+	return &reserveWatch{hw: hw}
+}
 
 // reserveWatch tells the GC loop when its volume enters the disk reserve, so
 // a volume that refuses writes collects at once instead of at the next
