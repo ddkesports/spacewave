@@ -158,3 +158,42 @@ func TestReadSetExpiresDuringPass(t *testing.T) {
 		t.Fatal("long pass dropped a block of the current generation")
 	}
 }
+
+// TestReadSetLegacyOrder checks that the earlier eviction order keeps a block
+// the previous generation read until the pass ends, and that a gap of two keep
+// ages drops both generations, as before keep-first eviction.
+func TestReadSetLegacyOrder(t *testing.T) {
+	defer func(legacy bool) { legacyReads = legacy }(legacyReads)
+	legacyReads = true
+
+	// A read turned into the previous generation stays kept through a long pass.
+	ctx := t.Context()
+	now := time.Now()
+	r := readSet{clock: func() time.Time { return now }}
+	r.enabled.Store(true)
+	read := hash.NewHash(hash.HashType_HashType_SHA256, []byte("read"))
+	r.add(read)
+	if _, err := r.take(ctx); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(readKeepAge)
+	keep, err := r.take(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(readKeepAge)
+	if !keep(read) {
+		t.Fatal("earlier order expired a read during the pass")
+	}
+
+	// A fresh read is dropped after two idle keep ages.
+	r.add(read)
+	now = now.Add(2 * readKeepAge)
+	keep, err = r.take(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if keep(read) {
+		t.Fatal("earlier order kept a read after two idle keep ages")
+	}
+}
