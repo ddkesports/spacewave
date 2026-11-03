@@ -377,33 +377,56 @@ func (s *Store) evictBatch(
 		return next, true, nil
 	}
 
-	// Ask the local values and the remote which blocks they hold.
-	refs := make([]*block.BlockRef, len(batch))
+	// Requeue the entries keep reports before asking any store about them. A
+	// kept entry is requeued whatever the stores answer, so asking the remote
+	// about it only slows the walk, and a pass that walks slowly holds off the
+	// next turn of the read generations. Requeueing never drops a value: an
+	// entry whose value is gone or whose upload is pending is settled by the
+	// pass that no longer keeps it.
+	var requeue []evictEntry
+	var candidates []int
 	for i, entry := range batch {
-		refs[i] = block.NewBlockRef(entry.hash)
-	}
-	held, err := s.values.GetBlockExistsBatch(ctx, refs)
-	if err != nil {
-		return nil, false, errors.Wrap(err, "check local values")
-	}
-	stored, err := remote.GetBlockExistsBatch(ctx, refs)
-	if err != nil {
-		return nil, false, errors.Wrap(err, "check remote blocks")
+		if keep != nil && keep(entry.hash) {
+			requeue = append(requeue, entry)
+		} else {
+			candidates = append(candidates, i)
+		}
 	}
 
-	// Decide each entry.
-	var requeue []evictEntry
+	// Ask the local values and the remote which of the others they hold.
+	refs := make([]*block.BlockRef, len(candidates))
+	for j, i := range candidates {
+		refs[j] = block.NewBlockRef(batch[i].hash)
+	}
+	var held, stored []bool
+	if len(refs) != 0 {
+		held, err = s.values.GetBlockExistsBatch(ctx, refs)
+		if err != nil {
+			return nil, false, errors.Wrap(err, "check local values")
+		}
+		stored, err = remote.GetBlockExistsBatch(ctx, refs)
+		if err != nil {
+			return nil, false, errors.Wrap(err, "check remote blocks")
+		}
+	}
+
+	// Decide each entry keep did not report.
+	//
+	// Invariant: a local value is dropped only when no marker awaits its
+	// upload, the remote reported holding it in this batch, and keep did not
+	// report it at the time of this decision, so the remote holds every value
+	// eviction drops and no block read within the keep window loses its local
+	// copy.
 	var drop []*block.PutBatchEntry
 	var evictedBytes int64
-	for i, entry := range batch {
+	for j, i := range candidates {
+		entry := batch[i]
 		switch {
-		case !held[i]:
-		case marked[i] || !stored[i]:
+		case !held[j]:
+		case marked[i] || !stored[j]:
 			result.Refused++
-		case keep != nil && keep(entry.hash):
-			requeue = append(requeue, entry)
 		default:
-			drop = append(drop, &block.PutBatchEntry{Ref: refs[i], Tombstone: true})
+			drop = append(drop, &block.PutBatchEntry{Ref: refs[j], Tombstone: true})
 			evictedBytes += entry.size
 		}
 	}
