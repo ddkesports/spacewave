@@ -334,9 +334,37 @@ func SetSQLMaxConns(n int) {
 // packIndexStore returns the account volume's key space for the pack index of
 // the block store's FTPS packs, or nil when the volume has no key/value store.
 func (t *bstoreTracker) packIndexStore() kvtx.Store {
-	kvVol, ok := t.a.vol.(kvtx_volume.KvtxVolume)
+	return t.a.packIndexStore(t.id)
+}
+
+// packIndexStore returns the account volume's key space for the pack index of
+// a block store, or nil when the volume has no key/value store.
+func (a *ProviderAccount) packIndexStore(blockStoreID string) kvtx.Store {
+	kvVol, ok := a.vol.(kvtx_volume.KvtxVolume)
 	if !ok {
 		return nil
 	}
-	return kvtx_prefixer.NewPrefixer(kvVol.GetKvtxStore(), block_store_s3.PackIndexPrefix(t.id))
+	return kvtx_prefixer.NewPrefixer(kvVol.GetKvtxStore(), block_store_s3.PackIndexPrefix(blockStoreID))
+}
+
+// ReadPackIndex calls fn with every row of a block store's pack index but its
+// cache, from one read transaction. It mounts nothing. fn must copy what it
+// keeps.
+func (a *ProviderAccount) ReadPackIndex(ctx context.Context, blockStoreID string, fn func(key, value []byte) error) error {
+	store := a.packIndexStore(blockStoreID)
+	if store == nil {
+		return errors.New("the account volume holds no pack index")
+	}
+	return block_store_s3.ReadPackIndexRows(ctx, store, fn)
+}
+
+// WritePackIndex writes rows ReadPackIndex read, in key order, as a block
+// store's pack index, so a new account finds its packs without reading them.
+// The block store must not be mounted, since a mounted store owns its index.
+func (a *ProviderAccount) WritePackIndex(ctx context.Context, blockStoreID string, next func() (key, value []byte, ok bool, err error)) error {
+	store := a.packIndexStore(blockStoreID)
+	if store == nil {
+		return errors.New("the account volume holds no pack index")
+	}
+	return block_store_s3.WritePackIndexRows(ctx, store, next)
 }
