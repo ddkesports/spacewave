@@ -276,7 +276,7 @@ func (t *bstoreTracker) openBackendStore(
 	if location := backend.GetSql(); location != nil {
 		return buildSQLBlockStore(ctx, le, location, t.id, creds)
 	}
-	return buildS3BlockStore(le, backend.GetS3(), t.id, creds)
+	return buildS3BlockStore(le, backend.GetS3(), t.id, creds, t.packIndexStore())
 }
 
 // openFallbackStore opens the SQL backend the store reads after its own
@@ -332,7 +332,7 @@ func SetSQLMaxConns(n int) {
 }
 
 // packIndexStore returns the account volume's key space for the pack index of
-// the block store's FTPS packs, or nil when the volume has no key/value store.
+// the block store's packs, or nil when the volume has no key/value store.
 func (t *bstoreTracker) packIndexStore() kvtx.Store {
 	return t.a.packIndexStore(t.id)
 }
