@@ -6,7 +6,9 @@ import (
 	"testing"
 
 	"github.com/pkg/errors"
+	"github.com/s4wave/spacewave/db/block"
 	"github.com/s4wave/spacewave/net/hash"
+	"golang.org/x/sync/errgroup"
 )
 
 // TestEvictAdmitPacesBatches checks that an eviction pass asks its admit
@@ -101,5 +103,49 @@ func TestEvictAdmitPacesBatches(t *testing.T) {
 	}
 	if result.Evicted != requeued || result.Requeued != 0 {
 		t.Fatalf("third pass = %+v, want %d evicted", result, requeued)
+	}
+}
+
+// TestCacheFillsQueueInGroups fills many blocks at once, so their eviction
+// entries commit in groups, and checks that every entry is counted and queued
+// exactly once: the status holds their bytes, and a pass evicts each of them.
+func TestCacheFillsQueueInGroups(t *testing.T) {
+	// Open a placed store, and hold the blocks remotely as a fill's source.
+	ctx := t.Context()
+	s := newTestEnv(t).newStore(t, true)
+	remote := newInmemBlockStore()
+
+	// Fill every block concurrently.
+	const total = 200
+	var wantBytes int64
+	var eg errgroup.Group
+	for i := range total {
+		data := fmt.Appendf(nil, "cached-%05d", i)
+		wantBytes += int64(len(data))
+		ref, _, err := remote.PutBlock(ctx, data, leafOpts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		eg.Go(func() error {
+			return s.CacheFill(ctx, ref, &block.StoredBlock{Data: data, RefsKnown: true})
+		})
+	}
+	if err := eg.Wait(); err != nil {
+		t.Fatal(err)
+	}
+
+	// The last group commits before its committer returns, so the status
+	// holds every entry once the fills return.
+	if status, _ := s.GetStatus(); status.EvictableBytes != wantBytes || status.Refills != 0 {
+		t.Fatalf("status evictable %d refills %d, want %d and 0", status.EvictableBytes, status.Refills, wantBytes)
+	}
+
+	// A pass finds every entry, each once.
+	result, err := s.Evict(ctx, remote, 1<<30, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Evicted != total || result.EvictedBytes != wantBytes {
+		t.Fatalf("evict = %+v, want %d blocks of %d bytes", result, total, wantBytes)
 	}
 }

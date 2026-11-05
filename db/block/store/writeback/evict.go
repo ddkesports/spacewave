@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"strconv"
+	"sync"
 
 	"github.com/pkg/errors"
 	"github.com/s4wave/spacewave/db/block"
@@ -221,29 +222,100 @@ func (s *Store) CacheFill(ctx context.Context, ref *block.BlockRef, stored *bloc
 	return s.queueRefill(ctx, ref, int64(len(stored.Data)), 0)
 }
 
+// refillQueue holds the eviction entries of cached values waiting for their
+// group commit, and whether a caller is committing them.
+type refillQueue struct {
+	mtx        sync.Mutex
+	entries    []refillEntry
+	committing bool
+}
+
+// refillEntry is one cached value's eviction entry.
+type refillEntry struct {
+	h       *hash.Hash
+	size    int64
+	refills int64
+}
+
 // queueRefill accounts for a cached local value; eviction verifies its remote
 // copy before dropping it. refills counts reads of previously evicted values,
 // excluding first-time cache fills of blocks the graph did not track.
+//
+// The entries commit in groups: the first caller that finds no commit running
+// commits every queued entry in one ordered transaction, and again for the
+// entries queued meanwhile, until none are left; the others return once their
+// entry is queued. Each commit flushes the store on a platform without a write
+// barrier, so a commit per cache fill would make every World commit queue
+// behind a flush per block read. The remote holds every cached value, so a
+// crash or a failed commit that loses entries loses no data: the values stay
+// on disk unqueued until a later read queues them again.
 func (s *Store) queueRefill(ctx context.Context, ref *block.BlockRef, size, refills int64) error {
-	// Queue the refilled block for eviction.
+	// Queue the entry, and return unless this caller commits the group.
+	q := &s.refills
+	q.mtx.Lock()
+	q.entries = append(q.entries, refillEntry{h: ref.GetHash(), size: size, refills: refills})
+	if q.committing {
+		q.mtx.Unlock()
+		return nil
+	}
+	q.committing = true
+	q.mtx.Unlock()
+
+	// Commit groups until the queue is empty, past this caller's cancellation,
+	// since other callers left their entries to it.
+	ctx = kvtx.WithOrderedCommitContext(context.WithoutCancel(ctx))
+	var firstErr error
+	for {
+		// Take the queued group, handing off once it is empty.
+		q.mtx.Lock()
+		group := q.entries
+		q.entries = nil
+		if len(group) == 0 {
+			q.committing = false
+			q.mtx.Unlock()
+			return firstErr
+		}
+		q.mtx.Unlock()
+
+		// Commit it, keeping the first failure.
+		if err := s.commitRefills(ctx, group); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+}
+
+// commitRefills queues group for eviction at the current epoch in one
+// transaction, then publishes the resident bytes and refill count it added.
+func (s *Store) commitRefills(ctx context.Context, group []refillEntry) error {
+	// Queue every entry at the epoch the transaction reads.
 	var added int64
 	err := kvtx.RunTransaction(ctx, true, s.writeTx, func(ctx context.Context, tx kvtx.Tx) error {
-		// Queue the entry at the current epoch and count its bytes.
+		// Read the epoch, counting from zero on each attempt.
+		added = 0
 		epoch, err := readEpoch(ctx, tx)
 		if err != nil {
 			return err
 		}
-		added, err = queueEvict(ctx, tx, epoch, ref.GetHash(), size)
-		if err != nil {
-			return err
+
+		// Queue each entry and add the bytes it added.
+		for _, entry := range group {
+			n, err := queueEvict(ctx, tx, epoch, entry.h, entry.size)
+			if err != nil {
+				return err
+			}
+			added += n
 		}
 		return addEvictableBytes(ctx, tx, added)
 	})
 	if err != nil {
-		return errors.Wrap(err, "queue refilled block")
+		return errors.Wrap(err, "queue refilled blocks")
 	}
 
 	// Publish the committed resident bytes and refill count to watchers.
+	var refills int64
+	for _, entry := range group {
+		refills += entry.refills
+	}
 	s.addEvictStatus(added, 0, refills)
 	return nil
 }

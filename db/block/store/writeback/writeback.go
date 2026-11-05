@@ -89,6 +89,9 @@ type Store struct {
 	lowered uint64
 	// reads bounds the upload's local reads in flight by the disk's load.
 	reads *readGate
+	// refills queues the eviction entries of cached values for one group
+	// commit; see queueRefill.
+	refills refillQueue
 }
 
 // GetStoreParts returns the local store that holds every block.
