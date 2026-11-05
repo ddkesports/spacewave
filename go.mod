@@ -6,6 +6,7 @@ tool github.com/s4wave/goscript/cmd/goscript
 
 replace (
 	github.com/cloudflare/circl => github.com/aperturerobotics/circl v1.6.4-0.20261026102657-7415ab3046b7
+	github.com/dgraph-io/badger/v4 => github.com/aperturerobotics/badger-go/v4 v4.0.0-20260923001918-fabba1bbc502 // main
 	github.com/dolthub/go-mysql-server => github.com/aperturerobotics/go-mysql-server v0.20.1-0.20261024013424-a1751f2da19d
 	github.com/dolthub/jsonpath => github.com/aperturerobotics/jsonpath v0.1.1-0.20260922211658-605a6e457746
 	github.com/dolthub/vitess => github.com/aperturerobotics/vitess v0.0.0-20261024012120-fd4d1ea7517a // aperture
@@ -48,6 +49,7 @@ require (
 	github.com/cloudflare/circl v1.6.5
 	github.com/cockroachdb/apd/v3 v3.2.3
 	github.com/creack/pty v1.1.24
+	github.com/dgraph-io/badger/v4 v4.9.7-0.20261002165227-78b99b8b0f01
 	github.com/dolthub/go-mysql-server v0.20.1-0.20261030230720-02aadeeae4f1
 	github.com/dolthub/vitess v0.0.0-20261014211039-3e903c0f05d3
 	github.com/dustin/go-humanize v1.1.0
@@ -125,12 +127,16 @@ require (
 	github.com/bwesterb/go-ristretto v1.2.4 // indirect
 	github.com/chzyer/readline v1.5.1 // indirect
 	github.com/deckarep/golang-set/v2 v2.8.0 // indirect
+	github.com/dgraph-io/ristretto/v2 v2.2.0 // indirect
 	github.com/dolthub/flatbuffers/v23 v23.3.3-dh.2 // indirect
 	github.com/dolthub/go-icu-regex v0.0.0-20260610153742-72563bc7ca83 // indirect
 	github.com/dolthub/jsonpath v0.0.2-0.20260807003725-336cd89c1c76 // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
 	github.com/facette/natsort v0.0.0-20181210072756-2cd4dd1e2dcb // indirect
+	github.com/go-logr/logr v1.4.3 // indirect
+	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-stack/stack v1.8.1 // indirect
+	github.com/google/flatbuffers v25.2.10+incompatible // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/grafana/regexp v0.0.0-20250905093917-f7b3be9d1853 // indirect
 	github.com/hashicorp/golang-lru v0.5.4 // indirect
@@ -177,7 +183,9 @@ require (
 	github.com/wlynxg/anet v0.0.5 // indirect
 	github.com/xrash/smetrics v0.0.0-20261013231157-39c47d93efba // indirect
 	github.com/zeebo/assert v1.3.0 // indirect
+	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel v1.44.0 // indirect
+	go.opentelemetry.io/otel/metric v1.44.0 // indirect
 	go.opentelemetry.io/otel/trace v1.44.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/net v0.61.0 // indirect
