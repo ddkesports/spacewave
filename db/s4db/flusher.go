@@ -48,6 +48,8 @@ type flusher struct {
 
 	// flushes counts the shared flushes to the drive this flusher made.
 	flushes atomic.Uint64
+	// flushNanos sums the elapsed time of those flushes.
+	flushNanos atomic.Int64
 }
 
 // newFlusher returns a flusher of s whose published state is cur.
@@ -169,11 +171,14 @@ func (f *flusher) syncThrough(ctx context.Context, seq uint64) error {
 		l.Unlock()
 
 		// Flush and wake the waiters.
+		start := time.Now()
 		err := f.s.flushDurable()
+		elapsed := time.Since(start)
 		l = f.bcast.Lock()
 		f.flushing = false
 		if err == nil {
 			f.flushes.Add(1)
+			f.flushNanos.Add(int64(elapsed))
 			f.durable = max(f.durable, target.seq)
 			f.logged = max(f.logged, target.logged)
 			f.err = nil

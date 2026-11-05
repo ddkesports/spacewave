@@ -41,6 +41,9 @@ type Stats struct {
 	// Flushes is the number of shared flushes to the drive this handle made
 	// for commits, ordered ones included once their deadline passed.
 	Flushes uint64
+	// FlushTime sums the elapsed time of those flushes, so a reader can tell a
+	// slowing drive from the mean.
+	FlushTime time.Duration
 	// Slots lists the live reader slots and their pins.
 	Slots []SlotPin
 	// Families is the flow of each of Options.Families in order, then of the
@@ -64,6 +67,7 @@ func (db *DB) Stats(ctx context.Context) (Stats, error) {
 		UserBytes:         db.userBytes.Load(),
 		BackgroundWaitMax: time.Duration(db.waitMax.Load()),
 		Flushes:           db.flush.flushes.Load(),
+		FlushTime:         time.Duration(db.flush.flushNanos.Load()),
 		CollectBytes:      4*db.budget + runTarget*(1+levelRatio) + 4*chunkSize,
 	}
 	for c, e := range st.m.table.entries {
