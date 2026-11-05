@@ -158,7 +158,10 @@ func (volumeCollector) Describe(ch chan<- *prometheus.Desc) {
 		volumePublicationPendingDesc, volumePublicationPendingBytesDesc, volumeWriteReserveDesc,
 		volumeReserveBytesDesc, volumePutBlocksDesc, volumePutBytesDesc, volumePutExistingDesc,
 		volumePutRefusedDesc, volumeValueWrittenBytesDesc, volumeValueFreedBytesDesc,
-		volumeDeadlistsCheckedDesc, volumeDeadlistLivePagesDesc, volumeBackgroundWaitMaxSecondsDesc,
+		volumeDeadlistsCheckedDesc, volumeDeadlistLivePagesDesc, volumeDeadlistLeakedPagesDesc,
+		volumeDeadlistCountUnderflowsDesc, volumeReleasesResolvedDesc, volumeReleaseFreedBlocksDesc,
+		volumeReleaseLiveBlocksDesc, volumeReleaseUnderflowsDesc, volumeRevivedPutsDesc,
+		volumeBackgroundWaitMaxSecondsDesc,
 	} {
 		ch <- d
 	}

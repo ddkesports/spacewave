@@ -43,13 +43,6 @@ type Config struct {
 	// while reads, collection and deletes continue. Zero selects the disk one
 	// collection needs before it frees any; a negative value keeps no reserve.
 	ReserveBytes int64 `protobuf:"varint,11,opt,name=reserve_bytes,json=reserveBytes,proto3" json:"reserveBytes,omitempty"`
-	// CommitWaitBytes is the overlay size past which a commit waits for the
-	// running checkpoint, which also holds commits once the log after the
-	// checkpoint passes twice it. Zero selects twice CheckpointMaxBytes. A
-	// larger bound keeps commits flowing through a slow checkpoint, such as the
-	// first after a start on a cold index, at the cost of overlay memory and
-	// log replay at open.
-	CommitWaitBytes int64 `protobuf:"varint,12,opt,name=commit_wait_bytes,json=commitWaitBytes,proto3" json:"commitWaitBytes,omitempty"`
 }
 
 func (x *Config) Reset() {
@@ -121,13 +114,6 @@ func (x *Config) GetReserveBytes() int64 {
 	return 0
 }
 
-func (x *Config) GetCommitWaitBytes() int64 {
-	if x != nil {
-		return x.CommitWaitBytes
-	}
-	return 0
-}
-
 func (m *Config) CloneVT() *Config {
 	if m == nil {
 		return (*Config)(nil)
@@ -139,7 +125,6 @@ func (m *Config) CloneVT() *Config {
 	r.Verbose = m.Verbose
 	r.CacheBytes = m.CacheBytes
 	r.ReserveBytes = m.ReserveBytes
-	r.CommitWaitBytes = m.CommitWaitBytes
 	r.KvKeyOpts = protobuf_go_lite.CloneVTValue(m.KvKeyOpts)
 	r.VolumeConfig = protobuf_go_lite.CloneVTValue(m.VolumeConfig)
 	r.StoreConfig = protobuf_go_lite.CloneVTValue(m.StoreConfig)
@@ -184,9 +169,6 @@ func (this *Config) EqualVT(that *Config) bool {
 		return false
 	}
 	if this.ReserveBytes != that.ReserveBytes {
-		return false
-	}
-	if this.CommitWaitBytes != that.CommitWaitBytes {
 		return false
 	}
 	return string(this.unknownFields) == string(that.unknownFields)
@@ -253,11 +235,6 @@ func (x *Config) MarshalProtoJSON(s *json.MarshalState) {
 		s.WriteObjectField("reserveBytes")
 		s.WriteInt64(x.ReserveBytes)
 	}
-	if x.CommitWaitBytes != 0 || s.HasField("commitWaitBytes") {
-		s.WriteMoreIf(&wroteField)
-		s.WriteObjectField("commitWaitBytes")
-		s.WriteInt64(x.CommitWaitBytes)
-	}
 	s.WriteObjectEnd()
 }
 
@@ -314,9 +291,6 @@ func (x *Config) UnmarshalProtoJSON(s *json.UnmarshalState) {
 		case "reserve_bytes", "reserveBytes":
 			s.AddField("reserve_bytes")
 			x.ReserveBytes = s.ReadInt64()
-		case "commit_wait_bytes", "commitWaitBytes":
-			s.AddField("commit_wait_bytes")
-			x.CommitWaitBytes = s.ReadInt64()
 		}
 	})
 }
@@ -354,11 +328,6 @@ func (m *Config) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	_ = l
 	if m.unknownFields != nil {
 		i = protobuf_go_lite.EncodeRawBytes(dAtA, i, m.unknownFields)
-	}
-	if m.CommitWaitBytes != 0 {
-		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(m.CommitWaitBytes))
-		i--
-		dAtA[i] = 0x60
 	}
 	if m.ReserveBytes != 0 {
 		i = protobuf_go_lite.EncodeVarint(dAtA, i, uint64(m.ReserveBytes))
@@ -447,7 +416,6 @@ func (m *Config) SizeVT() (n int) {
 	}
 	n += protobuf_go_lite.SizeVarintNonZero(1, m.CacheBytes)
 	n += protobuf_go_lite.SizeVarintNonZero(1, m.ReserveBytes)
-	n += protobuf_go_lite.SizeVarintNonZero(1, m.CommitWaitBytes)
 	n += len(m.unknownFields)
 	return n
 }
@@ -490,10 +458,6 @@ func (x *Config) MarshalProtoText() string {
 	if x.ReserveBytes != 0 {
 		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "reserve_bytes")
 		protobuf_go_lite.TextWriteInt(&sb, x.ReserveBytes)
-	}
-	if x.CommitWaitBytes != 0 {
-		protobuf_go_lite.TextWriteFieldPrefix(&sb, initialLen, "commit_wait_bytes")
-		protobuf_go_lite.TextWriteInt(&sb, x.CommitWaitBytes)
 	}
 	return protobuf_go_lite.TextFinishMessage(&sb)
 }
@@ -622,15 +586,6 @@ func (m *Config) UnmarshalVT(dAtA []byte) error {
 			}
 			m.ReserveBytes = 0
 			m.ReserveBytes, iNdEx, err = protobuf_go_lite.DecodeVarintInt64(dAtA, iNdEx)
-			if err != nil {
-				return err
-			}
-		case 12:
-			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field CommitWaitBytes", wireType)
-			}
-			m.CommitWaitBytes = 0
-			m.CommitWaitBytes, iNdEx, err = protobuf_go_lite.DecodeVarintInt64(dAtA, iNdEx)
 			if err != nil {
 				return err
 			}

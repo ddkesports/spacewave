@@ -43,7 +43,7 @@ require (
 	github.com/aperturerobotics/json-iterator-lite v1.1.0 // latest
 	github.com/aperturerobotics/protobuf-go-lite v0.19.1-0.20261028131920-f644656fc4a7 // master
 	github.com/aperturerobotics/starpc v0.52.4-0.20261024233818-0a9074172c29 // master
-	github.com/aperturerobotics/util v1.34.10-0.20261024231407-c6b31c4e4ea6 // master
+	github.com/aperturerobotics/util v1.34.10-0.20261104203127-c3dda30463fe // master
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/cloudflare/circl v1.6.5
 	github.com/cockroachdb/apd/v3 v3.2.3
@@ -54,8 +54,8 @@ require (
 	github.com/fatih/color v1.19.0
 	github.com/fclairamb/ftpserverlib v0.32.7
 	github.com/ghodss/yaml v1.0.0
-	github.com/go-git/go-billy/v6 v6.0.0-beta.1.0.20261016211742-fd38f5ac32fe // main
-	github.com/go-git/go-git/v6 v6.0.0-beta.1.0.20261030225847-a0088e429af9 // main
+	github.com/go-git/go-billy/v6 v6.0.0-beta.1.0.20261102114623-3dcdd520bf27 // main
+	github.com/go-git/go-git/v6 v6.0.0-beta.1.0.20261104230907-bbee1d214130 // main
 	github.com/go-sql-driver/mysql v1.10.1
 	github.com/goccy/go-json v0.12.0
 	github.com/gomodule/redigo v2.0.0+incompatible
